@@ -1,0 +1,36 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
+package com.hierynomus.protocol.commons;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class IOUtils {
+    private static final Logger logger = LoggerFactory.getLogger(IOUtils.class);
+
+    public static void closeQuietly(AutoCloseable ... closeables) {
+        for (AutoCloseable c : closeables) {
+            try {
+                if (c == null) continue;
+                c.close();
+            }
+            catch (Exception logged) {
+                logger.warn("Error closing {} - {}", (Object)c, (Object)logged);
+            }
+        }
+    }
+
+    public static void closeSilently(AutoCloseable ... closeables) {
+        for (AutoCloseable c : closeables) {
+            try {
+                if (c == null) continue;
+                c.close();
+            }
+            catch (Exception exception) {
+                // empty catch block
+            }
+        }
+    }
+}
+

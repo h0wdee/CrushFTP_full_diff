@@ -1,0 +1,499 @@
+Summary for ../CrushFTP9/CrushFTP.jar
+Decompiled with CFR 0.152
+
+
+org.jose4j.zip.DeflateRFC1951CompressionAlgorithm
+----------------------------
+
+compress(byte[] )
+  Loose catch block
+
+
+crushftp.server.STOR_handler
+----------------------------
+
+run()
+  Unable to fully structure code
+start_upload(com.crushftp.client.VRL boolean )
+  Unable to fully structure code
+
+
+crushftp.server.ServerSessionSSH
+----------------------------
+
+<init>()
+  Unable to fully structure code
+
+
+crushftp.server.ServerStatus
+----------------------------
+
+reset_preview_workers()
+  Unable to fully structure code
+run()
+  Unable to fully structure code
+run()
+  Unable to fully structure code
+kick(java.util.Properties boolean )
+  Unable to fully structure code
+ban_ipv4(java.lang.String int boolean java.lang.String boolean )
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [5[TRYBLOCK], 4[TRYBLOCK]], but top level block is 36[WHILELOOP]
+ban_ipv6(java.lang.String int boolean java.lang.String boolean )
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [3[TRYBLOCK], 2[TRYBLOCK]], but top level block is 30[WHILELOOP]
+
+
+crushftp.server.ServerSessionHTTP
+----------------------------
+
+getHeaders(java.io.BufferedInputStream java.lang.StringBuffer )
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [0[TRYBLOCK]], but top level block is 31[WHILELOOP]
+doServeFile(com.crushftp.client.VRL java.util.Vector java.lang.String boolean java.util.Properties java.util.Vector )
+  Unable to fully structure code
+
+
+crushftp.server.As2Msg
+----------------------------
+
+getPayloadsAndMic(java.util.Properties java.lang.Object java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String )
+  Unable to fully structure code
+  Could not resolve type clashes
+doPost(java.net.Socket crushftp.server.VFS java.lang.String java.lang.String boolean java.lang.Object java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String boolean java.lang.String java.lang.String java.lang.String boolean java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.util.Properties java.lang.String )
+  Unable to fully structure code
+
+
+crushftp.server.ServerSessionDAV
+----------------------------
+
+doPropFind(java.util.Properties java.lang.String boolean java.util.Vector )
+  Unable to fully structure code
+
+
+crushftp.server.daemon.GenericServer
+----------------------------
+
+getSocket()
+  Unable to fully structure code
+
+
+crushftp.server.daemon.DMZTunnelServer
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+crushftp.server.daemon.DMZServerCommon
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+crushftp.server.daemon.DMZTunnelClient
+----------------------------
+
+write_sock(int long int int byte[] )
+  Unable to fully structure code
+
+
+crushftp.server.AdminControls
+----------------------------
+
+getDashboardHistory(java.util.Properties java.lang.String )
+  Loose catch block
+getJobsSummary(java.util.Properties java.lang.String )
+  Unable to fully structure code
+setServerItem(java.util.Properties java.lang.String boolean )
+  Unable to fully structure code
+
+
+crushftp.server.ServerSessionAJAX
+----------------------------
+
+processItems(java.util.Properties java.util.Vector java.lang.String )
+  Unable to fully structure code
+downloadItem(com.crushftp.client.VRL java.util.Properties java.lang.String java.util.Vector boolean java.lang.String )
+  Unable to fully structure code
+search(java.util.Properties crushftp.handlers.SessionCrush )
+  Unable to fully structure code
+
+
+crushftp.server.VFS
+----------------------------
+
+getListing(java.util.Vector java.lang.String boolean )
+  Unable to fully structure code
+
+
+crushftp.user.XMLUsers
+----------------------------
+
+buildVFSXML(java.lang.String )
+  Unable to fully structure code
+
+
+crushftp.handlers.BCrypt
+----------------------------
+
+encode_base64(byte[] int )
+  Unable to fully structure code
+decode_base64(java.lang.String int )
+  Unable to fully structure code
+
+
+crushftp.handlers.JobScheduler
+----------------------------
+
+runSchedules(java.util.Properties )
+  Unable to fully structure code
+
+
+crushftp.handlers.SessionCrush
+----------------------------
+
+login_user_pass(boolean boolean java.lang.String java.lang.String )
+  Unable to fully structure code
+do_DELE(boolean java.lang.String )
+  Unable to fully structure code
+do_MDTM()
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [8[CATCHBLOCK]], but top level block is 4[TRYBLOCK]
+
+
+crushftp.handlers.SyncTools
+----------------------------
+
+getSyncTableData(java.lang.String long java.lang.String java.lang.String java.lang.String crushftp.server.VFS )
+  Unable to fully structure code
+
+
+crushftp.handlers.PreviewWorker
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+crushftp.handlers.UserTools
+----------------------------
+
+buildPublicKeys(java.lang.String java.util.Properties java.lang.String )
+  Unable to fully structure code
+
+
+crushftp.handlers.Common
+----------------------------
+
+url_encode(java.lang.String java.lang.String )
+  Unable to fully structure code
+
+
+crushftp.handlers.log.LoggingProviderDisk
+----------------------------
+
+checkForLogRoll()
+  Unable to fully structure code
+
+
+javax.mail.internet.InternetAddress
+----------------------------
+
+parse(java.lang.String boolean boolean )
+  Unable to fully structure code
+
+
+javax.mail.internet.MimeMultipart
+----------------------------
+
+parse()
+  Unable to fully structure code
+
+
+CrushFTPDMZ
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+com.visuality.nq.resolve.ProbeThread
+----------------------------
+
+run()
+  Loose catch block
+
+
+com.visuality.nq.client.Mount
+----------------------------
+
+doMount(boolean com.visuality.nq.client.MountParams com.visuality.nq.client.Server )
+  Unable to fully structure code
+
+
+com.visuality.nq.client.File
+----------------------------
+
+write(com.visuality.nq.common.Buffer long )
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [8[DOLOOP]], but top level block is 19[SIMPLE_IF_TAKEN]
+
+
+com.visuality.nq.client.Share
+----------------------------
+
+connect(com.visuality.nq.client.User java.lang.String com.visuality.nq.client.Mount com.visuality.nq.auth.Credentials boolean com.visuality.nq.client.MountParams )
+  Unable to fully structure code
+
+
+com.sun.mail.imap.IdleManager
+----------------------------
+
+select()
+  Loose catch block
+
+
+com.sun.mail.imap.IMAPBodyPart
+----------------------------
+
+getHeaderStream()
+  Loose catch block
+
+
+com.sun.mail.util.logging.MailHandler
+----------------------------
+
+verifySettings0(javax.mail.Session java.lang.String )
+  Loose catch block
+
+
+com.sun.mail.iap.ResponseInputStream
+----------------------------
+
+readResponse(com.sun.mail.iap.ByteArray )
+  Unable to fully structure code
+
+
+com.sun.mail.pop3.Protocol
+----------------------------
+
+setCapabilities(java.io.InputStream )
+  Loose catch block
+
+
+com.sun.mail.pop3.POP3Folder
+----------------------------
+
+getSizes()
+  Loose catch block
+
+
+com.crushftp.crypt.BCrypt
+----------------------------
+
+encode_base64(byte[] int )
+  Unable to fully structure code
+decode_base64(java.lang.String int )
+  Unable to fully structure code
+
+
+com.crushftp.tunnel.AutoChannelProxy
+----------------------------
+
+enableAppletTunnel(java.util.Properties boolean java.lang.StringBuffer )
+  Unable to fully structure code
+
+
+com.crushftp.tunnel.Uploader2
+----------------------------
+
+go()
+  Unable to fully structure code
+
+
+com.crushftp.tunnel.Downloader
+----------------------------
+
+go()
+  Unable to fully structure code
+
+
+com.crushftp.tunnel.Downloader2
+----------------------------
+
+go()
+  Unable to fully structure code
+
+
+com.crushftp.tunnel.Uploader
+----------------------------
+
+go()
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [1[TRYBLOCK]], but top level block is 25[WHILELOOP]
+
+
+com.crushftp.job.JobBroker
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+com.crushftp.tunnel2.Tunnel2
+----------------------------
+
+startThreads()
+  Unable to fully structure code
+waitForShutdown()
+  Unable to fully structure code
+
+
+com.crushftp.tunnel2.ConnectionHandler
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+com.crushftp.client.CrushSyncDaemon
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+com.crushftp.client.AgentScheduler
+----------------------------
+
+runSchedules(com.crushftp.client.AgentUI )
+  Unable to fully structure code
+
+
+com.crushftp.client.SMB4jClient
+----------------------------
+
+stat(java.lang.String boolean )
+  Unable to fully structure code
+
+
+com.crushftp.client.S3Client
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+com.crushftp.client.SFTPClient
+----------------------------
+
+makedirs(java.lang.String )
+  Unable to fully structure code
+
+
+com.crushftp.client.Variables
+----------------------------
+
+uidg()
+  Unable to fully structure code
+
+
+com.crushftp.client.Common
+----------------------------
+
+url_encode(java.lang.String java.lang.String )
+  Unable to fully structure code
+
+
+com.crushftp.client.Client
+----------------------------
+
+run()
+  Unable to fully structure code
+parseCommand(java.lang.String )
+  Unable to fully structure code
+process_command(java.lang.String boolean )
+  Unable to fully structure code
+
+
+com.crushftp.client.Mailer
+----------------------------
+
+send_mail_single(java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String boolean boolean com.crushftp.client.File_B[] java.util.Vector java.util.Vector )
+  Unable to fully structure code
+
+
+com.crushftp.client.BoxClient
+----------------------------
+
+downloadThumbnail(java.util.Properties )
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [0[TRYBLOCK], 1[TRYBLOCK]], but top level block is 8[WHILELOOP]
+
+
+com.crushftp.client.CrushSyncFSWatchServer
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+com.crushftp.client.HTTPClient
+----------------------------
+
+run()
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [24[UNCONDITIONALDOLOOP]], but top level block is 0[TRYBLOCK]
+run()
+  Unable to fully structure code
+
+
+com.crushftp.client.CrushSyncScanner
+----------------------------
+
+scan(java.util.Vector java.util.Vector java.util.Vector java.util.Vector boolean boolean boolean )
+  Unable to fully structure code
+run()
+  Unable to fully structure code
+
+
+com.crushftp.client.CrushDrive
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+com.crushftp.client.GenericClientMulti
+----------------------------
+
+playJournal()
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [3[TRYBLOCK], 1[TRYBLOCK]], but top level block is 52[WHILELOOP]
+
+
+com.crushftp.client.AzureClient
+----------------------------
+
+run()
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [2[TRYBLOCK]], but top level block is 3[TRYBLOCK]
+delete(java.lang.String )
+  Unable to fully structure code
+getMetadata(java.lang.String )
+  Unable to fully structure code
+
+
+com.crushftp.client.FTPClient
+----------------------------
+
+delete(java.lang.String )
+  Unable to fully structure code
+makedirs(java.lang.String )
+  Unable to fully structure code
+
+
+com.crushftp.client.HTTPBufferedClient
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
+com.maverick.logging.IOUtils
+----------------------------
+
+sha1Digest(java.io.InputStream )
+  Loose catch block
