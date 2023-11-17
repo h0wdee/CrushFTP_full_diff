@@ -43,6 +43,9 @@ public class PreferencesProvider {
         while (x < pref_server_items.size()) {
             Properties the_server = (Properties)pref_server_items.elementAt(x);
             updated |= this.updateSettingsWithSeparateFiles("server_list" + instance, the_server);
+            if (!instance.equals("")) {
+                updated |= this.updateSettingsWithSeparateFiles(String.valueOf(instance) + "_server_list", the_server);
+            }
             ++x;
         }
         if (updated) {
@@ -73,6 +76,7 @@ public class PreferencesProvider {
                 try {
                     String val = Common.getFileText(val_path).trim();
                     p.put(key, val);
+                    Log.log("SERVER", 0, "SPLIT_PREFS:Using " + key + " value from " + val_path + " with value " + val);
                 }
                 catch (IOException e) {
                     Log.log("SERVER", 0, e);
@@ -90,8 +94,10 @@ public class PreferencesProvider {
             updated = true;
             try {
                 Object val_temp = Common.readXMLObject(val_path);
-                if (val_temp == null) continue;
-                p.put(key, val_temp);
+                if (val_temp != null) {
+                    p.put(key, val_temp);
+                }
+                Log.log("SERVER", 0, "SPLIT_PREFS:Using " + key + " value from " + val_path + " with XML value.");
             }
             catch (Exception e) {
                 Log.log("SERVER", 0, e);
@@ -144,30 +150,33 @@ public class PreferencesProvider {
         } else if (!instance.startsWith("_")) {
             instance = "_" + instance;
         }
-        Properties properties = server_settings;
+        Properties properties = Common.xmlCache;
         synchronized (properties) {
-            try {
-                Vector<Properties> add_vec = new Vector<Properties>();
-                add_vec.addElement(server_settings);
+            Properties properties2 = server_settings;
+            synchronized (properties2) {
                 try {
-                    if (!new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML").exists()) {
-                        RandomAccessFile makeIt = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML"), "rw");
-                        makeIt.close();
-                        ServerStatus.thisObj.server_info.put("currentFileDate" + instance, String.valueOf(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML").lastModified()));
+                    Vector<Properties> add_vec = new Vector<Properties>();
+                    add_vec.addElement(server_settings);
+                    try {
+                        if (!new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML").exists()) {
+                            RandomAccessFile makeIt = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML"), "rw");
+                            makeIt.close();
+                            ServerStatus.thisObj.server_info.put("currentFileDate" + instance, String.valueOf(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML").lastModified()));
+                        }
+                        if (new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML").lastModified() == ServerStatus.siLG("currentFileDate" + instance)) {
+                            Common.write_server_settings(server_settings, instance);
+                            ServerStatus.thisObj.server_info.put("currentFileDate" + instance, String.valueOf(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML").lastModified()));
+                        }
                     }
-                    if (new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML").lastModified() == ServerStatus.siLG("currentFileDate" + instance)) {
-                        Common.write_server_settings(server_settings, instance);
-                        ServerStatus.thisObj.server_info.put("currentFileDate" + instance, String.valueOf(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs" + instance + ".XML").lastModified()));
+                    catch (Exception e) {
+                        Log.log("SERVER", 0, "Prefs.XML failed to be written1...");
+                        Log.log("SERVER", 0, e);
                     }
                 }
                 catch (Exception e) {
-                    Log.log("SERVER", 0, "Prefs.XML failed to be written1...");
+                    Log.log("SERVER", 0, "Prefs.XML failed to be written2...");
                     Log.log("SERVER", 0, e);
                 }
-            }
-            catch (Exception e) {
-                Log.log("SERVER", 0, "Prefs.XML failed to be written2...");
-                Log.log("SERVER", 0, e);
             }
         }
     }
@@ -179,8 +188,8 @@ public class PreferencesProvider {
         boolean ok = ServerStatus.thisObj.common_code.register(name, email, code);
         if (ok) {
             String v = ServerStatus.thisObj.common_code.getRegistrationAccess("V", ServerStatus.SG("registration_code"));
-            if (v != null && (v.equals("4") || v.equals("5") || v.equals("6") || v.equals("7") || v.equals("8"))) {
-                String msg = "CrushFTP " + ServerStatus.version_info_str + " will not work with a CrushFTP " + v + " license.";
+            if (v != null && (v.equals("4") || v.equals("5") || v.equals("6") || v.equals("7") || v.equals("8") || v.equals("9"))) {
+                String msg = String.valueOf(System.getProperty("appname", "CrushFTP")) + " " + ServerStatus.version_info_str + " will not work with a " + System.getProperty("appname", "CrushFTP") + " " + v + " license.";
                 Log.log("SERVER", 0, msg);
                 ServerStatus.put_in("max_max_users", "5");
                 ServerStatus.put_in("max_users", "5");

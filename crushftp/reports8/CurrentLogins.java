@@ -27,28 +27,8 @@ public class CurrentLogins {
         try {
             Properties historyUser;
             Properties user_info;
-            String key;
             Common.setupReportDates(params, params.getProperty("show", ""), params.getProperty("startDate"), params.getProperty("endDate"));
             Properties si2 = new Properties();
-            Enumeration<Object> en = this.server_info.keys();
-            while (en.hasMoreElements()) {
-                key = en.nextElement().toString();
-                if (!(this.server_info.get(key) instanceof String)) continue;
-                si2.put(key, this.server_info.get(key));
-            }
-            en = this.server_settings.keys();
-            while (en.hasMoreElements()) {
-                key = en.nextElement().toString();
-                if (!(this.server_settings.get(key) instanceof String)) continue;
-                si2.put(key, this.server_settings.get(key));
-            }
-            si2.remove("globalKeystorePass");
-            si2.remove("globalKeystoreCertPass");
-            si2.remove("registration_name");
-            si2.remove("registration_email");
-            si2.remove("registration_code");
-            si2.remove("password_encryption");
-            si2.put("server_list", this.server_settings.get("server_list"));
             Vector<Properties> recent_users = new Vector<Properties>();
             si2.put("recent_users", recent_users);
             Vector user_list = (Vector)this.server_info.get("user_list");

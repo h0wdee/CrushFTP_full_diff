@@ -24,6 +24,9 @@ public class LoggingProvider {
     public void shutdown() throws IOException {
     }
 
+    public void flushNow() {
+    }
+
     public void checkLogPath() {
     }
 

@@ -8,11 +8,13 @@ import crushftp.handlers.Common;
 import crushftp.handlers.Log;
 import crushftp.handlers.LoggingProvider;
 import crushftp.server.ServerStatus;
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.io.StringReader;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.GregorianCalendar;
@@ -24,6 +26,9 @@ public class LoggingProviderDisk
 extends LoggingProvider {
     public static Object log_lock = new Object();
     public static RandomAccessFile log_file_stream = null;
+    public static boolean log_not_at_end = true;
+    static ByteArrayOutputStream baos_log_buffer = new ByteArrayOutputStream();
+    public static long last_log_flush = 0L;
     public String lastLogPath = "";
     long currentSyslogXmlTime = 0L;
 
@@ -205,6 +210,182 @@ lbl129:
         }
     }
 
+    public static Properties getLogSnippet(String start_date, String end_date) throws Exception {
+        Properties log_segment;
+        block17: {
+            if (!ServerStatus.BG("v11_beta")) {
+                throw new Exception("Access Denied! This feature is only available on V11 or above.");
+            }
+            log_segment = null;
+            try {
+                SimpleDateFormat log_date_format = new SimpleDateFormat(ServerStatus.SG("log_date_format"), Locale.US);
+                long start = log_date_format.parse(start_date).getTime();
+                long end = log_date_format.parse(end_date).getTime();
+                if (end < start) {
+                    throw new Exception("Invalid end date! Start date: " + new Date(start) + " End date: " + new Date(end));
+                }
+                if (end - start > 1800000L) {
+                    throw new Exception("Invalid time length! Max permitted time length is 30 min.");
+                }
+                Properties log = new Properties();
+                log.put("log_segment", "");
+                long log_length = 1024L;
+                long start_log_position = 0L;
+                int x = 0;
+                while (x < 5 && log_segment == null) {
+                    log_segment = LoggingProviderDisk.load_log_segment(start_log_position);
+                    Thread.sleep(100L);
+                    ++x;
+                }
+                if (log_segment == null) {
+                    throw new Exception("Could not load the log!");
+                }
+                long max_size = Long.parseLong(log_segment.getProperty("log_max", "0"));
+                long current_log_end = Long.parseLong(log_segment.getProperty("log_end", "0"));
+                long cureent_log_start_time = log_date_format.parse(log_segment.getProperty("log_start_date", "")).getTime();
+                long current_log_end_time = log_date_format.parse(log_segment.getProperty("log_end_date", "").startsWith("|") ? log_segment.getProperty("log_end_date", "").substring(1) : log_segment.getProperty("log_end_date", "")).getTime();
+                if (start < cureent_log_start_time) {
+                    new Exception("No log available! Current log file start: " + log_segment.getProperty("log_start_date", ""));
+                }
+                if (start < current_log_end_time) {
+                    start_log_position = LoggingProviderDisk.find_date_position_in_segment(start, log_segment.getProperty("log_segment", "0"));
+                    if (end < current_log_end_time) {
+                        log_length = LoggingProviderDisk.find_date_position_in_segment(end, log_segment.getProperty("log_segment", "0").substring((int)start_log_position));
+                        return LoggingProviderDisk.getLogSegmentStatic(start_log_position, log_length, "");
+                    }
+                    log_length = LoggingProviderDisk.find_log_end_position(start_log_position, end);
+                    if (log_length > 0xA00000L) {
+                        log_length = 0xA00000L;
+                    }
+                    log_segment = LoggingProviderDisk.getLogSegmentStatic(start_log_position, log_length, "");
+                    break block17;
+                }
+                long around = (start - cureent_log_start_time) * max_size / (System.currentTimeMillis() - cureent_log_start_time);
+                log_segment = LoggingProviderDisk.load_log_segment(around);
+                if (log_segment != null) {
+                    cureent_log_start_time = log_date_format.parse(log_segment.getProperty("log_start_date", "")).getTime();
+                    current_log_end_time = log_date_format.parse(log_segment.getProperty("log_end_date", "").startsWith("|") ? log_segment.getProperty("log_end_date", "").substring(1) : log_segment.getProperty("log_end_date", "")).getTime();
+                } else {
+                    around = max_size;
+                }
+                start_log_position = start > cureent_log_start_time && start < current_log_end_time ? LoggingProviderDisk.find_date_position_in_segment(start, log_segment.getProperty("log_segment", "0")) : (start < cureent_log_start_time ? LoggingProviderDisk.find_log_start_position(start, 0L, around, 0) : LoggingProviderDisk.find_log_start_position(start, around, max_size, 0));
+                log_length = LoggingProviderDisk.find_log_end_position(start_log_position, end);
+                if (log_length > 0xA00000L) {
+                    log_length = 0xA00000L;
+                }
+                log_segment = LoggingProviderDisk.getLogSegmentStatic(start_log_position, log_length, "");
+                current_log_end_time = 0L;
+                try {
+                    current_log_end_time = log_date_format.parse(log_segment.getProperty("log_end_date", "").startsWith("|") ? log_segment.getProperty("log_end_date", "").substring(1) : log_segment.getProperty("log_end_date", "")).getTime();
+                }
+                catch (Exception exception) {
+                    // empty catch block
+                }
+                if (current_log_end_time != 0L && current_log_end_time < start) {
+                    throw new Exception("No available log snippet! Time start : " + start_date + " end : " + end_date);
+                }
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 2, e);
+                throw e;
+            }
+        }
+        return log_segment;
+    }
+
+    private static Properties load_log_segment(long start) throws Exception {
+        Properties log_segment = null;
+        SimpleDateFormat log_date_format = new SimpleDateFormat(ServerStatus.SG("log_date_format"), Locale.US);
+        int x = 0;
+        while (x < 5 && log_segment == null) {
+            int xx = 50;
+            while (xx < 4100) {
+                log_segment = LoggingProviderDisk.getLogSegmentStatic(start, xx * 1024, "");
+                if (!(log_segment == null || log_segment.getProperty("log_max", "0").equals("0") || log_segment.getProperty("log_start_date", "").equals("") || log_segment.getProperty("log_end_date", "").equals(""))) {
+                    try {
+                        long cureent_log_start_time = log_date_format.parse(log_segment.getProperty("log_start_date", "")).getTime();
+                        long current_log_end_time = log_date_format.parse(log_segment.getProperty("log_end_date", "").startsWith("|") ? log_segment.getProperty("log_end_date", "").substring(1) : log_segment.getProperty("log_end_date", "")).getTime();
+                        break;
+                    }
+                    catch (Exception e) {
+                        log_segment = null;
+                    }
+                } else {
+                    log_segment = null;
+                }
+                xx += 100;
+            }
+            ++x;
+        }
+        return log_segment;
+    }
+
+    private static long find_log_start_position(long start_date, long start, long end, int deep) throws Exception {
+        if (deep > 100) {
+            throw new Exception("Could not found start position!");
+        }
+        long pos = start + (end - start) / 2L;
+        Properties log_segment = LoggingProviderDisk.load_log_segment(pos);
+        if (log_segment == null) {
+            int x = 0;
+            while (x < 5 && log_segment == null) {
+                Thread.sleep(100L);
+                log_segment = LoggingProviderDisk.load_log_segment(pos += 100L);
+                ++x;
+            }
+            if (log_segment == null) {
+                throw new Exception("Could not load start position! Position: " + pos);
+            }
+        }
+        SimpleDateFormat log_date_format = new SimpleDateFormat(ServerStatus.SG("log_date_format"), Locale.US);
+        long cureent_log_start_time = log_date_format.parse(log_segment.getProperty("log_start_date", "")).getTime();
+        long current_log_end_time = log_date_format.parse(log_segment.getProperty("log_end_date", "").startsWith("|") ? log_segment.getProperty("log_end_date", "").substring(1) : log_segment.getProperty("log_end_date", "")).getTime();
+        long start_pos = pos;
+        start_pos = start_date > cureent_log_start_time && start_date < current_log_end_time ? (start_pos += LoggingProviderDisk.find_date_position_in_segment(start_date, log_segment.getProperty("log_segment", "0"))) : (start_date < cureent_log_start_time ? LoggingProviderDisk.find_log_start_position(start_date, start, pos, ++deep) : LoggingProviderDisk.find_log_start_position(start_date, pos, end, ++deep));
+        return start_pos;
+    }
+
+    private static long find_log_end_position(long start_log_position, long end_date) throws Exception {
+        long log_length = 0L;
+        int x = 0;
+        while (x < 10) {
+            Properties log_segment = LoggingProviderDisk.getLogSegmentStatic(start_log_position + (long)(x * 1024 * 104), 0x100000L, "");
+            long length = LoggingProviderDisk.find_date_position_in_segment(end_date, log_segment.getProperty("log_segment", "0"));
+            if (length != (long)log_segment.getProperty("log_segment", "0").length()) {
+                log_length = length;
+                break;
+            }
+            log_length += length;
+            ++x;
+        }
+        return log_length;
+    }
+
+    private static long find_date_position_in_segment(long date, String segment) throws Exception {
+        SimpleDateFormat log_date_format = new SimpleDateFormat(ServerStatus.SG("log_date_format"), Locale.US);
+        String data = "";
+        long pos = 0L;
+        BufferedReader reader = new BufferedReader(new StringReader(segment));
+        while ((data = reader.readLine()) != null) {
+            String current_date = LoggingProviderDisk.getLogDate(data);
+            if (current_date.startsWith("|")) {
+                current_date = current_date.substring(1);
+            }
+            if (data.contains("|") && !current_date.equals("")) {
+                try {
+                    if (log_date_format.parse(current_date).getTime() > date) {
+                        break;
+                    }
+                }
+                catch (Exception exception) {
+                    // empty catch block
+                }
+            }
+            pos += (long)data.getBytes().length;
+        }
+        return pos;
+    }
+
     @Override
     public Properties getLogSegment(long start, long len, String log_file) throws IOException {
         return LoggingProviderDisk.getLogSegmentStatic(start, len, log_file);
@@ -250,33 +431,19 @@ lbl129:
                         start = 0L;
                     }
                     if (start < log_raf.length()) {
-                        int off;
                         log_raf.seek(start);
+                        log_not_at_end = true;
                         int bytes_read = 0;
                         byte[] b = new byte[32768];
                         long total_size = 0L;
                         while ((long)baos.size() < len && bytes_read >= 0) {
-                            String s;
                             if ((long)b.length > len - total_size) {
                                 b = new byte[(int)(len - total_size)];
                             }
                             bytes_read = log_raf.read(b);
-                            if (startDate.equals("") && bytes_read > 0 && (s = new String(b, 0, bytes_read)).indexOf("|") > 0) {
-                                off = s.indexOf("|");
-                                while (off > 0 && s.charAt(off) != '\n') {
-                                    --off;
-                                }
-                                try {
-                                    if (off >= 0) {
-                                        startDate = s.substring(s.indexOf("|") + 1, s.indexOf("|", s.indexOf("|") + 1)).trim();
-                                    }
-                                    if (startDate.length() > 30) {
-                                        startDate = "";
-                                    }
-                                }
-                                catch (StringIndexOutOfBoundsException stringIndexOutOfBoundsException) {
-                                    // empty catch block
-                                }
+                            if (startDate.equals("") && bytes_read > 0) {
+                                String s = new String(b, 0, bytes_read);
+                                startDate = LoggingProviderDisk.getLogDate(s);
                             }
                             if (bytes_read < 0) continue;
                             baos.write(b, 0, bytes_read);
@@ -294,7 +461,7 @@ lbl129:
                         String lastChunk = new String(baos.toByteArray(), baos.size() > 1000 ? baos.size() - 1000 : 0, baos.size() > 1000 ? 1000 : baos.size());
                         try {
                             if (lastChunk.lastIndexOf("|") > 0) {
-                                off = lastChunk.lastIndexOf("|");
+                                int off = lastChunk.lastIndexOf("|");
                                 while (off >= 0 && lastChunk.charAt(off) != '\n') {
                                     --off;
                                 }
@@ -331,6 +498,52 @@ lbl129:
         return log;
     }
 
+    private static String getLogDate(String s) {
+        String date = "";
+        if (s.indexOf("|") > 0) {
+            int off = s.indexOf("|");
+            while (off > 0 && s.charAt(off) != '\n') {
+                --off;
+            }
+            try {
+                if (off >= 0) {
+                    date = s.substring(s.indexOf("|") + 1, s.indexOf("|", s.indexOf("|") + 1)).trim();
+                }
+                if (date.length() > 30) {
+                    date = "";
+                }
+            }
+            catch (StringIndexOutOfBoundsException stringIndexOutOfBoundsException) {
+                // empty catch block
+            }
+        }
+        return date;
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    @Override
+    public void flushNow() {
+        Object object = log_lock;
+        synchronized (object) {
+            if (ServerStatus.BG("write_to_log") && log_file_stream != null) {
+                try {
+                    if (log_not_at_end) {
+                        log_file_stream.seek(log_file_stream.length());
+                    }
+                    log_not_at_end = false;
+                    log_file_stream.write(baos_log_buffer.toByteArray());
+                    baos_log_buffer.reset();
+                    last_log_flush = System.currentTimeMillis();
+                }
+                catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
@@ -339,13 +552,10 @@ lbl129:
         synchronized (object) {
             if (ServerStatus.BG("write_to_log") && log_file_stream != null) {
                 try {
-                    log_file_stream.seek(log_file_stream.length());
-                }
-                catch (Exception e) {
-                    e.printStackTrace();
-                }
-                try {
-                    log_file_stream.write(log_data.getBytes("UTF8"));
+                    baos_log_buffer.write(log_data.getBytes("UTF8"));
+                    if (baos_log_buffer.size() > ServerStatus.IG("log_buffer_memory") || log_not_at_end || System.currentTimeMillis() - last_log_flush > 10000L) {
+                        this.flushNow();
+                    }
                 }
                 catch (Exception e) {
                     e.printStackTrace();
@@ -372,22 +582,22 @@ lbl129:
     private void fixLogLocation() {
         String logLocation = ServerStatus.SG("log_location").replace('\\', '/');
         if (logLocation.equals("")) {
-            logLocation = "./CrushFTP.log";
+            logLocation = "./" + System.getProperty("appname", "CrushFTP") + ".log";
         }
         if (logLocation.equals("./") && System.getProperty("crushftp.home").equals("../")) {
-            logLocation = "../CrushFTP.log";
+            logLocation = "../" + System.getProperty("appname", "CrushFTP") + ".log";
         }
-        if (logLocation.equals("./CrushFTP.log") && System.getProperty("crushftp.home").equals("../")) {
-            logLocation = "../CrushFTP.log";
+        if (logLocation.equals("./" + System.getProperty("appname", "CrushFTP") + ".log") && System.getProperty("crushftp.home").equals("../")) {
+            logLocation = "../" + System.getProperty("appname", "CrushFTP") + ".log";
         }
         if (logLocation.equals("./")) {
-            logLocation = "./CrushFTP.log";
+            logLocation = "./" + System.getProperty("appname", "CrushFTP") + ".log";
         }
         if (logLocation.equals("./../../../../")) {
-            logLocation = "./../../../../CrushFTP.log";
+            logLocation = "./../../../../" + System.getProperty("appname", "CrushFTP") + ".log";
         }
         if (!logLocation.toUpperCase().endsWith(".LOG")) {
-            logLocation = String.valueOf(logLocation) + "CrushFTP.log";
+            logLocation = String.valueOf(logLocation) + System.getProperty("appname", "CrushFTP") + ".log";
         }
         ServerStatus.server_settings.put("log_location", logLocation);
     }

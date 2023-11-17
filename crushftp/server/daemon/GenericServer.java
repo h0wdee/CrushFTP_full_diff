@@ -16,6 +16,7 @@ import crushftp.server.daemon.DMZServer4;
 import crushftp.server.daemon.DMZServer5;
 import crushftp.server.daemon.ServerBeat;
 import crushftp.server.daemon.TCPServer;
+import crushftp.server.daemon.TFTPServer;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -26,7 +27,9 @@ import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.Properties;
 import java.util.Vector;
+import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocketFactory;
 
 public class GenericServer
 implements Runnable {
@@ -41,7 +44,7 @@ implements Runnable {
     public Properties server_item = null;
     String busyMessage = "";
     boolean port_denied = false;
-    int connection_number = 0;
+    public int connection_number = 0;
     public int connected_users = 0;
     String startingPropertiesHash = "";
     boolean restart = false;
@@ -54,6 +57,8 @@ implements Runnable {
     String keystore = null;
     String certPass = null;
     String keystorePass = null;
+    SSLContext ssl_context = null;
+    SSLSocketFactory factory = null;
 
     public GenericServer(Properties server_item) {
         this.server_item = server_item;
@@ -82,6 +87,9 @@ implements Runnable {
         if (server_item.getProperty("serverType", "").toUpperCase().indexOf("DMZ") >= 0) {
             return new DMZServer1(server_item);
         }
+        if (server_item.getProperty("serverType", "").toUpperCase().indexOf("TFTP") >= 0) {
+            return new TFTPServer(server_item);
+        }
         return new TCPServer(server_item);
     }
 
@@ -103,8 +111,8 @@ implements Runnable {
      */
     public void getSocket() {
         try {
-            block12: while (true) {
-                block49: {
+            block10: while (true) {
+                block45: {
                     if (this.socket_created || this.die_now.length() != 0) {
                         if (this.socket_created == false) return;
                         if (this.die_now.length() != 0) return;
@@ -113,7 +121,7 @@ implements Runnable {
                         return;
                     }
                     try {
-                        block50: {
+                        block46: {
                             if (this.server_item.getProperty("enabled", "true").equals("false")) {
                                 throw new Exception("Port is set to disabled in preferences.");
                             }
@@ -130,7 +138,7 @@ implements Runnable {
                                 }
                                 ++x;
                             }
-                            if (!this.server_item.getProperty("serverType", "false").toUpperCase().equals("FTPS") && !this.server_item.getProperty("serverType", "FTP").toUpperCase().equals("HTTPS") && !this.server_item.getProperty("serverType", "FTP").toUpperCase().equals("PORTFORWARDS")) break block50;
+                            if (!this.server_item.getProperty("serverType", "false").toUpperCase().equals("FTPS") && !this.server_item.getProperty("serverType", "FTP").toUpperCase().equals("HTTPS") && !this.server_item.getProperty("serverType", "FTP").toUpperCase().equals("PORTFORWARDS")) break block46;
                             this.busyMessage = LOC.G("SSL Cert Error");
                             this.keystore = SSLKeyManager.loadKeyStoreToMemory(ServerStatus.SG("cert_path"));
                             this.certPass = ServerStatus.SG("globalKeystoreCertPass");
@@ -153,11 +161,15 @@ implements Runnable {
                                     // empty catch block
                                 }
                             }
-                            this.server_sock = this.listen_ip.equals("lookup") != false ? ServerStatus.thisObj.common_code.getServerSocket(this.listen_port, null, this.keystore, this.keystorePass, this.certPass, ServerStatus.SG("disabled_ciphers"), this.needClientAuth, 1000, true, false, null) : ServerStatus.thisObj.common_code.getServerSocket(this.listen_port, this.listen_ip, this.keystore, this.keystorePass, this.certPass, ServerStatus.SG("disabled_ciphers"), this.needClientAuth, 1000, true, false, null);
+                            v0 = allowBuiltin = Common.dmz_mode == false || this.keystore.equalsIgnoreCase("builtin") != false;
+                            if (this.ssl_context == null) {
+                                this.ssl_context = ServerStatus.thisObj.common_code.getSSLContext(this.keystore, String.valueOf(this.keystore) + "_trust", this.keystorePass, this.certPass, "TLS", this.needClientAuth, allowBuiltin);
+                            }
+                            this.server_sock = this.listen_ip.equals("lookup") != false ? ServerStatus.thisObj.common_code.getServerSocket(this.listen_port, null, this.keystore, this.keystorePass, this.certPass, ServerStatus.SG("disabled_ciphers"), this.needClientAuth, 1000, true, false, this.ssl_context) : ServerStatus.thisObj.common_code.getServerSocket(this.listen_port, this.listen_ip, this.keystore, this.keystorePass, this.certPass, ServerStatus.SG("disabled_ciphers"), this.needClientAuth, 1000, true, false, this.ssl_context);
                             ciphers = ((SSLServerSocket)this.server_sock).getSupportedCipherSuites();
                             cipherStr = "";
                             x = 0;
-                            if (true) ** GOTO lbl137
+                            if (true) ** GOTO lbl124
                         }
                         if (this.server_item.getProperty("serverType", "false").toUpperCase().indexOf("DMZ") >= 0) {
                             this.server_sock = new ServerSocket(0);
@@ -165,14 +177,14 @@ implements Runnable {
                         } else {
                             this.server_sock = this.listen_ip.equals("lookup") != false ? new ServerSocket(this.listen_port, 1000, null) : new ServerSocket(this.listen_port, 1000, InetAddress.getByName(this.listen_ip));
                         }
-lbl53:
+lbl56:
                         // 3 sources
 
                         while (true) {
                             this.socket_created = true;
                             ServerStatus.thisObj.server_started(this.listen_ip, this.listen_port);
                             this.updateStatus();
-                            continue block12;
+                            continue block10;
                             break;
                         }
                     }
@@ -182,27 +194,22 @@ lbl53:
                         if (this.busyMessage.indexOf("disabled") < 0) {
                             Log.log("SERVER", 2, ee);
                         }
+                        if (this.busyMessage.toLowerCase().indexOf("invalid") > 0) {
+                            Log.log("SERVER", 1, ee);
+                        }
                         if (ee.toString().indexOf("Permission denied") >= 0) {
                             this.busyMessage = LOC.G("Port $0 is reserved since its below 1024.  Authenticate as root to fix.", String.valueOf(this.listen_port));
-                            if (!GenericServer.warned) {
-                                GenericServer.warned = true;
-                                Log.log("SERVER", 0, this.busyMessage);
-                            }
                         } else if (ee.toString().indexOf("assign requested") >= 0) {
                             this.busyMessage = LOC.G("The IP specified ($0) is invalid.  This machine is not using that IP.  Please update in preferences.", this.listen_ip);
-                            if (!GenericServer.warned) {
-                                GenericServer.warned = true;
-                                Log.log("SERVER", 0, this.busyMessage);
-                            }
                         } else if (ee.toString().indexOf("Address already in use") >= 0) {
                             this.busyMessage = LOC.G("Port $0 is already in use by another process.", String.valueOf(this.listen_port));
-                            if (!GenericServer.warned) {
-                                GenericServer.warned = true;
-                                Log.log("SERVER", 0, this.busyMessage);
-                            }
+                        }
+                        if (!GenericServer.warned) {
+                            GenericServer.warned = true;
+                            Log.log("SERVER", 0, this.busyMessage);
                         }
                         data = "";
-                        if (!this.busyMessage.equals("")) break block49;
+                        if (!this.busyMessage.equals("")) break block45;
                         try {
                             testSock = new Socket("127.0.0.1", this.listen_port);
                             in = new BufferedReader(new InputStreamReader(testSock.getInputStream()));
@@ -221,17 +228,7 @@ lbl53:
                         }
                     }
                     data = data.toUpperCase();
-                    if (data.indexOf("LUKEMFTPD") >= 0 || data.indexOf("TNFTPD") >= 0) {
-                        this.busyMessage = LOC.G("Turn off 'FTP Sharing' in System Prefs");
-                        Log.log("SERVER", 0, LOC.G("Disable built in FTP server first..."));
-                        Common.check_exec();
-                        try {
-                            Runtime.getRuntime().exec("open /System/Library/PreferencePanes/SharingPref.prefPane");
-                        }
-                        catch (Exception eee) {}
-                    } else {
-                        this.busyMessage = String.valueOf(this.listen_ip) + ":" + this.listen_port + " - " + LOC.G("Port in use by some other server : $0", ee.toString());
-                    }
+                    this.busyMessage = String.valueOf(this.listen_ip) + ":" + this.listen_port + " - " + LOC.G("Port in use by some other server : $0", ee.toString());
                     if (!this.busyMessage.equals("")) {
                         Log.log("SERVER", 0, this.busyMessage);
                     }
@@ -245,7 +242,7 @@ lbl53:
                 while (true) {
                     if (loopNum < 0) {
                         this.busyMessage = "";
-                        continue block12;
+                        continue block10;
                     }
                     this.busyMessage = LOC.G("Port $0 in use! Retrying $1 secs...", String.valueOf(this.listen_port), String.valueOf(loopNum--));
                     Thread.sleep(1000L);
@@ -263,7 +260,7 @@ lbl53:
             }
             cipherStr = String.valueOf(cipherStr) + ciphers[x].toUpperCase();
             ++x;
-lbl137:
+lbl124:
             // 2 sources
 
         } while (x < ciphers.length);

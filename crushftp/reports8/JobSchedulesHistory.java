@@ -7,7 +7,6 @@ import crushftp.handlers.Common;
 import crushftp.handlers.Log;
 import crushftp.server.AdminControls;
 import crushftp.server.ServerStatus;
-import crushftp.server.daemon.ServerBeat;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -29,18 +28,31 @@ public class JobSchedulesHistory {
             Common.setupReportDates(params, params.getProperty("show", ""), params.getProperty("startDate"), params.getProperty("endDate"));
             sorter cd1 = new sorter();
             cd1.setObj(new Properties(), "scheduleName");
-            Vector jobs2 = new Vector();
-            if (!ServerBeat.current_master) {
-                return;
-            }
+            Vector jobs = new Vector();
             Properties request = (Properties)params.clone();
             SimpleDateFormat sdf = new SimpleDateFormat("MM/dd/yyyy HH:mm:ss", Locale.US);
             request.put("start_time", String.valueOf(sdf.parse(request.getProperty("startDate")).getTime()));
             request.put("end_time", String.valueOf(sdf.parse(request.getProperty("endDate")).getTime()));
-            jobs2 = AdminControls.getJobsSummary(request, "");
-            jobs2 = this.doSort(jobs2, cd1);
+            jobs = AdminControls.getJobsSummary(request, "");
+            int x = jobs.size() - 1;
+            while (x >= 0) {
+                Properties p = (Properties)jobs.get(x);
+                if (p.getProperty("status").equals("running") && params.getProperty("showRunning", "").equals("false")) {
+                    jobs.remove(x);
+                } else if (p.getProperty("status").equals("paused") && params.getProperty("showPaused", "").equals("false")) {
+                    jobs.remove(x);
+                } else if (p.getProperty("status").equals("cancelled") && params.getProperty("showCancelled", "").equals("false")) {
+                    jobs.remove(x);
+                } else if (p.getProperty("status").equals("completed") && params.getProperty("showCompleted", "").equals("false")) {
+                    jobs.remove(x);
+                } else if (p.getProperty("status").equals("completed-errors") && params.getProperty("showCompletedWithErrors", "").equals("false")) {
+                    jobs.remove(x);
+                }
+                --x;
+            }
+            jobs = this.doSort(jobs, cd1);
             Properties results = new Properties();
-            results.put("jobs", jobs2);
+            results.put("jobs", jobs);
             results.put("export", params.getProperty("export", ""));
             results.put("params", Common.removeNonStrings(params).toString());
             results.put("paramsObj", Common.removeNonStrings(params));

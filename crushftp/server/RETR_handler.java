@@ -10,7 +10,9 @@ import com.crushftp.client.Common;
 import com.crushftp.client.File_S;
 import com.crushftp.client.GenericClient;
 import com.crushftp.client.LineReader;
+import com.crushftp.client.MD5Calculator;
 import com.crushftp.client.VRL;
+import com.crushftp.client.WRunnable;
 import com.crushftp.client.Worker;
 import com.crushftp.tunnel.FileArchiveEntry;
 import com.crushftp.tunnel.FileArchiveOutputStream;
@@ -25,10 +27,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
-import java.math.BigInteger;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Properties;
@@ -39,7 +39,7 @@ import javax.net.ssl.SSLSocket;
 import org.apache.commons.compress.archivers.zip.Zip64Mode;
 
 public class RETR_handler
-implements Runnable {
+extends WRunnable {
     public boolean die_now = false;
     public boolean pause_transfer = false;
     public float slow_transfer = 0.0f;
@@ -59,7 +59,7 @@ implements Runnable {
     boolean pasv_connect = false;
     String encode_on_fly = "";
     public Properties active2 = new Properties();
-    public MessageDigest md5 = null;
+    public MD5Calculator md5 = null;
     LIST_handler filetree_list = null;
     public long current_loc = 0L;
     public long max_loc = 0L;
@@ -88,6 +88,7 @@ implements Runnable {
     }
 
     public void init_vars(String the_dir, long current_loc, long max_loc, SessionCrush thisSession, Properties item, boolean pasv_connect, String encode_on_fly, VRL otherFile, Socket data_sock) {
+        this.put("session", thisSession);
         this.data_sock = data_sock;
         this.the_dir = the_dir;
         this.thisSession = thisSession;
@@ -99,7 +100,7 @@ implements Runnable {
         this.otherFile = otherFile;
         try {
             if (this.md5 == null) {
-                this.md5 = MessageDigest.getInstance(ServerStatus.SG("hash_algorithm"));
+                this.md5 = new MD5Calculator(ServerStatus.BG("md5sum_native_exec"), ServerStatus.SG("hash_algorithm"), System.getProperty("crushftp.retr_md5", "true").equals("true"));
             }
         }
         catch (Exception exception) {
@@ -130,7 +131,7 @@ implements Runnable {
         this.thisThread.setName(this.threadName);
         Properties pre_event_info = null;
         try {
-            block266: {
+            block267: {
                 this.stop_message = "";
                 this.inError = false;
                 String the_file_name = "";
@@ -141,7 +142,7 @@ implements Runnable {
                     this.active2.put("active", "true");
                     this.active2.put("streamOpenStatus", "PENDING");
                     this.proxy_remote_in = null;
-                    RETR_handler.updateTransferStats(this.thisSession, -1, false, null, this.md5, current_download_item);
+                    RETR_handler.updateTransferStats(this.thisSession, -1, 0, false, null, this.md5, current_download_item, this.zipping);
                     the_file_path = this.the_dir;
                     the_file_name = the_file_path.substring(the_file_path.lastIndexOf("/") + 1, the_file_path.length()).trim();
                     the_file_path = the_file_path.substring(0, the_file_path.lastIndexOf("/") + 1);
@@ -154,7 +155,7 @@ implements Runnable {
                     if (!vrl.getProtocol().equalsIgnoreCase("virtual")) {
                         this.c = this.thisSession.uVFS.getClient(this.item);
                     }
-                    if (this.c != null || !this.zipping) {
+                    if (this.c != null && !this.zipping) {
                         stat = this.c.stat(vrl.getPath());
                     }
                     if (!vrl.getProtocol().equalsIgnoreCase("file") && ServerStatus.BG("proxyKeepDownloads")) {
@@ -350,7 +351,7 @@ implements Runnable {
                                         this.zlibing = true;
                                     }
                                     if (this.zipFiles.size() > 0 || this.zipping) {
-                                        this.data_os = new FileArchiveOutputStream(new BufferedOutputStream(this.data_os), !this.thisSession.uiBG("no_zip_compression"));
+                                        this.data_os = new FileArchiveOutputStream(new ZipOutputWrapper(this.data_os, this.thisSession, free_ratio_item), !this.thisSession.uiBG("no_zip_compression"));
                                         ((FileArchiveOutputStream)((Object)this.data_os)).setEncoding(this.thisSession.SG("char_encoding"));
                                         if (ServerStatus.BG("zip64")) {
                                             ((FileArchiveOutputStream)((Object)this.data_os)).setUseZip64(Zip64Mode.AsNeeded);
@@ -456,12 +457,12 @@ implements Runnable {
                                         if (!Common.dmz_mode) {
                                             if (!this.thisSession.user.getProperty("fileEncryptionKey", "").equals("") || !this.thisSession.user.getProperty("fileDecryptionKey", "").equals("")) {
                                                 this.in = crushftp.handlers.Common.getDecryptedStream(this.in, this.thisSession.user.getProperty("fileEncryptionKey", ""), this.thisSession.user.getProperty("fileDecryptionKey", ""), this.thisSession.user.getProperty("fileDecryptionKeyPass", ""));
-                                            } else if (!ServerStatus.SG("fileEncryptionKey").equals("") || ServerStatus.BG("fileDecryption")) {
+                                            } else if (!ServerStatus.SG("fileDecryptionKey").equals("") && ServerStatus.BG("fileDecryption")) {
                                                 this.in = crushftp.handlers.Common.getDecryptedStream(this.in, ServerStatus.SG("fileEncryptionKey"), ServerStatus.SG("fileDecryptionKey"), ServerStatus.SG("fileDecryptionKeyPass"));
                                             }
                                         }
                                     }
-                                    this.thisSession.not_done = this.thisSession.ftp_write_command_logged(responseNumber, "Opening %user_file_transfer_mode% mode data connection for " + this.thisSession.stripRoot(the_file_path) + the_file_name + " (%user_file_length% bytes). R E T R", "RETR");
+                                    this.thisSession.not_done = this.thisSession.ftp_write_command_logged(responseNumber, "Opening %user_file_transfer_mode% data connection for " + this.thisSession.stripRoot(the_file_path) + the_file_name + " (%user_file_length% bytes). R E T R", "RETR");
                                     byte[] read_string = null;
                                     int data_read = 0;
                                     int ratio = this.thisSession.IG("ratio");
@@ -578,28 +579,26 @@ implements Runnable {
                                             if (this.zipping) {
                                                 if (Zin == null) {
                                                     if (this.zipFiles.size() > 0) {
-                                                        int xx = 0;
-                                                        Properties zipItem = (Properties)this.zipFiles.elementAt(xx);
-                                                        if (zipItem.getProperty("type", "").equalsIgnoreCase("DIR") && zipItem.getProperty("privs").toUpperCase().indexOf("(VIEW)") < 0) {
-                                                            this.zipFiles.removeElementAt(xx);
-                                                        } else if (!(crushftp.handlers.Common.filter_check("L", zipItem.getProperty("name"), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && crushftp.handlers.Common.filter_check("F", String.valueOf(zipItem.getProperty("name")) + (zipItem.getProperty("type").equalsIgnoreCase("DIR") && !zipItem.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && crushftp.handlers.Common.filter_check("DIR", String.valueOf(zipItem.getProperty("name")) + (zipItem.getProperty("type").equalsIgnoreCase("DIR") && !zipItem.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")))) {
-                                                            this.zipFiles.removeElementAt(xx);
-                                                        } else if (!this.thisSession.check_access_privs(zipItem.getProperty("root_dir"), "RETR", zipItem) || !this.thisSession.check_access_privs(String.valueOf(zipItem.getProperty("root_dir")) + zipItem.getProperty("name"), "RETR", zipItem)) {
-                                                            this.zipFiles.removeElementAt(xx);
+                                                        Properties zipItem0 = (Properties)this.zipFiles.elementAt(0);
+                                                        if (zipItem0.getProperty("type", "").equalsIgnoreCase("DIR") && zipItem0.getProperty("privs").toUpperCase().indexOf("(VIEW)") < 0) {
+                                                            this.zipFiles.removeElementAt(0);
+                                                        } else if (!(crushftp.handlers.Common.filter_check("L", zipItem0.getProperty("name"), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && crushftp.handlers.Common.filter_check("F", String.valueOf(zipItem0.getProperty("name")) + (zipItem0.getProperty("type").equalsIgnoreCase("DIR") && !zipItem0.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && crushftp.handlers.Common.filter_check("DIR", String.valueOf(zipItem0.getProperty("name")) + (zipItem0.getProperty("type").equalsIgnoreCase("DIR") && !zipItem0.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")))) {
+                                                            this.zipFiles.removeElementAt(0);
+                                                        } else if (!this.thisSession.check_access_privs(zipItem0.getProperty("root_dir"), "RETR", zipItem0) || !this.thisSession.check_access_privs(String.valueOf(zipItem0.getProperty("root_dir")) + zipItem0.getProperty("name"), "RETR", zipItem0)) {
+                                                            this.zipFiles.removeElementAt(0);
                                                         }
                                                     }
                                                     if (this.zipFiles.size() > 0) {
                                                         VRL vrl2;
                                                         Properties temp_zip_item;
+                                                        Properties zipItem;
                                                         if (current_download_item != null) {
                                                             if (current_download_item != null) {
                                                                 ServerStatus.siVG("outgoing_transfers").remove(current_download_item);
                                                             }
                                                             current_download_item = null;
                                                         }
-                                                        Properties zipItem = (Properties)this.zipFiles.elementAt(0);
-                                                        this.zipFiles.removeElementAt(0);
-                                                        if (zipItem.getProperty("type", "").equalsIgnoreCase("DIR") && zipItem.getProperty("privs").toUpperCase().indexOf("(VIEW)") < 0) {
+                                                        if ((zipItem = (Properties)this.zipFiles.remove(0)).getProperty("type", "").equalsIgnoreCase("DIR") && zipItem.getProperty("privs").toUpperCase().indexOf("(VIEW)") < 0) {
                                                             zipItem = null;
                                                         } else if (!(crushftp.handlers.Common.filter_check("L", zipItem.getProperty("name"), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && crushftp.handlers.Common.filter_check("F", String.valueOf(zipItem.getProperty("name")) + (zipItem.getProperty("type").equalsIgnoreCase("DIR") && !zipItem.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && crushftp.handlers.Common.filter_check("F", String.valueOf(zipItem.getProperty("name")) + (zipItem.getProperty("type").equalsIgnoreCase("DIR") && !zipItem.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")))) {
                                                             zipItem = null;
@@ -613,8 +612,7 @@ implements Runnable {
                                                             this.zippedFiles.addElement(zipItem);
                                                             rest = Long.parseLong(zipItem.getProperty("rest", "-1"));
                                                             while (zipItem.getProperty("privs").indexOf("(read)") < 0 || zipItem.getProperty("privs").indexOf("(invisible)") >= 0 && zipItem.getProperty("privs").indexOf("(inherited)") < 0 || zipItem.getProperty("type", "").equalsIgnoreCase("DIR") && zipItem.getProperty("privs").indexOf("(view)") < 0) {
-                                                                zipItem = (Properties)this.zipFiles.elementAt(0);
-                                                                this.zipFiles.removeElementAt(0);
+                                                                zipItem = (Properties)this.zipFiles.remove(0);
                                                                 if (this.zipFiles.size() != 0 || zipItem.getProperty("privs").indexOf("(read)") >= 0 && zipItem.getProperty("privs").indexOf("(invisible)") < 0 && zipItem.getProperty("privs").indexOf("(view)") >= 0) continue;
                                                                 zipItem = null;
                                                                 break;
@@ -628,7 +626,8 @@ implements Runnable {
                                                             }
                                                             this.c = this.thisSession.uVFS.getClient(zipItem);
                                                             zipItem.put("url", Zin.toString());
-                                                            while ((stat = this.c.stat(Zin.getPath())).getProperty("type").equals("DIR")) {
+                                                            stat = this.c.stat(Zin.getPath());
+                                                            if (stat != null && stat.getProperty("type").equals("DIR")) {
                                                                 FileArchiveEntry ze = null;
                                                                 zipItem.put("zipPath", String.valueOf(zipItem.getProperty("root_dir", "").substring(the_file_path.length())) + zipItem.getProperty("name") + "/");
                                                                 if (!this.zippedPaths.contains(zipItem.getProperty("zipPath"))) {
@@ -638,31 +637,12 @@ implements Runnable {
                                                                     ((FileArchiveOutputStream)((Object)this.data_os)).putArchiveEntry(ze);
                                                                     ((FileArchiveOutputStream)((Object)this.data_os)).closeArchiveEntry();
                                                                 }
-                                                                if (this.zipFiles.size() == 0 && this.activeZipThreads.size() == 0) {
-                                                                    Thread.sleep(1000L);
-                                                                    if (this.zipFiles.size() > 0) continue;
-                                                                    Zin = null;
-                                                                    break;
-                                                                }
-                                                                if (this.zipFiles.size() > 0) {
-                                                                    zipItem = (Properties)this.zipFiles.elementAt(0);
-                                                                    this.zipFiles.removeElementAt(0);
-                                                                    Zin = new VRL(zipItem.getProperty("url"));
-                                                                    stat = this.c.stat(Zin.getPath());
-                                                                    if (this.zipFiles.size() != 0 || !stat.getProperty("type").equalsIgnoreCase("DIR")) continue;
-                                                                    zipItem.put("zipPath", String.valueOf(zipItem.getProperty("root_dir", "").substring(the_file_path.length())) + zipItem.getProperty("name") + "/");
-                                                                    if (!this.zippedPaths.contains(zipItem.getProperty("zipPath"))) {
-                                                                        this.zippedPaths.add(zipItem.getProperty("zipPath"));
-                                                                        ze = new FileArchiveEntry(zipItem.getProperty("zipPath"));
-                                                                        ze.setTime(Long.parseLong(zipItem.getProperty("modified", String.valueOf(System.currentTimeMillis()))));
-                                                                        ((FileArchiveOutputStream)((Object)this.data_os)).putArchiveEntry(ze);
-                                                                        ((FileArchiveOutputStream)((Object)this.data_os)).closeArchiveEntry();
-                                                                    }
-                                                                    Zin = null;
-                                                                    break;
-                                                                }
-                                                                Thread.sleep(100L);
+                                                                zipItem = null;
+                                                                Zin = null;
                                                             }
+                                                        }
+                                                        if (zipItem == null && this.zipFiles.size() == 0 && this.activeZipThreads.size() == 0) {
+                                                            Thread.sleep(1000L);
                                                         }
                                                         if (zipItem == null || Zin == null || this.c.stat(Zin.getPath()) == null) {
                                                             Zin = null;
@@ -693,7 +673,7 @@ implements Runnable {
                                                                     if (!Common.dmz_mode) {
                                                                         if (!this.thisSession.user.getProperty("fileEncryptionKey", "").equals("") || !this.thisSession.user.getProperty("fileDecryptionKey", "").equals("")) {
                                                                             this.in = crushftp.handlers.Common.getDecryptedStream(this.in, this.thisSession.user.getProperty("fileEncryptionKey", ""), this.thisSession.user.getProperty("fileDecryptionKey", ""), this.thisSession.user.getProperty("fileDecryptionKeyPass", ""));
-                                                                        } else if (!ServerStatus.SG("fileEncryptionKey").equals("") || ServerStatus.BG("fileDecryption")) {
+                                                                        } else if (!ServerStatus.SG("fileDecryptionKey").equals("") && ServerStatus.BG("fileDecryption")) {
                                                                             this.in = crushftp.handlers.Common.getDecryptedStream(this.in, ServerStatus.SG("fileEncryptionKey"), ServerStatus.SG("fileDecryptionKey"), ServerStatus.SG("fileDecryptionKeyPass"));
                                                                         }
                                                                     }
@@ -706,6 +686,13 @@ implements Runnable {
                                                                     }
                                                                     throw e;
                                                                 }
+                                                            } else {
+                                                                if (this.in != null) {
+                                                                    this.in.close();
+                                                                }
+                                                                this.in = null;
+                                                                Zin = null;
+                                                                data_read = 0;
                                                             }
                                                         }
                                                     } else if (this.activeZipThreads.size() == 0) {
@@ -738,7 +725,7 @@ implements Runnable {
                                             } else {
                                                 data_read = this.proxy_remote_in != null ? this.proxy_remote_in.read(temp_array) : this.in.read(temp_array);
                                             }
-                                            if (!(data_read > 0 || this.zipping || the_file_path.indexOf("/WebInterface/") >= 0 || the_file_name.equals("CrushFTP.jar") || this.otherFile != null && this.otherFile.getPath().indexOf("/WebInterface/") >= 0 || !vrl.getProtocol().equalsIgnoreCase("file") || (cur_file_size = Long.parseLong((stat = this.c.stat(vrl.getPath())).getProperty("size"))) <= start_file_size || pgp || this.item.getProperty("privs", "").indexOf("(dynamic_size)") >= 0)) {
+                                            if (!(data_read > 0 || this.zipping || the_file_path.indexOf("/WebInterface/") >= 0 || the_file_name.equals(String.valueOf(System.getProperty("appname", "CrushFTP")) + ".jar") || this.otherFile != null && this.otherFile.getPath().indexOf("/WebInterface/") >= 0 || !vrl.getProtocol().equalsIgnoreCase("file") || (cur_file_size = Long.parseLong((stat = this.c.stat(vrl.getPath())).getProperty("size"))) <= start_file_size || pgp || this.item.getProperty("privs", "").indexOf("(dynamic_size)") >= 0)) {
                                                 data_read = 0;
                                                 if (file_changing_loc == this.current_loc) {
                                                     ++file_changing_loop_intervals;
@@ -766,7 +753,7 @@ implements Runnable {
                                                         this.proxy.write(temp_array, 0, data_read);
                                                     }
                                                 }
-                                                RETR_handler.updateTransferStats(this.thisSession, data_read, free_ratio_item, temp_array, this.md5, current_download_item);
+                                                RETR_handler.updateTransferStats(this.thisSession, data_read, 0, free_ratio_item, temp_array, this.md5, current_download_item, this.zipping);
                                                 if (pre_event_info != null) {
                                                     pre_event_info.put("info_download_event_status", "downloading");
                                                     if (current_download_item != null) {
@@ -809,7 +796,7 @@ implements Runnable {
                                         throw new Exception("Filetree list failed!");
                                     }
                                     try {
-                                        this.thisSession.uiPUT("sending_file", "false");
+                                        this.thisSession.uiPUT("sending_file", String.valueOf(this.thisSession.retr_files_pool_used.size() > 0));
                                     }
                                     catch (Exception new_date) {
                                         // empty catch block
@@ -907,7 +894,7 @@ implements Runnable {
                                         // empty catch block
                                     }
                                     try {
-                                        this.thisSession.uiPUT("sending_file", "false");
+                                        this.thisSession.uiPUT("sending_file", String.valueOf(this.thisSession.retr_files_pool_used.size() > 0));
                                     }
                                     catch (Exception pp) {
                                         // empty catch block
@@ -959,6 +946,8 @@ implements Runnable {
                                     fileItem.put("the_file_error", this.stop_message);
                                     fileItem.put("the_file_type", this.item.getProperty("type", "FILE"));
                                     fileItem.put("the_file_status", "FAILED");
+                                    fileItem.put("the_file_start", String.valueOf(start_transfer_time));
+                                    fileItem.put("the_file_end", String.valueOf(new Date().getTime()));
                                     this.thisSession.uiPUT("session_downloads", String.valueOf(this.thisSession.uiSG("session_downloads")) + the_file_path + the_file_name + ":" + this.thisSession.uiLG("file_length") + LOC.G("bytes") + " @ " + this.thisSession.uiLG("overall_transfer_speed") + "k/sec. " + LOC.G("FAILED") + CRLF);
                                     if (this.thisSession.LG("max_download_amount") != 0L) {
                                         this.thisSession.not_done = this.thisSession.ftp_write_command_logged("226-" + this.SG("Max Download") + ".  " + LOC.G("Sent") + ":" + this.thisSession.uiLG("bytes_sent") / 1024L + "k.  " + this.SG("Max") + ":" + this.thisSession.LG("max_download_amount") + "k.  " + LOC.G("Available") + ":" + (this.thisSession.LG("max_download_amount") - this.thisSession.uiLG("bytes_sent") / 1024L) + "k.", "RETR");
@@ -972,10 +961,14 @@ implements Runnable {
                                     if (ServerStatus.BG("rfc_proxy") && e.getMessage() != null && e.getMessage().length() > 3 && e.getMessage().charAt(3) == ' ') {
                                         this.thisSession.not_done = this.thisSession.ftp_write_command_logged(e.getMessage(), "RETR");
                                     } else {
-                                        this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550", String.valueOf(e.getMessage()) + " " + LOC.G("(\"$0$1\") RETR", the_file_path, the_file_name), "RETR");
+                                        String error_message = e.getMessage();
+                                        if (error_message.contains("java.io.FileNotFoundException") || error_message.contains("No such file or directory")) {
+                                            error_message = "java.io.FileNotFoundException: " + the_file_path + the_file_name + " (No such file or directory)";
+                                        }
+                                        this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550", String.valueOf(error_message) + " " + LOC.G("(\"$0$1\") RETR", the_file_path, the_file_name), "RETR");
                                         this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                                     }
-                                    if (the_file_path.indexOf("/WebInterface/") >= 0) break block266;
+                                    if (the_file_path.indexOf("/WebInterface/") >= 0) break block267;
                                     this.thisSession.do_event5("DOWNLOAD", fileItem);
                                 }
                             }
@@ -1041,13 +1034,6 @@ implements Runnable {
             catch (Exception exception) {
                 // empty catch block
             }
-            try {
-                this.thisSession.uiPUT("sending_file", "false");
-            }
-            catch (Exception exception) {
-                // empty catch block
-            }
-            this.thisSession.uiPUT("sending_file", "false");
             this.thisSession.start_idle_timer();
             this.active2.put("streamOpenStatus", "CLOSED");
             try {
@@ -1070,6 +1056,12 @@ implements Runnable {
         this.kill();
         while (this.thisSession.retr_files_pool_used.indexOf(this) >= 0) {
             this.thisSession.retr_files_pool_used.removeElement(this);
+        }
+        try {
+            this.thisSession.uiPUT("sending_file", String.valueOf(this.thisSession.retr_files_pool_used.size() > 0));
+        }
+        catch (Exception exception) {
+            // empty catch block
         }
         if (this.thisSession.retr_files_pool_free.indexOf(this) < 0) {
             this.thisSession.retr_files_pool_free.addElement(this);
@@ -1111,6 +1103,9 @@ implements Runnable {
         catch (Exception exception) {
             // empty catch block
         }
+        if (this.md5 != null) {
+            this.md5.close();
+        }
         this.active2.put("active", "false");
     }
 
@@ -1126,11 +1121,8 @@ implements Runnable {
         return lesserSpeed;
     }
 
-    public static void downloadFinishedSuccess(SessionCrush thisSession, String the_file_path, String the_file_name, Properties item, long starting_loc, boolean httpDownload, Vector zippedFiles, long start_transfer_time, MessageDigest md5, long resume_loc, long current_loc, boolean binary_mode) throws Exception {
-        String md5Str = new BigInteger(1, md5.digest()).toString(16).toLowerCase();
-        while (md5Str.length() < 32) {
-            md5Str = "0" + md5Str;
-        }
+    public static void downloadFinishedSuccess(SessionCrush thisSession, String the_file_path, String the_file_name, Properties item, long starting_loc, boolean httpDownload, Vector zippedFiles, long start_transfer_time, MD5Calculator md5, long resume_loc, long current_loc, boolean binary_mode) throws Exception {
+        String md5Str = md5.getHash();
         thisSession.uiPUT("md5", md5Str);
         thisSession.uiPUT("sfv", md5Str);
         if (thisSession.uiLG("overall_transfer_speed") == 0L || thisSession.uiLG("overall_transfer_speed") < 0L) {
@@ -1221,7 +1213,11 @@ implements Runnable {
         }
         thisSession.not_done = responseNumber.equals("226") ? (ServerStatus.BG("generic_ftp_responses") ? thisSession.ftp_write_command_logged("226", "Transfer complete.", "RETR") : thisSession.ftp_write_command_logged(String.valueOf(responseNumber), "%RETR-end% " + LOC.G("(\"$0$1\") RETR", the_file_path, the_file_name), "RETR")) : thisSession.ftp_write_command_logged(String.valueOf(responseNumber), String.valueOf(stop_message) + " " + LOC.G("(\"$0$1\") RETR", the_file_path, the_file_name), "RETR");
         boolean pgp = RETR_handler.checkPgp(thisSession, item);
-        if (!(current_loc != thisSession.uiLG("file_length") && !pgp && binary_mode || skipEvent)) {
+        boolean file_len_match = current_loc == thisSession.uiLG("file_length");
+        if (!ServerStatus.BG("check_file_length_download_event") || zippedFiles.size() > 0) {
+            file_len_match = true;
+        }
+        if ((file_len_match || pgp || !binary_mode) && !skipEvent) {
             int x = 0;
             while (x < downloadItems.size()) {
                 Properties fi = (Properties)downloadItems.elementAt(x);
@@ -1233,11 +1229,23 @@ implements Runnable {
         }
     }
 
+    public boolean checkPgp() {
+        boolean pgp = false;
+        if (!(this.thisSession == null || this.thisSession.user == null || this.thisSession.user.getProperty("fileEncryptionKey", "").equals("") && this.thisSession.user.getProperty("fileDecryptionKey", "").equals(""))) {
+            pgp = true;
+        } else if (!ServerStatus.SG("fileDecryptionKey").equals("") && ServerStatus.BG("fileDecryption")) {
+            pgp = true;
+        } else if (this.item != null && (this.item.getProperty("privs", "").indexOf("(pgpDecryptDownload") >= 0 || this.item.getProperty("privs", "").indexOf("(pgpEncryptDownload") >= 0)) {
+            pgp = true;
+        }
+        return pgp;
+    }
+
     public static boolean checkPgp(SessionCrush thisSession, Properties item) {
         boolean pgp = false;
         if (!thisSession.user.getProperty("fileEncryptionKey", "").equals("") || !thisSession.user.getProperty("fileDecryptionKey", "").equals("")) {
             pgp = true;
-        } else if (!ServerStatus.SG("fileEncryptionKey").equals("") || ServerStatus.BG("fileDecryption")) {
+        } else if (!ServerStatus.SG("fileDecryptionKey").equals("") && ServerStatus.BG("fileDecryption")) {
             pgp = true;
         } else if (item != null && (item.getProperty("privs", "").indexOf("(pgpDecryptDownload") >= 0 || item.getProperty("privs", "").indexOf("(pgpEncryptDownload") >= 0)) {
             pgp = true;
@@ -1258,6 +1266,12 @@ implements Runnable {
         current_item.put("user_protocol", this.thisSession.uiSG("user_protocol"));
         current_item.put("the_file_start", String.valueOf(start_transfer_time));
         current_item.put("the_file_type", tmp.getProperty("type", "FILE"));
+        Properties base_item = this.item;
+        if (!tmp.getProperty("url", "").equals(this.item.getProperty("url", ""))) {
+            base_item = tmp;
+        }
+        current_item.put("path", String.valueOf(base_item.getProperty("root_dir")) + base_item.getProperty("name"));
+        current_item.put("folder_type", new VRL(base_item.getProperty("url", "")).getProtocol());
         ServerStatus.siVG("outgoing_transfers").addElement(current_item);
         return current_item;
     }
@@ -1265,14 +1279,15 @@ implements Runnable {
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
-    public static void updateTransferStats(SessionCrush thisSession, int data_read, boolean free_ratio_item, byte[] temp_array, MessageDigest md5, Properties current_download_item) {
+    public static void updateTransferStats(SessionCrush thisSession, int data_read, int off, boolean free_ratio_item, byte[] temp_array, MD5Calculator md5, Properties current_download_item, boolean zipping) {
+        if (zipping) {
+            return;
+        }
         thisSession.active_transfer();
         if (data_read < 0) {
             return;
         }
-        if (System.getProperty("crushftp.retr_md5", "true").equals("true")) {
-            md5.update(temp_array, 0, data_read);
-        }
+        md5.update(temp_array, off, data_read);
         thisSession.uiPPUT("bytes_sent", data_read);
         thisSession.uiPUT("bytes_sent_formatted", Common.format_bytes_short(Long.parseLong(thisSession.uiSG("bytes_sent"))));
         ServerStatus.thisObj.total_server_bytes_sent += (long)data_read;
@@ -1289,6 +1304,47 @@ implements Runnable {
             synchronized (properties) {
                 thisSession.server_item.put("bytes_sent", String.valueOf(Long.parseLong(thisSession.server_item.getProperty("bytes_sent", "0")) + (long)data_read));
             }
+        }
+    }
+
+    class ZipOutputWrapper
+    extends BufferedOutputStream {
+        SessionCrush thisSession;
+        boolean free_ratio_item;
+        boolean isClosed;
+        long size;
+
+        public ZipOutputWrapper(OutputStream out, SessionCrush thisSession, boolean free_ratio_item) {
+            super(out);
+            this.thisSession = null;
+            this.free_ratio_item = false;
+            this.isClosed = false;
+            this.size = 0L;
+            this.thisSession = thisSession;
+            this.free_ratio_item = free_ratio_item;
+        }
+
+        @Override
+        public synchronized void write(int b) throws IOException {
+            this.write(new byte[]{(byte)b}, 0, 1);
+        }
+
+        @Override
+        public synchronized void write(byte[] b, int off, int len) throws IOException {
+            super.write(b, off, len);
+            try {
+                this.size += (long)len;
+                RETR_handler.updateTransferStats(this.thisSession, len, off, this.free_ratio_item, b, RETR_handler.this.md5, null, false);
+                this.thisSession.uiPUT("file_length", String.valueOf(this.size));
+            }
+            catch (Exception e) {
+                Log.log("DOWNLOAD", 1, e);
+            }
+        }
+
+        @Override
+        public void write(byte[] b) throws IOException {
+            this.write(b, 0, b.length);
         }
     }
 }

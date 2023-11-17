@@ -87,6 +87,7 @@ extends Thread {
         p.put("syncs_delete_journal", "DELETE from FILE_JOURNAL where RID = ?");
         p.put("syncs_delete_journal_expired", "DELETE from FILE_JOURNAL where EVENT_TIME < ?");
         p.put("syncs_get_journal", "select * from FILE_JOURNAL where SYNC_ID = ? and RID > ? and (CLIENTID <> ? or CLIENTID is null) order by RID");
+        p.put("syncs_get_prior_md5s", "select PRIOR_MD5 from FILE_JOURNAL where SYNC_ID = ? and ITEM_PATH = ? order by RID");
     }
 
     public synchronized void init() {
@@ -325,7 +326,7 @@ extends Thread {
         try {
             String pass = this.get("syncs_db_pass");
             pass = ServerStatus.thisObj.common_code.decode_pass(pass);
-            if (!this.get("syncs_db_driver_file").equals("")) {
+            if (!this.get("syncs_db_driver_file").equals("") && System.getProperty("crushftp.security.classloader", "false").equals("true")) {
                 String[] db_drv_files = this.get("syncs_db_driver_file").split(";");
                 final URL[] urls = new URL[db_drv_files.length];
                 int x22 = 0;
@@ -369,12 +370,16 @@ extends Thread {
         return conn;
     }
 
+    public static Vector getSyncTableData(String syncIDTemp, long rid, String table, String clientid, String root_dir, VFS uVFS) {
+        return SyncTools.getSyncTableData(syncIDTemp, rid, table, clientid, root_dir, uVFS, null);
+    }
+
     /*
      * Unable to fully structure code
      */
-    public static Vector getSyncTableData(String syncIDTemp, long rid, String table, String clientid, final String root_dir, final VFS uVFS) {
-        block32: {
-            block31: {
+    public static Vector getSyncTableData(String syncIDTemp, long rid, String table, String clientid, final String root_dir, final VFS uVFS, String prior_md5s_item_path) {
+        block34: {
+            block33: {
                 url2 = "";
                 try {
                     url2 = Common.url_decode(uVFS.get_item(root_dir).getProperty("url"));
@@ -383,6 +388,14 @@ extends Thread {
                     Log.log("SERVER", 0, e);
                 }
                 url = url2;
+                if (table.equalsIgnoreCase("journal") && prior_md5s_item_path != null && !prior_md5s_item_path.trim().equals("")) {
+                    Log.log("SERVER", 2, "PRIOR_MD5s:" + prior_md5s_item_path);
+                    list = SyncTools.dbt.executeSqlQuery(SyncTools.dbt.get("syncs_get_prior_md5s"), new Object[]{syncIDTemp, prior_md5s_item_path}, false);
+                    while (list.size() > 100) {
+                        list.remove(0);
+                    }
+                    return list;
+                }
                 if (table.equalsIgnoreCase("journal")) {
                     list = SyncTools.dbt.executeSqlQuery(SyncTools.dbt.get("syncs_get_journal"), new Object[]{syncIDTemp, rid, clientid}, false);
                     x = 0;
@@ -414,7 +427,7 @@ extends Thread {
                     }
                     return list;
                 }
-                if (!table.equalsIgnoreCase("file")) break block31;
+                if (!table.equalsIgnoreCase("file")) break block33;
                 list2 = null;
                 startThread = false;
                 if (SyncTools.cachedSyncList.containsKey(url)) {
@@ -480,9 +493,9 @@ extends Thread {
                 catch (Exception e) {
                     Log.log("SYNC", 0, e);
                 }
-                break block32;
+                break block34;
             }
-            if (!table.startsWith("file_")) break block32;
+            if (!table.startsWith("file_")) break block34;
             pos = Integer.parseInt(table.substring("file_".length()));
             sync_info = null;
             startThread = false;
@@ -532,7 +545,7 @@ extends Thread {
                         SyncTools.cachedSyncList.remove(url);
                         throw new Exception("Timeout waiting for list data...");
                     }
-                    if (list.size() != 1 || !(list.elementAt(0) instanceof String)) ** GOTO lbl150
+                    if (list.size() != 1 || !(list.elementAt(0) instanceof String)) ** GOTO lbl159
                     msg = list.elementAt(0).toString();
                     if (list3.size() != 0) break;
                     SyncTools.cachedSyncList.remove(String.valueOf(clientid) + url + uVFS.username);
@@ -544,12 +557,12 @@ lbl-1000:
                     {
                         dir_item = (Properties)list.remove(0);
                         current_list.addElement(dir_item);
-lbl150:
+lbl159:
                         // 2 sources
 
                         ** while (pos >= current_list.size() && list.size() > 0)
                     }
-lbl151:
+lbl160:
                     // 1 sources
 
                     if (pos >= current_list.size()) continue;

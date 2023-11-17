@@ -34,7 +34,7 @@ import java.util.Vector;
 
 public class SQLUsers
 extends UserProvider {
-    static URLClassLoader cl = null;
+    static ClassLoader cl = null;
     static Class drvCls = null;
     static Driver driver = null;
     public Properties settings = new Properties();
@@ -60,7 +60,7 @@ extends UserProvider {
         settings2.put("db_driver_file", "./mysql-connector-java-5.0.4-bin.jar");
         settings2.put("db_driver", "org.gjt.mm.mysql.Driver");
         settings2.put("db_url", "jdbc:mysql://127.0.0.1:3306/crushftp?autoReconnect=true");
-        settings2.put("db_user", "crushftp");
+        settings2.put("db_user", System.getProperty("appname", "CrushFTP").toLowerCase());
         settings2.put("db_pass", "");
         settings2.put("db_user_query", "SELECT * FROM USERS WHERE SERVER_GROUP=? and UPPER(USERNAME)=UPPER(?)");
         settings2.put("db_user_insert", "INSERT INTO USERS (USERNAME,PASSWORD,SERVER_GROUP) VALUES(?,?,?)");
@@ -114,6 +114,9 @@ extends UserProvider {
     public void setSettings(Properties p) {
         SQLUsers.fixSql(p);
         this.settings.putAll((Map<?, ?>)p);
+        if (this.settings.getProperty("db_mysql_groups_compatibility", "false").equalsIgnoreCase("true") && this.settings.getProperty("db_driver", "").toLowerCase().indexOf("sqlserver") >= 0) {
+            this.settings.put("db_mysql_groups_compatibility", "false");
+        }
     }
 
     public static void fixSql(Properties settings) {
@@ -214,7 +217,32 @@ extends UserProvider {
                             path = "/" + path;
                         }
                         p.remove("path");
-                        p.put("url", crushftp.handlers.Common.url_decode(p.getProperty("url")));
+                        if (p.containsKey("url")) {
+                            String url = crushftp.handlers.Common.url_decode(p.getProperty("url"));
+                            if (p.getProperty("encrypted", "false").equals("true") && !url.contains("://")) {
+                                if (!p.getProperty("encrypted_class", "").trim().equals("")) {
+                                    try {
+                                        Class<?> c = ServerStatus.clasLoader.loadClass(p.getProperty("encrypted_class").trim());
+                                        Constructor<?> cons = c.getConstructor(new Properties().getClass(), new String().getClass());
+                                        cons.newInstance(p, "decrypt");
+                                    }
+                                    catch (Exception e) {
+                                        Log.log("USER_OBJ", 1, e);
+                                        p.put("url", url);
+                                    }
+                                } else {
+                                    try {
+                                        p.put("url", new crushftp.handlers.Common().decode_pass(url));
+                                    }
+                                    catch (Exception e) {
+                                        Log.log("USER_OBJ", 1, e);
+                                        p.put("url", url);
+                                    }
+                                }
+                            } else {
+                                p.put("url", url);
+                            }
+                        }
                         Properties pp = new Properties();
                         pp.put("name", crushftp.handlers.Common.last(path));
                         if (!pp.getProperty("name").equals("") && !pp.getProperty("name").equals("/")) {
@@ -258,6 +286,7 @@ extends UserProvider {
     }
 
     private Properties findUser(Connection conn, String serverGroup, String username) throws Exception {
+        username = crushftp.handlers.Common.safe_xss_filename(username);
         Properties user = null;
         ResultSet rs = null;
         try (Statement ps = null;){
@@ -282,66 +311,69 @@ extends UserProvider {
 
     @Override
     public Properties loadGroups(String serverGroup) {
-        this.msg("Loading groups from DB");
-        Properties groups = new Properties();
-        Connection conn = null;
-        PreparedStatement ps = null;
-        ResultSet rs = null;
-        Statement s = null;
-        try {
+        Properties groups;
+        block17: {
+            this.msg("Loading groups from DB");
+            groups = new Properties();
+            Connection conn = null;
+            PreparedStatement ps = null;
+            ResultSet rs = null;
+            Statement s = null;
             try {
-                this.msg("Connecting to db.");
-                conn = this.getConnection();
-                s = conn.createStatement();
                 try {
-                    String query = this.settings.getProperty("db_groups_query");
-                    if (query.equals("SELECT * FROM GROUPS G, USERS U WHERE G.USERID = U.USERID AND G.SERVER_GROUP=?") || query.equals("SELECT * FROM `GROUPS` G, USERS U WHERE G.USERID = U.USERID AND G.SERVER_GROUP=?")) {
-                        query = crushftp.handlers.Common.replace_str(query, ", USERS U WHERE G.USERID = U.USERID AND G.SERVER_GROUP=?", " LEFT JOIN USERS ON G.USERID = USERS.USERID WHERE G.SERVER_GROUP=?");
-                    }
-                    if (ServerStatus.BG("db_mysql_groups_compatibility")) {
-                        query = crushftp.handlers.Common.replace_str(this.settings.getProperty("db_groups_query"), " GROUPS ", " `GROUPS` ");
-                    }
-                    ps = conn.prepareStatement(query);
+                    this.msg("Connecting to db.");
+                    conn = this.getConnection();
+                    s = conn.createStatement();
                     try {
-                        this.msg("Connected.");
-                        ps.setString(1, serverGroup);
-                        rs = ps.executeQuery();
-                        while (rs.next()) {
-                            Vector<String> v = (Vector<String>)groups.get(rs.getString("GROUPNAME"));
-                            if (v == null) {
-                                v = new Vector<String>();
-                            }
-                            groups.put(rs.getString("GROUPNAME"), v);
-                            if (rs.getString("USERNAME") == null) continue;
-                            v.addElement(rs.getString("USERNAME"));
+                        String query = this.settings.getProperty("db_groups_query");
+                        if (query.equals("SELECT * FROM GROUPS G, USERS U WHERE G.USERID = U.USERID AND G.SERVER_GROUP=?") || query.equals("SELECT * FROM `GROUPS` G, USERS U WHERE G.USERID = U.USERID AND G.SERVER_GROUP=?")) {
+                            query = crushftp.handlers.Common.replace_str(query, ", USERS U WHERE G.USERID = U.USERID AND G.SERVER_GROUP=?", " LEFT JOIN USERS ON G.USERID = USERS.USERID WHERE G.SERVER_GROUP=?");
                         }
-                        rs.close();
+                        if (this.settings.getProperty("db_mysql_groups_compatibility", "false").equalsIgnoreCase("true") && this.settings.getProperty("db_driver", "").toLowerCase().indexOf("sqlserver") < 0) {
+                            query = crushftp.handlers.Common.replace_str(this.settings.getProperty("db_groups_query"), " GROUPS ", " `GROUPS` ");
+                        }
+                        ps = conn.prepareStatement(query);
+                        try {
+                            this.msg("Connected.  Searching for serverGroup:" + serverGroup);
+                            this.msg("Executing sql:" + query);
+                            ps.setString(1, serverGroup);
+                            rs = ps.executeQuery();
+                            while (rs.next()) {
+                                Vector<String> v = (Vector<String>)groups.get(rs.getString("GROUPNAME"));
+                                if (v == null) {
+                                    v = new Vector<String>();
+                                }
+                                groups.put(rs.getString("GROUPNAME"), v);
+                                if (rs.getString("USERNAME") == null) continue;
+                                v.addElement(rs.getString("USERNAME"));
+                            }
+                            rs.close();
+                        }
+                        finally {
+                            ps.close();
+                        }
                     }
                     finally {
-                        ps.close();
+                        s.close();
                     }
                 }
-                finally {
-                    s.close();
+                catch (Throwable e) {
+                    this.msg(e);
+                    groups = null;
+                    try {
+                        conn.close();
+                    }
+                    catch (Exception exception) {
+                        // empty catch block
+                    }
+                    this.releaseConnection(conn);
+                    break block17;
                 }
             }
-            catch (Throwable e) {
-                this.msg(e);
-                groups = null;
-                try {
-                    conn.close();
-                }
-                catch (Exception exception) {
-                    // empty catch block
-                }
+            catch (Throwable throwable) {
                 this.releaseConnection(conn);
+                throw throwable;
             }
-        }
-        finally {
-            try {
-                conn.close();
-            }
-            catch (Exception exception) {}
             this.releaseConnection(conn);
         }
         return groups;
@@ -363,7 +395,7 @@ extends UserProvider {
                     conn = this.getConnection();
                     ResultSet rs = null;
                     String query = this.settings.getProperty("db_groups_delete");
-                    if (ServerStatus.BG("db_mysql_groups_compatibility")) {
+                    if (this.settings.getProperty("db_mysql_groups_compatibility", "false").equalsIgnoreCase("true")) {
                         query = crushftp.handlers.Common.replace_str(this.settings.getProperty("db_groups_delete"), " GROUPS ", " `GROUPS` ");
                     }
                     ps = conn.prepareStatement(query);
@@ -383,7 +415,7 @@ extends UserProvider {
                         String id = "-1";
                         this.msg("Querying DB for user:" + this.settings.getProperty("db_users_query"));
                         String query_groups_insert = this.settings.getProperty("db_groups_insert");
-                        if (ServerStatus.BG("db_mysql_groups_compatibility")) {
+                        if (this.settings.getProperty("db_mysql_groups_compatibility", "false").equalsIgnoreCase("true")) {
                             query_groups_insert = crushftp.handlers.Common.replace_str(this.settings.getProperty("db_groups_insert"), " GROUPS ", " `GROUPS` ");
                         }
                         insertGroup = conn.prepareStatement(query_groups_insert);
@@ -456,7 +488,7 @@ extends UserProvider {
         PreparedStatement ps2;
         PreparedStatement ps;
         Connection conn;
-        block49: {
+        block54: {
             if (this.settings.getProperty("db_read_only", "false").equals("true")) {
                 return;
             }
@@ -466,7 +498,7 @@ extends UserProvider {
             this.msg("Connecting to db.");
             conn = this.getConnection();
             user = this.findUser(conn, serverGroup, username);
-            if (user != null) break block49;
+            if (user != null) break block54;
             this.releaseConnection(conn);
             return;
         }
@@ -560,6 +592,20 @@ extends UserProvider {
                     while (x < v.size()) {
                         Properties p = (Properties)v.elementAt(x);
                         p.put("path", virtualPath);
+                        if (p.getProperty("encrypted", "false").equals("true")) {
+                            if (!p.getProperty("encrypted_class", "").trim().equals("")) {
+                                try {
+                                    Class<?> c = Thread.currentThread().getContextClassLoader().loadClass(p.getProperty("encrypted_class").trim());
+                                    Constructor<?> cons = c.getConstructor(new Properties().getClass(), new String().getClass());
+                                    cons.newInstance(p, "encrypt");
+                                }
+                                catch (Exception ee) {
+                                    Log.log("USER_OBJ", 1, ee);
+                                }
+                            } else {
+                                p.put("url", ServerStatus.thisObj.common_code.encode_pass(p.getProperty("url"), "DES", ""));
+                            }
+                        }
                         String sql_insert = this.settings.getProperty("db_user_vfs_insert");
                         ps2 = conn.prepareStatement(sql_insert);
                         try {
@@ -735,22 +781,26 @@ extends UserProvider {
     }
 
     @Override
-    public Properties loadUser(String serverGroup, String username, Properties inheritance, boolean flattenUser) {
+    public Properties loadUser(String serverGroup, String username, Properties inheritance, boolean flattenUser, boolean allow_update) {
+        Vector ichain;
         Properties user;
         boolean found_user;
-        block41: {
+        block42: {
+            username = crushftp.handlers.Common.safe_xss_filename(username);
             this.msg("Loading user from DB:" + username);
             found_user = false;
             Connection conn = null;
             user = new Properties();
+            ichain = new Vector();
+            ichain.addElement("default");
             if (username.trim().length() > 0) {
-                block39: {
+                block40: {
                     PreparedStatement ps = null;
                     Statement statement = null;
                     try {
                         try {
                             String cacheId;
-                            block40: {
+                            block41: {
                                 String m1 = this.cache.getProperty(String.valueOf(serverGroup) + "_USERS");
                                 String m2 = this.getModified(serverGroup, "USERS");
                                 Log.log("USER_OBJ", 3, "CACHE: " + serverGroup + " :USERS:local cached date=" + m1);
@@ -775,7 +825,7 @@ extends UserProvider {
                                         }
                                     }
                                     found_user = true;
-                                    break block39;
+                                    break block40;
                                 }
                                 if (m1 != null && m2 != null && !m1.equals(m2)) {
                                     this.msg("RESETTING SQL CACHE:" + serverGroup + ":USERS:local cached date=" + m1 + " versus DB date=" + m2);
@@ -813,10 +863,9 @@ extends UserProvider {
                                     try {
                                         if (id.equals("-1")) {
                                             user = null;
-                                            break block40;
+                                            break block41;
                                         }
                                         Enumeration<Object> keys = inheritance.keys();
-                                        Vector ichain = null;
                                         while (keys.hasMoreElements()) {
                                             String key = keys.nextElement().toString();
                                             if (!key.equalsIgnoreCase(username)) continue;
@@ -875,7 +924,7 @@ extends UserProvider {
                                                         originalUser.put("expire_password", pp.getProperty("expire_password"));
                                                         needWrite = true;
                                                     }
-                                                    if (needWrite) {
+                                                    if (needWrite && allow_update) {
                                                         this.writeUser(serverGroup, username, originalUser, false);
                                                     }
                                                 }
@@ -920,7 +969,7 @@ extends UserProvider {
                                 // empty catch block
                             }
                             this.releaseConnection(conn);
-                            break block41;
+                            break block42;
                         }
                     }
                     catch (Throwable throwable) {
@@ -936,6 +985,9 @@ extends UserProvider {
         } else {
             this.msg("User not found.");
         }
+        if (user != null) {
+            user.put("ichain", ichain);
+        }
         return user;
     }
 
@@ -945,6 +997,8 @@ extends UserProvider {
             return;
         }
         if (username2 != null) {
+            username1 = crushftp.handlers.Common.safe_xss_filename(username1);
+            username2 = crushftp.handlers.Common.safe_xss_filename(username2);
             this.msg("Updating user in DB:" + username2);
             Connection conn = null;
             if (username1.trim().length() > 0 && username2.trim().length() > 0) {
@@ -1002,9 +1056,15 @@ extends UserProvider {
 
     @Override
     public void writeUser(String serverGroup, String username, Properties user, boolean backup) {
+        this.writeUser(serverGroup, username, user, backup, false);
+    }
+
+    @Override
+    public void writeUser(String serverGroup, String username, Properties user, boolean backup, boolean clear_only_user_related_xml_from_cache) {
         if (this.settings.getProperty("db_read_only", "false").equals("true")) {
             return;
         }
+        username = crushftp.handlers.Common.safe_xss_filename(username);
         this.msg("Writing user to DB:" + username);
         user = (Properties)user.clone();
         Vector lvsv = (Vector)user.get("linked_vfs");
@@ -1307,6 +1367,7 @@ extends UserProvider {
             if (this.settings.getProperty("db_read_only", "false").equals("true")) {
                 return;
             }
+            username = crushftp.handlers.Common.safe_xss_filename(username);
             this.msg("Deleting user in DB:" + username);
             Connection conn = null;
             if (username.trim().length() > 0) {
@@ -1421,7 +1482,7 @@ extends UserProvider {
                         this.msg("Querying DB for user:" + this.settings.getProperty("db_user_query"));
                         while (rs.next()) {
                             this.msg("Found user.");
-                            v.addElement(rs.getString("USERNAME"));
+                            v.addElement(crushftp.handlers.Common.safe_xss_filename(rs.getString("USERNAME")));
                         }
                         rs.close();
                     }
@@ -1474,7 +1535,7 @@ extends UserProvider {
                         while (rs.next()) {
                             this.msg("Found email/user.");
                             if (rs.getString("USERNAME").equals("TempAccount") || rs.getString("USERNAME").startsWith("TempAccount_")) continue;
-                            Properties user = this.loadUser(serverGroup, rs.getString("USERNAME"), new Properties(), false);
+                            Properties user = this.loadUser(serverGroup, rs.getString("USERNAME"), new Properties(), false, false);
                             if (!user_hash.containsKey(rs.getString("USERNAME"))) {
                                 v.addElement(user);
                             }
@@ -1536,18 +1597,6 @@ extends UserProvider {
         if (encrypted) {
             p.put("encrypted", "true");
             p.put("encrypted_class", encrypted_class);
-            if (!p.getProperty("encrypted_class", "").trim().equals("")) {
-                try {
-                    Class<?> c = ServerStatus.clasLoader.loadClass(p.getProperty("encrypted_class").trim());
-                    Constructor<?> cons = c.getConstructor(new Properties().getClass(), new String().getClass());
-                    cons.newInstance(p, "encrypt");
-                }
-                catch (Exception ee) {
-                    Log.log("USER_OBJ", 1, ee);
-                }
-            } else {
-                p.put("url", ServerStatus.thisObj.common_code.encode_pass(p.getProperty("url"), "DES", ""));
-            }
         }
         Properties virtual = new Properties();
         Properties pp = new Properties();
@@ -1636,7 +1685,7 @@ extends UserProvider {
                 if (ignore_groups) break block41;
                 this.msg("Deleting user db_groups_user_delete:" + id);
                 String query = this.settings.getProperty("db_groups_user_delete");
-                if (ServerStatus.BG("db_mysql_groups_compatibility")) {
+                if (this.settings.getProperty("db_mysql_groups_compatibility", "false").equalsIgnoreCase("true")) {
                     query = crushftp.handlers.Common.replace_str(this.settings.getProperty("db_groups_user_delete"), " GROUPS ", " `GROUPS` ");
                 }
                 ps = conn.prepareStatement(query);
@@ -1741,7 +1790,7 @@ extends UserProvider {
         this.msg("Loading web_customizations...");
         this.loadTable(id, "WEB_CUSTOMIZATIONS", user, s, false, null, null, "", "");
         this.msg("Loading domain_root_list...");
-        this.loadTable(id, "DOMAIN_ROOT_LIST", user, s, false, null, null, "", "");
+        this.loadTable(id, "DOMAIN_ROOT_LIST", user, s, false, "SORT_ORDER", null, "", "");
     }
 
     private void loadTable(String userid, String table, Properties user, Statement s, boolean propertyMode, String orderby, String groupby, String prop_name, String prop_value) {
@@ -1868,13 +1917,19 @@ extends UserProvider {
 
     private void releaseConnection(Connection conn) {
         try {
-            usedConnections.remove(conn);
+            if (conn != null) {
+                usedConnections.remove(conn);
+            }
             if (conn != null && !conn.isClosed()) {
+                this.msg("Add sql connection to free connections. Free connection size was: " + freeConnections.size() + " Used Connection size is: " + usedConnections.size() + ":" + conn);
                 freeConnections.addElement(conn);
+            } else if (conn != null) {
+                throw new SQLException("Connection was closed or null.");
             }
         }
-        catch (SQLException sQLException) {
-            // empty catch block
+        catch (SQLException e) {
+            this.msg(e);
+            this.msg("Connection was closed/dead, so discarding it. Free connection size was: " + freeConnections.size() + " Used Connection size is: " + usedConnections.size() + ":" + e);
         }
     }
 
@@ -1882,38 +1937,127 @@ extends UserProvider {
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     private Connection getConnection() throws Throwable {
-        String[] db_drv_files = this.get("db_driver_file").split(";");
-        URL[] urls = new URL[db_drv_files.length];
-        int x = 0;
-        while (x < db_drv_files.length) {
-            urls[x] = new File_S(db_drv_files[x]).toURI().toURL();
-            ++x;
-        }
-        if (cl == null || !this.lastDriver.equals(this.get("db_driver_file"))) {
-            cl = new URLClassLoader(urls);
-            drvCls = Class.forName(this.get("db_driver"), true, cl);
-            driver = (Driver)drvCls.newInstance();
-        }
-        this.lastDriver = this.get("db_driver_file");
-        Object object = used_lock;
-        synchronized (object) {
-            while (usedConnections.size() > Integer.parseInt(System.getProperty("crushftp.user.sql.maxpool", "1000"))) {
-                Thread.sleep(100L);
+        try {
+            String[] db_drv_files = this.get("db_driver_file").split(";");
+            URL[] urls = new URL[db_drv_files.length];
+            int x = 0;
+            while (x < db_drv_files.length) {
+                urls[x] = new File_S(db_drv_files[x]).toURI().toURL();
+                ++x;
             }
-            Vector vector = freeConnections;
-            synchronized (vector) {
-                if (freeConnections.size() > 0) {
-                    Connection conn = (Connection)freeConnections.remove(0);
-                    usedConnections.addElement(conn);
+            if (cl == null || !this.lastDriver.equals(this.get("db_driver_file"))) {
+                cl = !System.getProperty("crushftp.security.classloader", "false").equals("true") ? Thread.currentThread().getContextClassLoader() : new URLClassLoader(urls);
+                drvCls = Class.forName(this.get("db_driver"), true, cl);
+                driver = (Driver)drvCls.newInstance();
+            }
+            this.lastDriver = this.get("db_driver_file");
+            Object object = used_lock;
+            synchronized (object) {
+                while (usedConnections.size() > Integer.parseInt(System.getProperty("crushftp.user.sql.maxpool", "1000"))) {
+                    Thread.sleep(100L);
+                }
+                Connection conn = null;
+                Vector vector = freeConnections;
+                synchronized (vector) {
+                    if (freeConnections.size() > 0) {
+                        conn = (Connection)freeConnections.remove(0);
+                        usedConnections.addElement(conn);
+                        this.msg("Reuse sql connection. Free connection size : " + freeConnections.size() + " Used Connection size : " + usedConnections.size() + ":" + conn);
+                    }
+                }
+                int fail_count = 0;
+                if (conn != null) {
+                    block40: {
+                        PreparedStatement ps;
+                        block38: {
+                            ps = null;
+                            try {
+                                try {
+                                    ps = conn.prepareStatement("SELECT 1");
+                                    ps.executeQuery().close();
+                                }
+                                catch (Exception e) {
+                                    ++fail_count;
+                                    try {
+                                        ps.close();
+                                    }
+                                    catch (Exception exception) {}
+                                    break block38;
+                                }
+                            }
+                            catch (Throwable throwable) {
+                                try {
+                                    ps.close();
+                                }
+                                catch (Exception exception) {
+                                    // empty catch block
+                                }
+                                throw throwable;
+                            }
+                            try {
+                                ps.close();
+                            }
+                            catch (Exception exception) {
+                                // empty catch block
+                            }
+                        }
+                        try {
+                            try {
+                                ps = conn.prepareStatement("SELECT 1 FROM DUAL");
+                                ps.executeQuery().close();
+                            }
+                            catch (Exception e) {
+                                ++fail_count;
+                                try {
+                                    ps.close();
+                                }
+                                catch (Exception exception) {}
+                                break block40;
+                            }
+                        }
+                        catch (Throwable throwable) {
+                            try {
+                                ps.close();
+                            }
+                            catch (Exception exception) {
+                                // empty catch block
+                            }
+                            throw throwable;
+                        }
+                        try {
+                            ps.close();
+                        }
+                        catch (Exception exception) {
+                            // empty catch block
+                        }
+                    }
+                    if (fail_count == 2) {
+                        try {
+                            conn.close();
+                        }
+                        catch (Exception exception) {
+                            // empty catch block
+                        }
+                        this.releaseConnection(conn);
+                        conn = null;
+                    }
+                }
+                if (conn != null) {
                     return conn;
                 }
+                Properties props = new Properties();
+                props.setProperty("user", this.get("db_user"));
+                props.setProperty("password", ServerStatus.thisObj.common_code.decode_pass(crushftp.handlers.Common.url_decode(this.get("db_pass"))));
+                conn = driver.connect(this.get("db_url"), props);
+                usedConnections.addElement(conn);
+                this.msg("Create new sql connection. Free connection size : " + freeConnections.size() + " Used Connection size : " + usedConnections.size() + ":" + conn);
+                return conn;
             }
-            Properties props = new Properties();
-            props.setProperty("user", this.get("db_user"));
-            props.setProperty("password", ServerStatus.thisObj.common_code.decode_pass(crushftp.handlers.Common.url_decode(this.get("db_pass"))));
-            Connection conn = driver.connect(this.get("db_url"), props);
-            usedConnections.addElement(conn);
-            return conn;
+        }
+        catch (Throwable e) {
+            Log.log("SERVER", 0, "SQL users connection problem: " + e);
+            Log.log("SERVER", 0, e);
+            throw e;
         }
     }
 

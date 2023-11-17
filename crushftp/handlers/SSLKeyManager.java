@@ -26,7 +26,6 @@
  *  org.bouncycastle.openssl.PEMParser
  *  org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter
  *  org.bouncycastle.openssl.jcajce.JcePEMDecryptorProviderBuilder
- *  org.bouncycastle.operator.ContentSigner
  *  org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder
  *  org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder
  *  org.bouncycastle.operator.bc.BcRSAContentSignerBuilder
@@ -103,7 +102,6 @@ import org.bouncycastle.openssl.PEMKeyPair;
 import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
 import org.bouncycastle.openssl.jcajce.JcePEMDecryptorProviderBuilder;
-import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
 import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
 import org.bouncycastle.operator.bc.BcRSAContentSignerBuilder;
@@ -126,22 +124,30 @@ public class SSLKeyManager {
             return url;
         }
         try {
-            VRL vrl = new VRL(url);
-            GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SSL Key store load", new Vector());
-            if (ServerStatus.BG("v10_beta") && vrl.getConfig() != null && vrl.getConfig().size() > 0) {
-                c.setConfigObj(vrl.getConfig());
-            }
-            c.login(vrl.getUsername(), vrl.getPassword(), null);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            com.crushftp.client.Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true), baos, false, true, true);
             Properties p2 = new Properties();
-            p2.put("bytes", baos.toByteArray());
+            p2.put("bytes", SSLKeyManager.loadKeyStoreBytes(url));
+            if (ServerStatus.BG("v11_beta")) {
+                p2.put("name", "");
+                p2.put("type", "ssl");
+            }
             com.crushftp.client.Common.System2.put("crushftp.keystores." + url.toUpperCase().replace('\\', '/'), p2);
         }
         catch (Exception e) {
             Log.log("SERVER", 1, e);
         }
         return url;
+    }
+
+    public static byte[] loadKeyStoreBytes(String url) throws Exception {
+        VRL vrl = new VRL(url);
+        GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SSL Key store load", new Vector());
+        if (ServerStatus.BG("v10_beta") && vrl.getConfig() != null && vrl.getConfig().size() > 0) {
+            c.setConfigObj(vrl.getConfig());
+        }
+        c.login(vrl.getUsername(), vrl.getPassword(), null);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        com.crushftp.client.Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true, true), baos, false, true, true);
+        return baos.toByteArray();
     }
 
     public static String importReply(String keystore_path, String keystore_pass, String key_pass, String import_path, String trusted_paths) throws Exception {
@@ -257,7 +263,7 @@ public class SSLKeyManager {
         if (new File_S(keystore_path).exists()) {
             throw new IOException("Cannot overwrite an existing keystore file.");
         }
-        KeyPairGenerator keyGen = KeyPairGenerator.getInstance(key_alg);
+        KeyPairGenerator keyGen = KeyPairGenerator.getInstance(key_alg, "BC");
         keyGen.initialize(key_size, SecureRandom.getInstance("SHA1PRNG"));
         KeyPair pair = keyGen.generateKeyPair();
         PrivateKey priv = pair.getPrivate();
@@ -282,11 +288,8 @@ public class SSLKeyManager {
             if (!jks.entryInstanceOf(alias, KeyStore.PrivateKeyEntry.class)) continue;
             private_alias = alias;
         }
-        X509Certificate private_cert = (X509Certificate)((KeyStore.PrivateKeyEntry)jks.getEntry(private_alias, new KeyStore.PasswordProtection(key_pass.toCharArray()))).getCertificate();
-        AlgorithmIdentifier signatureAlgorithm = new DefaultSignatureAlgorithmIdentifierFinder().find(private_cert.getSigAlgName());
-        AlgorithmIdentifier digestAlgorithm = new DefaultDigestAlgorithmIdentifierFinder().find("SHA-256");
-        ContentSigner signer = new BcRSAContentSignerBuilder(signatureAlgorithm, digestAlgorithm).build(PrivateKeyFactory.createKey((byte[])jks.getKey(private_alias, key_pass.toCharArray()).getEncoded()));
-        JcaPKCS10CertificationRequestBuilder csrBuilder = new JcaPKCS10CertificationRequestBuilder(new X500Name(private_cert.getSubjectDN().getName()), private_cert.getPublicKey());
+        KeyStore.PrivateKeyEntry kpk = (KeyStore.PrivateKeyEntry)jks.getEntry(private_alias, new KeyStore.PasswordProtection(key_pass.toCharArray()));
+        X509Certificate private_cert = (X509Certificate)kpk.getCertificate();
         ExtensionsGenerator extensionsGenerator = new ExtensionsGenerator();
         extensionsGenerator.addExtension(Extension.basicConstraints, true, (ASN1Encodable)new BasicConstraints(true));
         extensionsGenerator.addExtension(Extension.keyUsage, true, (ASN1Encodable)new KeyUsage(6));
@@ -313,8 +316,11 @@ public class SSLKeyManager {
         if (sans_array != null) {
             extensionsGenerator.addExtension(Extension.subjectAlternativeName, false, (ASN1Encodable)new GeneralNames(sans_array));
         }
+        JcaPKCS10CertificationRequestBuilder csrBuilder = new JcaPKCS10CertificationRequestBuilder(new X500Name(private_cert.getSubjectDN().getName()), private_cert.getPublicKey());
         csrBuilder.addAttribute(PKCSObjectIdentifiers.pkcs_9_at_extensionRequest, (ASN1Encodable)extensionsGenerator.generate());
-        PKCS10CertificationRequest csr = csrBuilder.build(signer);
+        AlgorithmIdentifier signatureAlgorithm = new DefaultSignatureAlgorithmIdentifierFinder().find(private_cert.getSigAlgName());
+        AlgorithmIdentifier digestAlgorithm = new DefaultDigestAlgorithmIdentifierFinder().find("SHA-256");
+        PKCS10CertificationRequest csr = csrBuilder.build(new BcRSAContentSignerBuilder(signatureAlgorithm, digestAlgorithm).build(PrivateKeyFactory.createKey((byte[])jks.getKey(private_alias, key_pass.toCharArray()).getEncoded())));
         String csr64 = "-----BEGIN CERTIFICATE REQUEST-----\r\n";
         String csr_encoded = new String(Base64.encodeBytes(csr.getEncoded()));
         int loc = 0;
@@ -328,13 +334,13 @@ public class SSLKeyManager {
 
     public static X509Certificate generateCert(String sCommonName, String sOrganisationUnit, String sOrganisation, String sLocality, String sState, String sCountryCode, String sEmailAddress, int iValidity, PublicKey publicKey, PrivateKey privateKey, String sig_alg, String sans) throws Exception {
         String cn = "";
-        cn = String.valueOf(cn) + "  OU=\"" + sOrganisationUnit + "\"";
-        cn = String.valueOf(cn) + ", O=\"" + sOrganisation + "\"";
-        cn = String.valueOf(cn) + ", L=\"" + sLocality + "\"";
-        cn = String.valueOf(cn) + ", ST=" + sState;
-        cn = String.valueOf(cn) + ", C=" + sCountryCode;
-        cn = String.valueOf(cn) + ", EMAILADDRESS=" + sEmailAddress;
-        cn = String.valueOf(cn) + ", CN=" + sCommonName;
+        cn = String.valueOf(cn) + "  OU=\"" + VRL.vrlDecode(sOrganisationUnit) + "\"";
+        cn = String.valueOf(cn) + ", O=\"" + VRL.vrlDecode(sOrganisation) + "\"";
+        cn = String.valueOf(cn) + ", L=\"" + VRL.vrlDecode(sLocality) + "\"";
+        cn = String.valueOf(cn) + ", ST=" + VRL.vrlDecode(sState);
+        cn = String.valueOf(cn) + ", C=" + VRL.vrlDecode(sCountryCode);
+        cn = String.valueOf(cn) + ", EMAILADDRESS=" + VRL.vrlDecode(sEmailAddress);
+        cn = String.valueOf(cn) + ", CN=" + VRL.vrlDecode(sCommonName);
         X509v3CertificateBuilder certbuild = new X509v3CertificateBuilder(new X500Name(cn), new BigInteger(Long.toString(System.currentTimeMillis() / 1000L)), new Date(), new Date(System.currentTimeMillis() + (long)iValidity * 24L * 60L * 60L * 1000L), new X500Name(cn), new SubjectPublicKeyInfo(ASN1Sequence.getInstance((Object)publicKey.getEncoded())));
         GeneralName[] sans_array = null;
         if (sans != null && !sans.equals("")) {

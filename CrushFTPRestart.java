@@ -48,9 +48,9 @@ implements Runnable {
                     int loops = 0;
                     while (loops++ < 5) {
                         System.out.println("Stopping server...");
-                        Runtime.getRuntime().exec(new String[]{"net", "stop", "CrushFTP Server"});
+                        Runtime.getRuntime().exec(new String[]{"net", "stop", String.valueOf(System.getProperty("appname", "CrushFTP")) + " Server"});
                         try {
-                            test2 = new RandomAccessFile(new File_S("CrushFTP.jar"), "rw");
+                            test2 = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("appname", "CrushFTP")) + ".jar"), "rw");
                             test2.close();
                             break;
                         }
@@ -77,10 +77,10 @@ implements Runnable {
                     loops = 0;
                     while (loops++ < 5) {
                         try {
-                            test2 = new RandomAccessFile(new File_S("CrushFTP.jar"), "rw");
+                            test2 = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("appname", "CrushFTP")) + ".jar"), "rw");
                             test2.close();
                             System.out.println("Starting server...");
-                            Runtime.getRuntime().exec(new String[]{"net", "start", "CrushFTP Server"});
+                            Runtime.getRuntime().exec(new String[]{"net", "start", String.valueOf(System.getProperty("appname", "CrushFTP")) + " Server"});
                         }
                         catch (Exception e) {
                             break;
@@ -88,26 +88,26 @@ implements Runnable {
                         Thread.sleep(2000L);
                     }
                     System.out.println("Server started.");
-                    Runtime.getRuntime().exec("net stop CrushFTPRestart");
+                    Runtime.getRuntime().exec("net stop " + System.getProperty("appname", "CrushFTP") + "Restart");
                     break block18;
                 }
                 if (System.getProperties().getProperty("os.name", "").toUpperCase().equals("MAC OS X")) {
                     System.out.println("Trying to restart the daemon...");
-                    Process proc = Runtime.getRuntime().exec("launchctl stop com.crushftp.CrushFTP".split(" "), null, (File)new File_S(this.home));
+                    Process proc = Runtime.getRuntime().exec("launchctl stop com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "".split(" "), null, (File)new File_S(this.home));
                     proc.waitFor();
                     System.out.println("Daemon stopped.");
                     Thread.sleep(1000L);
-                    proc = Runtime.getRuntime().exec("launchctl start com.crushftp.CrushFTP".split(" "), null, (File)new File_S(this.home));
+                    proc = Runtime.getRuntime().exec("launchctl start com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "".split(" "), null, (File)new File_S(this.home));
                     proc.waitFor();
                     System.out.println("Finished restarting daemon.");
                 } else {
                     System.out.println("Trying to restart the daemon...");
                     this.home = String.valueOf(new File_S(this.home).getCanonicalPath()) + "/";
-                    Process proc = Runtime.getRuntime().exec(String.valueOf(this.home) + "crushftp_init.sh stop");
+                    Process proc = Runtime.getRuntime().exec(String.valueOf(this.home) + System.getProperty("appname", "CrushFTP").toLowerCase() + "_init.sh stop");
                     proc.waitFor();
                     System.out.println("Daemon stopped.");
                     Thread.sleep(1000L);
-                    proc = Runtime.getRuntime().exec(String.valueOf(this.home) + "crushftp_init.sh start");
+                    proc = Runtime.getRuntime().exec(String.valueOf(this.home) + System.getProperty("appname", "CrushFTP").toLowerCase() + "_init.sh start");
                     proc.waitFor();
                     System.out.println("Finished restarting daemon.");
                 }

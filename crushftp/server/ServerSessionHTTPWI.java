@@ -11,7 +11,6 @@ import com.crushftp.client.Common;
 import com.crushftp.client.File_B;
 import com.crushftp.client.File_S;
 import com.crushftp.client.File_U;
-import com.crushftp.client.VRL;
 import crushftp.handlers.Log;
 import crushftp.handlers.SessionCrush;
 import crushftp.server.ServerSessionHTTP;
@@ -47,15 +46,6 @@ public class ServerSessionHTTPWI {
             if (data.startsWith("Accept-Encoding: ")) {
                 if ((data = data.substring(data.indexOf(" ") + 1)).toUpperCase().indexOf("GZIP") >= 0 && ServerStatus.BG("allow_gzip")) {
                     acceptsGZIP = true;
-                }
-            } else if (x2 == 0 && (data.startsWith("HEAD ") || data.startsWith("GET ")) && data.indexOf(" /WebInterface/CrushFTPDrive/win_service.jar") >= 0) {
-                if (data.toUpperCase().startsWith("HEAD ")) {
-                    headerOnly = true;
-                }
-                theFile = "plugins/lib/win_service.jar";
-                file = new File_B(new File_S(String.valueOf(System.getProperty("crushftp.plugins")) + theFile));
-                if (file.getCanonicalPath().indexOf("WebInterface") < 0) {
-                    file = null;
                 }
             } else if (x2 == 0 && (data.startsWith("HEAD ") || data.startsWith("GET ")) && (data.indexOf(" /WebInterface/") >= 0 || data.toUpperCase().indexOf(" /FAVICON.ICO") >= 0 || data.indexOf(" /.well-known/acme-challenge/") >= 0)) {
                 if (data.toUpperCase().startsWith("HEAD ")) {
@@ -206,33 +196,37 @@ public class ServerSessionHTTPWI {
                 template = crushftp.handlers.Common.replace_str(template, "javascript:showResetPanel();", String.valueOf(sessionHTTP.proxy) + "WebInterface/jQuery/reset.html");
             }
         }
-        if (file.getName().toUpperCase().endsWith(".JNLP")) {
-            String baseUrl = sessionHTTP.getBaseUrl(sessionHTTP.hostString);
-            template = crushftp.handlers.Common.replace_str(template, "%base_url%", baseUrl);
-            template = crushftp.handlers.Common.replace_str(template, "%user_protocol%", sessionHTTP.server_item.getProperty("serverType", "ftp"));
-            template = crushftp.handlers.Common.replace_str(template, "%user_listen_ip%", new VRL(baseUrl).getHost());
-            template = crushftp.handlers.Common.replace_str(template, "%user_port%", String.valueOf(new VRL(baseUrl).getPort()));
-            template = crushftp.handlers.Common.replace_str(template, "%user_port%", String.valueOf(new VRL(baseUrl).getPort()));
-            if (file.getName().equalsIgnoreCase("CrushTunnel.jnlp")) {
-                template = crushftp.handlers.Common.replace_str(template, "max-heap-size=\"256m\"", "max-heap-size=\"1024m\"");
-            }
-        }
         if (mimes.getProperty(ext, "").toUpperCase().endsWith("/HTML") && theFile.toUpperCase().startsWith("/WEBINTERFACE/")) {
             if (ServerStatus.SG("default_logo").equals("logo.gif")) {
                 ServerStatus.server_settings.put("default_logo", "logo.png");
             }
             template = ServerStatus.thisObj.change_vars_to_values(template, null);
             if (!ServerStatus.SG("default_logo").equals("") && !ServerStatus.SG("default_logo").equalsIgnoreCase("logo.png")) {
-                template = crushftp.handlers.Common.replace_str(template, "<a id=\"defaultLogoLink\" href=\"http://www.crushftp.com/\">", "<a id=\"defaultLogoLink\" href=\"javascript:void();\">");
-                template = crushftp.handlers.Common.replace_str(template, "<div id=\"headerdiv\"><a href=\"http://www.crushftp.com/\">", "<div id=\"headerdiv\">");
+                template = crushftp.handlers.Common.replace_str(template, "<a id=\"defaultLogoLink\" href=\"http://www." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".com/\">", "<a id=\"defaultLogoLink\" href=\"javascript:void();\">");
+                template = crushftp.handlers.Common.replace_str(template, "<div id=\"headerdiv\"><a href=\"http://www." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".com/\">", "<div id=\"headerdiv\">");
                 template = crushftp.handlers.Common.replace_str(template, "/logo.png\" /></a>", "/logo.png\" />");
                 template = crushftp.handlers.Common.replace_str(template, "/logo.gif\" /></a>", "/logo.gif\" />");
                 template = crushftp.handlers.Common.replace_str(template, "/logo.png", "/" + ServerStatus.SG("default_logo"));
                 template = crushftp.handlers.Common.replace_str(template, "/logo.gif", "/" + ServerStatus.SG("default_logo"));
             }
             String script = ServerStatus.SG("login_custom_script");
-            if (ServerStatus.BG("login_autocomplete_off") && !script.contains("$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"off\");\n$(\"#password\").attr(\"autocomplete\",\"off\");\n});")) {
-                script = "$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"off\");\n$(\"#password\").attr(\"autocomplete\",\"off\");\n});" + script;
+            if (!ServerStatus.BG("login_autocomplete_off")) {
+                if (!script.contains("$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"off\");\n$(\"#password\").attr(\"autocomplete\",\"off\");\n});") && !script.contains("$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"on\");\n$(\"#password\").attr(\"autocomplete\",\"on\");\n});")) {
+                    script = script.toLowerCase().indexOf("</script>") < 0 ? "$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"on\");\n$(\"#password\").attr(\"autocomplete\",\"on\");\n});" + script : "<script>\n$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"on\");\n$(\"#password\").attr(\"autocomplete\",\"on\");\n});\"</script>\n" + script;
+                } else if (script.contains("$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"off\");\n$(\"#password\").attr(\"autocomplete\",\"off\");\n});")) {
+                    script = crushftp.handlers.Common.replace_str(script, "$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"off\");\n$(\"#password\").attr(\"autocomplete\",\"off\");\n});", "$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"on\");\n$(\"#password\").attr(\"autocomplete\",\"on\");\n});");
+                }
+            } else if (script.contains("$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"on\");\n$(\"#password\").attr(\"autocomplete\",\"on\");\n});")) {
+                script = crushftp.handlers.Common.replace_str(script, "$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"on\");\n$(\"#password\").attr(\"autocomplete\",\"on\");\n});", "$(document).ready(function(){\n$(\"#username\").attr(\"autocomplete\",\"off\");\n$(\"#password\").attr(\"autocomplete\",\"off\");\n});");
+            }
+            if (ServerStatus.BG("login_autocomplete_off")) {
+                if (script.toLowerCase().indexOf("</script>") < 0) {
+                    script = String.valueOf(script) + "\r\n$(document).ready(function(){$('#rememberMePanel').hide();window.dontShowRememberMeOptionOnLoginPage = true;});";
+                    script = String.valueOf(script) + "\r\n$(document).ready(function(){$('#username').attr('autocomplete','off');$('#password').attr('autocomplete','off');});\r\n";
+                } else {
+                    script = String.valueOf(script) + "<script>\r\n$(document).ready(function(){$('#rememberMePanel').hide();window.dontShowRememberMeOptionOnLoginPage = true;});";
+                    script = String.valueOf(script) + "\r\n$(document).ready(function(){$('#username').attr('autocomplete','off');$('#password').attr('autocomplete','off');});\r\n</script>\n";
+                }
             }
             if (script.toLowerCase().indexOf("<script>") < 0) {
                 script = "<script>" + script + "</script>";
@@ -248,8 +242,8 @@ public class ServerSessionHTTPWI {
                 template = crushftp.handlers.Common.replace_str(template, "<!-- META -->", sessionHTTP.thisSession.SG("metaTag"));
             }
             template = crushftp.handlers.Common.replace_str(template, "id=\"flashHtmlRow\" style=\"visibility:visible;\"", "id=\"flashHtmlRow\" style=\"position:absolute;left:-5000px;\"");
-            template = crushftp.handlers.Common.replace_str(template, "<title>CrushFTP</title>", "<title>" + ServerStatus.SG("default_title") + "</title>");
-            template = crushftp.handlers.Common.replace_str(template, "<title>CrushFTP WebInterface :: Login</title>", "<title>" + ServerStatus.SG("default_title") + "</title>");
+            template = crushftp.handlers.Common.replace_str(template, "<title>" + System.getProperty("appname", "CrushFTP") + "</title>", "<title>" + ServerStatus.SG("default_title") + "</title>");
+            template = crushftp.handlers.Common.replace_str(template, "<title>" + System.getProperty("appname", "CrushFTP") + " WebInterface :: Login</title>", "<title>" + ServerStatus.SG("default_title") + "</title>");
             template = crushftp.handlers.Common.replace_str(template, "<title>WebInterface</title>", "<title>" + ServerStatus.SG("default_title") + "</title>");
             template = crushftp.handlers.Common.replace_str(template, "\"/WebInterface/custom.js\"", "\"" + sessionHTTP.proxy + "WebInterface/custom.js?random=" + System.currentTimeMillis() + "\"");
             if ((template = crushftp.handlers.Common.replace_str(template, "\"/WebInterface/custom.css\"", "\"" + sessionHTTP.proxy + "WebInterface/custom.css?random=" + System.currentTimeMillis() + "\"")).contains("/*RECAPTCHA_VERSION*/")) {
@@ -281,6 +275,21 @@ public class ServerSessionHTTPWI {
                     replace_part = String.valueOf(replace_part) + "}";
                     template = crushftp.handlers.Common.replace_str(template, search_part, replace_part);
                 }
+            }
+            if (sessionHTTP.server_item.getProperty("gsign_enabled", "false").equals("true")) {
+                template = crushftp.handlers.Common.replace_str(template, "<!--GSIGNIN_SCRIPT-->", "<script>window.GSignClientID=\"" + sessionHTTP.server_item.getProperty("gsign_client_id", "") + "\";</script>");
+            }
+            if (sessionHTTP.server_item.getProperty("mssign_enabled", "false").equals("true")) {
+                String ms_sing_in_script = "<script type=\"text/javascript\">\n            window.MSSignClientID = \"" + sessionHTTP.server_item.getProperty("mssign_client_id", "") + "\";\n" + "            window.MSTenantID = \"" + sessionHTTP.server_item.getProperty("mssign_tenant_id", "") + "\";\n" + "        </script>";
+                template = crushftp.handlers.Common.replace_str(template, "<!--MSSIGNIN_SCRIPT-->", ms_sing_in_script);
+            }
+            if (sessionHTTP.server_item.getProperty("azureb2c_enabled", "false").equals("true")) {
+                String azureb2c_script = "<script type=\"text/javascript\">\n            window.MSSignClientIDB2C = \"" + sessionHTTP.server_item.getProperty("azureb2c_client_id", "") + "\";\n" + "            window.tenantNameB2C = \"" + sessionHTTP.server_item.getProperty("azureb2c_tenant_name", "") + "\";\n" + "            window.userFlowNameB2C = \"" + sessionHTTP.server_item.getProperty("azureb2c_userflow_name", "") + "\";\n" + "        </script>";
+                template = crushftp.handlers.Common.replace_str(template, "<!--AZURE_B2C_SINGIN_SCRIPT-->", azureb2c_script);
+            }
+            if (sessionHTTP.server_item.getProperty("cognito_enabled", "false").equals("true")) {
+                String amazon_cognito_script = "<script type=\"text/javascript\">\n            window.AmazonCognitoClientID = \"" + sessionHTTP.server_item.getProperty("cognito_client_id", "") + "\";\n" + "            window.AmazonCognitoDomainPrefix = \"" + sessionHTTP.server_item.getProperty("cognito_domain_prefix", "") + "\";\n" + "        </script>";
+                template = crushftp.handlers.Common.replace_str(template, "<!--AMAZON_COGNITO_SINGIN_SCRIPT-->", amazon_cognito_script);
             }
         }
         long checkDate = new Date().getTime();

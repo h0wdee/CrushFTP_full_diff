@@ -1,5 +1,9 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -50,11 +54,11 @@ public class DuoSend {
     }
 
     public String executeRequest() throws Exception {
-        JSONObject result = (JSONObject)JSONValue.parse(this.executeHttpRequest());
-        if (!result.get("stat").toString().equals("OK")) {
-            throw new Exception("Duo error code (" + result.get("code") + "): " + result.get("message"));
+        JSONObject result = (JSONObject)JSONValue.parse((String)this.executeHttpRequest());
+        if (!result.get((Object)"stat").toString().equals("OK")) {
+            throw new Exception("Duo error code (" + result.get((Object)"code") + "): " + result.get((Object)"message"));
         }
-        return ((JSONObject)result.get("response")).get("result").toString();
+        return ((JSONObject)result.get((Object)"response")).get((Object)"result").toString();
     }
 
     public String executeHttpRequest() throws Exception {

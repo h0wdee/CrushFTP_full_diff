@@ -2,8 +2,6 @@
  * Decompiled with CFR 0.152.
  * 
  * Could not load the following classes:
- *  com.didisoft.pgp.PGPLib
- *  com.didisoft.pgp.inspect.PGPInspectLib
  *  org.bouncycastle.jce.provider.BouncyCastleProvider
  *  org.jdom.Content
  *  org.jdom.Document
@@ -20,6 +18,7 @@ import com.crushftp.client.AS2Client;
 import com.crushftp.client.AzureClient;
 import com.crushftp.client.B2Client;
 import com.crushftp.client.Base64;
+import com.crushftp.client.BoxClient;
 import com.crushftp.client.CitrixClient;
 import com.crushftp.client.CustomClient;
 import com.crushftp.client.DropBoxClient;
@@ -45,11 +44,16 @@ import com.crushftp.client.SFTPClient;
 import com.crushftp.client.SMB1Client;
 import com.crushftp.client.SMB4jClient;
 import com.crushftp.client.SMBjNQClient;
+import com.crushftp.client.SharePointClient;
 import com.crushftp.client.TrustManagerCustom;
 import com.crushftp.client.VRL;
 import com.crushftp.client.WebDAVClient;
 import com.crushftp.client.Worker;
 import com.crushftp.client.ZipClient;
+import com.crushftp.crypt.BCrypt;
+import com.crushftp.crypt.Crypt3;
+import com.crushftp.crypt.MD5Crypt;
+import com.crushftp.crypt.SHA512Crypt;
 import com.crushftp.tunnel2.Tunnel2;
 import com.didisoft.pgp.PGPLib;
 import com.didisoft.pgp.inspect.PGPInspectLib;
@@ -57,14 +61,10 @@ import crushftp.db.SearchHandler;
 import crushftp.db.SearchTools;
 import crushftp.db.StatTools;
 import crushftp.gui.LOC;
-import crushftp.handlers.BCrypt;
-import crushftp.handlers.Crypt3;
 import crushftp.handlers.DesEncrypter;
 import crushftp.handlers.Log;
-import crushftp.handlers.MD5Crypt;
 import crushftp.handlers.PBKDF2WithHmacSHA256;
 import crushftp.handlers.PreviewWorker;
-import crushftp.handlers.SHA512Crypt;
 import crushftp.handlers.SessionCrush;
 import crushftp.handlers.Sounds;
 import crushftp.handlers.SyncTools;
@@ -93,6 +93,7 @@ import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigInteger;
 import java.net.BindException;
@@ -220,7 +221,7 @@ public class Common {
     }
 
     public static int V() {
-        return 9;
+        return 10;
     }
 
     public boolean register(String registration_name, String registration_email, String registration_code) {
@@ -285,6 +286,7 @@ public class Common {
         }
         s = this.findRegistrationValue(key, s, "(", ")") != null ? this.findRegistrationValue(key, s, "(", ")") : this.findRegistrationValue(key, s, "[", "]");
         String blackList = "";
+        blackList = String.valueOf(blackList) + "uHs5Vvj3ujnBRfRX2UpnvA==\r\n";
         blackList = String.valueOf(blackList) + "gZZZVip+1PUm/FwxLE1+/ogwcLA9pzLD\r\n";
         blackList = String.valueOf(blackList) + "mnhVl3sUUqUFADJukeYLvA==\r\n";
         blackList = String.valueOf(blackList) + "4RJ6S3zfM5URyl8YQBdhpw==\r\n";
@@ -585,7 +587,7 @@ lbl26:
         int end_loc = 0;
         try {
             start_loc = master_string.indexOf(search_data);
-            while (start_loc >= 0) {
+            while (start_loc >= 0 && !master_string.equals("") && !search_data.equals("")) {
                 ++count;
                 end_loc = start_loc + search_data.length();
                 start_loc = master_string.indexOf(search_data, end_loc);
@@ -655,7 +657,7 @@ lbl26:
             }
             get_ip_socket = new Socket();
             get_ip_socket.setSoTimeout(5000);
-            get_ip_socket.connect(new InetSocketAddress("www.crushftp.com", 80));
+            get_ip_socket.connect(new InetSocketAddress("www." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".com", 80));
             gis = new BufferedReader(new InputStreamReader(get_ip_socket.getInputStream()));
             gos = new BufferedOutputStream(get_ip_socket.getOutputStream());
             gos.write(("GET /ip.jsp HTTP/1.0" + CRLF + CRLF).getBytes("UTF8"));
@@ -734,9 +736,9 @@ lbl26:
         return "";
     }
 
-    public String sha512crypt(String raw, String hash) {
+    public String sha512crypt(String raw, String hash, int rounds) {
         if (hash.startsWith("SHA512CRYPT:")) {
-            return "SHA512CRYPT:" + SHA512Crypt.Sha512_crypt(raw, hash.substring("SHA512CRYPT:".length()), 0);
+            return "SHA512CRYPT:" + SHA512Crypt.Sha512_crypt(raw, hash.substring("SHA512CRYPT:".length()), rounds);
         }
         return "";
     }
@@ -818,7 +820,7 @@ lbl26:
             ip_item.put("stop_ip", "10.255.255.255");
             local_ips.addElement(ip_item);
         }
-        return Common.check_ip(local_ips, ip_check_str);
+        return Common.check_ip(local_ips, ip_check_str).equals("");
     }
 
     /*
@@ -826,15 +828,23 @@ lbl26:
      * Enabled unnecessary exception pruning
      * Enabled aggressive exception aggregation
      */
-    public static boolean check_ip(Vector allow_list, String ip_check_str) throws Exception {
+    public static String check_ip(Vector allow_list, String ip_check_str) throws Exception {
+        Properties last_item = null;
         boolean allow_all = allow_list == null || allow_list.size() == 0;
         try {
             int x = 0;
-            while (true) {
-                if (x >= allow_list.size()) {
-                    return allow_all;
+            while (x < allow_list.size()) {
+                Properties ip_data;
+                last_item = ip_data = (Properties)allow_list.elementAt(x);
+                String reason = ip_data.getProperty("reason", "").trim();
+                if (reason.equals("")) {
+                    reason = "BANNED";
                 }
-                Properties ip_data = (Properties)allow_list.elementAt(x);
+                if ((String.valueOf(ip_data.getProperty("start_ip", "0.0.0.0")) + "1").charAt(0) < '0' || (String.valueOf(ip_data.getProperty("start_ip", "0.0.0.0")) + "1").charAt(0) > '9') {
+                    ip_data = (Properties)ip_data.clone();
+                    ip_data.put("start_ip", InetAddress.getByName(ip_data.getProperty("start_ip", "0.0.0.0")).getHostAddress());
+                    ip_data.put("stop_ip", ip_data.getProperty("start_ip"));
+                }
                 if (ip_check_str.indexOf(".") >= 0) {
                     allow_all = ip_data.getProperty("type", "A").equals("A") && ip_data.getProperty("start_ip", "0.0.0.0").equals("0.0.0.0") && ip_data.getProperty("stop_ip", "255.255.255.255").equals("255.255.255.255") && allow_list.size() == 1;
                 } else if (ip_check_str.indexOf(":") >= 0) {
@@ -843,7 +853,11 @@ lbl26:
                 if (ip_check_str.contains(".") && ip_data.getProperty("start_ip", "").indexOf(".") >= 0) {
                     Boolean is_ip_allowed = Common.is_ip_allowed(ip_check_str, ip_data);
                     if (is_ip_allowed != null) {
-                        return is_ip_allowed;
+                        if (is_ip_allowed.booleanValue()) {
+                            return "";
+                        }
+                        String string = reason;
+                        return string;
                     }
                 } else if (ip_check_str.contains(":")) {
                     String start_ip = ip_data.getProperty("start_ip");
@@ -853,17 +867,22 @@ lbl26:
                         stop_ip = "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
                     }
                     if (start_ip.indexOf(":") >= 0 && Common.is_ipv6_in_range(ip_check_str, start_ip, stop_ip)) {
-                        if (!ip_data.getProperty("type").equals("A")) return false;
-                        return true;
+                        if (!ip_data.getProperty("type").equals("A")) return reason;
+                        return "";
                     }
                 }
                 ++x;
             }
         }
         catch (Exception e) {
-            if (("" + e).indexOf("Interrupted") < 0) return allow_all;
-            throw e;
+            if (("" + e).indexOf("Interrupted") >= 0) {
+                throw e;
+            }
+            Log.log("SERVER", 2, "check_ip:" + ip_check_str + ":" + last_item);
+            Log.log("SERVER", 2, e);
         }
+        if (!allow_all) return "BLOCKED";
+        return "";
     }
 
     public static boolean is_ipv6_in_range(String ipv6, String start_ipv6, String end_ipv6) {
@@ -1272,58 +1291,58 @@ lbl26:
     public static void remove_osx_service() {
         if (Common.machine_is_x()) {
             try {
-                new File("/System/Library/StartupItems/CrushFTP/Resources/English.lproj/Localizable.strings").delete();
+                new File("/System/Library/StartupItems/" + System.getProperty("appname", "CrushFTP") + "/Resources/English.lproj/Localizable.strings").delete();
             }
             catch (Exception exception) {
                 // empty catch block
             }
             try {
-                new File("/System/Library/StartupItems/CrushFTP/StartupParameters.plist/").delete();
+                new File("/System/Library/StartupItems/" + System.getProperty("appname", "CrushFTP") + "/StartupParameters.plist/").delete();
             }
             catch (Exception exception) {
                 // empty catch block
             }
             try {
-                new File("/System/Library/StartupItems/CrushFTP/CrushFTP").delete();
+                new File("/System/Library/StartupItems/" + System.getProperty("appname", "CrushFTP") + "/" + System.getProperty("appname", "CrushFTP")).delete();
             }
             catch (Exception exception) {
                 // empty catch block
             }
             try {
-                new File("/System/Library/StartupItems/CrushFTP/Resources/English.lproj/").delete();
+                new File("/System/Library/StartupItems/" + System.getProperty("appname", "CrushFTP") + "/Resources/English.lproj/").delete();
             }
             catch (Exception exception) {
                 // empty catch block
             }
             try {
-                new File("/System/Library/StartupItems/CrushFTP/Resources/").delete();
+                new File("/System/Library/StartupItems/" + System.getProperty("appname", "CrushFTP") + "/Resources/").delete();
             }
             catch (Exception exception) {
                 // empty catch block
             }
             try {
-                new File("/System/Library/StartupItems/CrushFTP/").delete();
+                new File("/System/Library/StartupItems/" + System.getProperty("appname", "CrushFTP") + "/").delete();
             }
             catch (Exception exception) {
                 // empty catch block
             }
             try {
-                RandomAccessFile out = new RandomAccessFile(String.valueOf(System.getProperty("crushftp.prefs")) + "crushftp_exec_root.sh", "rw");
+                RandomAccessFile out = new RandomAccessFile(String.valueOf(System.getProperty("crushftp.prefs")) + System.getProperty("appname", "CrushFTP").toLowerCase() + "_exec_root.sh", "rw");
                 out.setLength(0L);
-                if (new File("/Library/LaunchDaemons/com.crushftp.CrushFTP.plist").exists()) {
-                    out.write("launchctl stop com.crushftp.CrushFTP\n".getBytes("UTF8"));
-                    out.write("launchctl remove com.crushftp.CrushFTP\n".getBytes("UTF8"));
+                if (new File("/Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + ".plist").exists()) {
+                    out.write(("launchctl stop com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "\n").getBytes("UTF8"));
+                    out.write(("launchctl remove com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "\n").getBytes("UTF8"));
                 }
-                if (new File("/Library/LaunchDaemons/com.crushftp.CrushFTPUpdate.plist").exists()) {
-                    out.write("launchctl stop com.crushftp.CrushFTPUpdate\n".getBytes("UTF8"));
-                    out.write("launchctl remove com.crushftp.CrushFTPUpdate\n".getBytes("UTF8"));
+                if (new File("/Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update.plist").exists()) {
+                    out.write(("launchctl stop com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update\n").getBytes("UTF8"));
+                    out.write(("launchctl remove com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update\n").getBytes("UTF8"));
                 }
                 out.close();
-                File_S f = new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "crushftp_exec_root.sh");
+                File_S f = new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + System.getProperty("appname", "CrushFTP").toLowerCase() + "_exec_root.sh");
                 Common.exec(new String[]{"chmod", "+x", f.getCanonicalPath()});
                 Common.exec(new String[]{"osascript", "-e", "do shell script \"" + f.getCanonicalPath() + "\" with administrator privileges"});
-                new File("/Library/LaunchDaemons/com.crushftp.CrushFTP.plist").delete();
-                new File("/Library/LaunchDaemons/com.crushftp.CrushFTPUpdate.plist").delete();
+                new File("/Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + ".plist").delete();
+                new File("/Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update.plist").delete();
                 f.delete();
             }
             catch (Exception e) {
@@ -1335,43 +1354,43 @@ lbl26:
     public String install_osx_service() {
         if (Common.machine_is_x()) {
             try {
-                String plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\r\n<plist version=\"1.0\">\r\n\t<dict>\r\n\t\t<key>Label</key>\r\n\t\t<string>com.crushftp.CrushFTP</string>\r\n\t\t<key>ProgramArguments</key>\r\n\t\t<array>\r\n\t\t\t<string>" + new File_S(String.valueOf(System.getProperty("crushftp.home")) + System.getProperty("crushftp.executable")).getCanonicalPath() + "</string>\r\n\t\t\t<string>-d</string>\r\n" + "\t\t</array>\r\n" + "\t\t<key>RunAtLoad</key>\r\n" + "\t\t<true/>\r\n" + "\t</dict>\r\n" + "</plist>\r\n";
-                RandomAccessFile plist_file = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "com.crushftp.CrushFTP.plist"), "rw");
+                String plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\r\n<plist version=\"1.0\">\r\n\t<dict>\r\n\t\t<key>Label</key>\r\n\t\t<string>com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "</string>\r\n" + "\t\t<key>ProgramArguments</key>\r\n" + "\t\t<array>\r\n" + "\t\t\t<string>" + new File_S(String.valueOf(System.getProperty("crushftp.home")) + System.getProperty("crushftp.executable")).getCanonicalPath() + "</string>\r\n\t\t\t<string>-d</string>\r\n" + "\t\t</array>\r\n" + "\t\t<key>RunAtLoad</key>\r\n" + "\t\t<true/>\r\n" + "\t</dict>\r\n" + "</plist>\r\n";
+                RandomAccessFile plist_file = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + ".plist"), "rw");
                 plist_file.setLength(0L);
                 plist_file.write(plist.getBytes("UTF8"));
                 plist_file.close();
                 new File_S(String.valueOf(System.getProperty("crushftp.home")) + "OSX_scripts/").mkdirs();
-                String plist2 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\r\n<plist version=\"1.0\">\r\n\t<dict>\r\n\t\t<key>Label</key>\r\n\t\t<string>com.crushftp.CrushFTPUpdate</string>\r\n\t\t<key>ProgramArguments</key>\r\n\t\t<array>\r\n\t\t\t<string>" + new File_S(System.getProperty("crushftp.home")).getCanonicalPath() + "/OSX_scripts/daemonUpdate.sh</string>\r\n" + "\t\t</array>\r\n" + "\t\t<key>RunAtLoad</key>\r\n" + "\t\t<false/>\r\n" + "\t</dict>\r\n" + "</plist>\r\n";
-                plist_file = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "com.crushftp.CrushFTPUpdate.plist"), "rw");
+                String plist2 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\r\n<plist version=\"1.0\">\r\n\t<dict>\r\n\t\t<key>Label</key>\r\n\t\t<string>com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update</string>\r\n" + "\t\t<key>ProgramArguments</key>\r\n" + "\t\t<array>\r\n" + "\t\t\t<string>" + new File_S(System.getProperty("crushftp.home")).getCanonicalPath() + "/OSX_scripts/daemonUpdate.sh</string>\r\n" + "\t\t</array>\r\n" + "\t\t<key>RunAtLoad</key>\r\n" + "\t\t<false/>\r\n" + "\t</dict>\r\n" + "</plist>\r\n";
+                plist_file = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update.plist"), "rw");
                 plist_file.setLength(0L);
                 plist_file.write(plist2.getBytes("UTF8"));
                 plist_file.close();
                 String path_to_crush = String.valueOf(new File_S(System.getProperty("crushftp.home")).getCanonicalPath()) + "/";
                 String daemon = "#!/bin/sh\n";
-                daemon = String.valueOf(daemon) + "echo CrushFTPUpdate starting...\n";
+                daemon = String.valueOf(daemon) + "echo " + System.getProperty("appname", "CrushFTP") + "Update starting...\n";
                 daemon = String.valueOf(daemon) + "cd \"" + path_to_crush + "\"\n";
-                daemon = String.valueOf(daemon) + "\"" + System.getProperty("java.home") + "/bin/java\" -cp plugins/lib/CrushFTPRestart.jar CrushFTPRestart\n";
-                daemon = String.valueOf(daemon) + "echo CrushFTPUpdate stopped.\n";
+                daemon = String.valueOf(daemon) + "\"" + System.getProperty("java.home") + "/bin/java\" -cp plugins/lib/" + System.getProperty("appname", "CrushFTP") + "Restart.jar " + System.getProperty("appname", "CrushFTP") + "Restart\n";
+                daemon = String.valueOf(daemon) + "echo " + System.getProperty("appname", "CrushFTP") + "Update stopped.\n";
                 RandomAccessFile daemon_file = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "OSX_scripts/daemonUpdate.sh"), "rw");
                 daemon_file.setLength(0L);
                 daemon_file.write(daemon.getBytes("UTF8"));
                 daemon_file.close();
-                RandomAccessFile out = new RandomAccessFile(String.valueOf(System.getProperty("crushftp.prefs")) + "crushftp_exec_root.sh", "rw");
+                RandomAccessFile out = new RandomAccessFile(String.valueOf(System.getProperty("crushftp.prefs")) + System.getProperty("appname", "CrushFTP").toLowerCase() + "_exec_root.sh", "rw");
                 out.setLength(0L);
-                out.write(("mv \"" + new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "com.crushftp.CrushFTP.plist").getCanonicalPath() + "\" /Library/LaunchDaemons/com.crushftp.CrushFTP.plist\n").getBytes("UTF8"));
-                out.write(("mv \"" + new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "com.crushftp.CrushFTPUpdate.plist").getCanonicalPath() + "\" /Library/LaunchDaemons/com.crushftp.CrushFTPUpdate.plist\n").getBytes("UTF8"));
+                out.write(("mv \"" + new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + ".plist").getCanonicalPath() + "\" /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + ".plist\n").getBytes("UTF8"));
+                out.write(("mv \"" + new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update.plist").getCanonicalPath() + "\" /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update.plist\n").getBytes("UTF8"));
                 out.write(("chmod 755 \"" + new File_S(String.valueOf(path_to_crush) + "OSX_scripts/daemonUpdate.sh").getCanonicalPath() + "\"\n").getBytes("UTF8"));
-                out.write("chmod 704 /Library/LaunchDaemons/com.crushftp.CrushFTP.plist\n".getBytes("UTF8"));
-                out.write("chown root /Library/LaunchDaemons/com.crushftp.CrushFTP.plist\n".getBytes("UTF8"));
-                out.write("chgrp wheel /Library/LaunchDaemons/com.crushftp.CrushFTP.plist\n".getBytes("UTF8"));
-                out.write("chmod 704 /Library/LaunchDaemons/com.crushftp.CrushFTPUpdate.plist\n".getBytes("UTF8"));
-                out.write("chown root /Library/LaunchDaemons/com.crushftp.CrushFTPUpdate.plist\n".getBytes("UTF8"));
-                out.write("chgrp wheel /Library/LaunchDaemons/com.crushftp.CrushFTPUpdate.plist\n".getBytes("UTF8"));
-                out.write("launchctl load -F -w /Library/LaunchDaemons/com.crushftp.CrushFTP.plist\n".getBytes("UTF8"));
-                out.write("launchctl load -F -w /Library/LaunchDaemons/com.crushftp.CrushFTPUpdate.plist\n".getBytes("UTF8"));
-                out.write("launchctl start com.crushftp.CrushFTP\n".getBytes("UTF8"));
+                out.write(("chmod 704 /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + ".plist\n").getBytes("UTF8"));
+                out.write(("chown root /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + ".plist\n").getBytes("UTF8"));
+                out.write(("chgrp wheel /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + ".plist\n").getBytes("UTF8"));
+                out.write(("chmod 704 /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update.plist\n").getBytes("UTF8"));
+                out.write(("chown root /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update.plist\n").getBytes("UTF8"));
+                out.write(("chgrp wheel /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update.plist\n").getBytes("UTF8"));
+                out.write(("launchctl load -F -w /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + ".plist\n").getBytes("UTF8"));
+                out.write(("launchctl load -F -w /Library/LaunchDaemons/com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update.plist\n").getBytes("UTF8"));
+                out.write(("launchctl start com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "\n").getBytes("UTF8"));
                 out.close();
-                File_S f = new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "crushftp_exec_root.sh");
+                File_S f = new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + System.getProperty("appname", "CrushFTP").toLowerCase() + "_exec_root.sh");
                 Common.exec(new String[]{"chmod", "+x", new File_S(String.valueOf(System.getProperty("crushftp.home")) + System.getProperty("crushftp.executable")).getCanonicalPath()});
                 Common.exec(new String[]{"chmod", "+x", f.getCanonicalPath()});
                 Common.exec(new String[]{"osascript", "-e", "do shell script \"" + f.getCanonicalPath() + "\" with administrator privileges"});
@@ -1388,7 +1407,7 @@ lbl26:
 
     public static void checkForUpdate(Properties info) {
         try {
-            String url = "https://www.crushftp.com/version" + Common.V() + (info.getProperty("check_build", "false").equals("true") ? "_build" : "") + ".html";
+            String url = "https://www." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".com/version" + Common.V() + (info.getProperty("check_build", "false").equals("true") ? "_build" : "") + ".html";
             URLConnection urlc = new URL(url).openConnection();
             InputStream in = (InputStream)urlc.getContent();
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -1650,7 +1669,7 @@ lbl26:
                                     c.setConfigObj(vrl.getConfig());
                                 }
                                 c.login(vrl.getUsername(), vrl.getPassword(), null);
-                                in = c.download(vrl.getPath(), 0L, -1L, true);
+                                in = c.download(vrl.getPath(), 0L, -1L, true, true);
                                 keystore.load(in, this.decode_pass(keystorepass).toCharArray());
                             }
                             catch (Exception e) {
@@ -1727,7 +1746,7 @@ lbl26:
                                     c.setConfigObj(vrl.getConfig());
                                 }
                                 c.login(vrl.getUsername(), vrl.getPassword(), null);
-                                in = c.download(vrl.getPath(), 0L, -1L, true);
+                                in = c.download(vrl.getPath(), 0L, -1L, true, true);
                                 truststore.load(in, this.decode_pass(keystorepass).toCharArray());
                             }
                             catch (Exception e) {
@@ -2688,7 +2707,10 @@ lbl26:
                         tmp_user = ref;
                     }
                     if (!ref.containsKey("created_time")) {
-                        ref.put("created_time", String.valueOf(System.currentTimeMillis()));
+                        user_prop.put("created_time", String.valueOf(System.currentTimeMillis()));
+                    }
+                    if (!ref.containsKey("root_dir") && !user_prop.containsKey("root_dir")) {
+                        user_prop.put("root_dir", "/");
                     }
                     UserTools.writeUser(serverGroup, ref.getProperty("user_name"), user_prop, true, true, request);
                     if (virtual == null) continue;
@@ -3892,11 +3914,8 @@ lbl26:
             try {
                 return (Properties)run.invoke(o, args);
             }
-            catch (Exception e) {
-                if (e.getCause() != null) {
-                    Log.log("PLUGIN", 1, e.getCause());
-                    throw new Exception(e.getCause());
-                }
+            catch (InvocationTargetException e) {
+                Log.log("SERVER", 1, e.getCause());
                 throw e;
             }
         }
@@ -3962,13 +3981,13 @@ lbl26:
     }
 
     public static void OSXPermissionsGrant() throws Exception {
-        RandomAccessFile out = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "crushftp_suid_root.sh"), "rw");
+        RandomAccessFile out = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + System.getProperty("appname", "CrushFTP").toLowerCase() + "_suid_root.sh"), "rw");
         out.setLength(0L);
         out.write("#! /bin/bash\n".getBytes("UTF8"));
         out.write(("/bin/chmod u+s \"" + new File_S(String.valueOf(System.getProperty("crushftp.home")) + System.getProperty("crushftp.executable")).getCanonicalPath() + "\"\n").getBytes("UTF8"));
         out.write(("/usr/sbin/chown root \"" + new File_S(String.valueOf(System.getProperty("crushftp.home")) + System.getProperty("crushftp.executable")).getCanonicalPath() + "\"\n").getBytes("UTF8"));
         out.close();
-        File_S f = new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "crushftp_suid_root.sh");
+        File_S f = new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + System.getProperty("appname", "CrushFTP").toLowerCase() + "_suid_root.sh");
         Common.exec(new String[]{"chmod", "+x", f.getCanonicalPath()});
         Common.exec(new String[]{"osascript", "-e", "do shell script \"" + f.getCanonicalPath() + "\" with administrator privileges"});
         f.delete();
@@ -4055,7 +4074,9 @@ lbl26:
                         ((InputStream)in).close();
                     }
                 }
-                catch (Exception exception) {}
+                catch (Exception e) {
+                    Log.log("SERVER", 2, e);
+                }
             }
             try {
                 Thread.sleep(1000L);
@@ -4129,6 +4150,7 @@ lbl26:
                     String key = keys.nextElement().toString();
                     Properties p2 = (Properties)xmlCache.get(key);
                     if (System.currentTimeMillis() - Long.parseLong(p2.getProperty("time")) <= 60000L) continue;
+                    Log.log("SERVER", 3, "Time out: Remove XML from chache. Path: " + path);
                     xmlCache.remove(key);
                 }
                 xmlLastCacheClean = System.currentTimeMillis();
@@ -4136,15 +4158,19 @@ lbl26:
             if (xmlCache.containsKey(path)) {
                 p = (Properties)xmlCache.get(path);
                 if (f.exists() && f.lastModified() == Long.parseLong(p.getProperty("modified"))) {
+                    Log.log("SERVER", 3, "Found XML in cache. Path: " + path);
                     return com.crushftp.client.Common.CLONE(p.get("object"));
                 }
+                Log.log("SERVER", 3, "Modified XML. Remove XML from chache. Path: " + path);
                 xmlCache.remove(path);
             }
         }
         try {
             if (f.exists()) {
+                Log.log("SERVER", 3, "XML exists! Path: " + path);
                 Object o = Common.readXMLObject_restricted(new File_B(path));
                 if (o != null) {
+                    Log.log("SERVER", 3, "Put XML in cache. Path: " + path);
                     p = new Properties();
                     p.put("time", String.valueOf(System.currentTimeMillis()));
                     p.put("modified", String.valueOf(f.lastModified()));
@@ -4153,6 +4179,7 @@ lbl26:
                 }
                 return o;
             }
+            Log.log("SERVER", 3, "XML does not exists! Path: " + path);
         }
         catch (Exception e2) {
             Log.log("SERVER", 0, "ERROR:" + path);
@@ -4284,14 +4311,27 @@ lbl26:
         Common.writeXMLObject(new File_B(new File_U(path)), obj, root);
     }
 
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
     private static void writeXMLObject(File_B f, Object obj, String root) throws Exception {
         String xml = Common.getXMLString(obj, root, null);
-        xmlCache.remove(f.getCanonicalPath());
-        RandomAccessFile eraser = new RandomAccessFile(f, "rw");
+        String f_path = Common.safe_xss_filename(f.getCanonicalPath());
+        Properties properties = xmlCache;
+        synchronized (properties) {
+            xmlCache.remove(f_path);
+            Log.log("SERVER", 2, "Write XML. Remove XML from chache. Path: " + f_path);
+        }
+        RandomAccessFile eraser = new RandomAccessFile(f_path, "rw");
         eraser.setLength(0L);
         eraser.write(xml.getBytes("UTF8"));
         eraser.close();
         Common.updateOSXInfo(f, "");
+    }
+
+    public static String safe_xss_filename(String s) {
+        s = s.replace('%', '_').replace('<', '_').replace('>', '_');
+        return s;
     }
 
     public static void updateOSXInfo(String path) {
@@ -4413,6 +4453,12 @@ lbl26:
             }
             if (url.toUpperCase().startsWith("SHAREPOINT:")) {
                 return new OneDriveClient(url, logHeader, logQueue);
+            }
+            if (url.toUpperCase().startsWith("SHAREPOINT2:")) {
+                return new SharePointClient(url, logHeader, logQueue);
+            }
+            if (url.toUpperCase().startsWith("BOX:")) {
+                return new BoxClient(url, logHeader, logQueue);
             }
             if (url.toUpperCase().startsWith("CUSTOM.")) {
                 return new CustomClient(url, logHeader, logQueue);
@@ -4606,6 +4652,50 @@ lbl26:
         return msg;
     }
 
+    public static boolean checkPasswordBlacklisted(String pass) {
+        GenericClient c;
+        Vector<String> v2;
+        block11: {
+            String the_url = ServerStatus.SG("password_blacklist");
+            String r1 = "{";
+            String r2 = "}";
+            v2 = new Vector<String>();
+            try {
+                if (the_url.indexOf("working_dir") >= 0) {
+                    the_url = Common.replace_str(the_url, String.valueOf(r1) + "working_dir" + r2, String.valueOf(new File_S("./").getCanonicalPath().replace('\\', '/')) + "/");
+                }
+            }
+            catch (IOException iOException) {
+                // empty catch block
+            }
+            VRL vrl = new VRL(the_url);
+            c = null;
+            try {
+                c = Common.getClient(Common.getBaseUrl(vrl.toString()), "black-password:", new Vector());
+                c.login(vrl.getUsername(), vrl.getPassword(), "");
+                Properties stat = c.stat(vrl.getPath());
+                if (stat == null) break block11;
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(c.download(vrl.getPath(), 0L, -1L, true)));){
+                    String data = "";
+                    while ((data = br.readLine()) != null) {
+                        if (data.trim().startsWith("#")) continue;
+                        v2.addElement(data.trim().toLowerCase());
+                    }
+                }
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 1, e);
+            }
+        }
+        try {
+            c.close();
+        }
+        catch (Exception exception) {
+            // empty catch block
+        }
+        return v2.indexOf(pass.trim().toLowerCase()) >= 0;
+    }
+
     public static String getPasswordHistory(String pass, String history, Properties password_rules) {
         String newHistory = "";
         try {
@@ -4676,7 +4766,7 @@ lbl26:
     private static void recurseDelete(File_B f, boolean test_mode) {
         String real_path = f.getPath();
         try {
-            if ((new File_B(real_path).getCanonicalPath().equals(new File_B(System.getProperty("crushftp.prefs")).getCanonicalPath()) || new File_B(real_path).getCanonicalPath().equals(new File_B(System.getProperty("crushftp.home")).getCanonicalPath()) || new File_B(real_path).getCanonicalPath().equals(new File_S("./").getCanonicalPath())) && new File_B(real_path).getCanonicalPath().indexOf("CrushFTP_temp") < 0) {
+            if ((new File_B(real_path).getCanonicalPath().equals(new File_B(System.getProperty("crushftp.prefs")).getCanonicalPath()) || new File_B(real_path).getCanonicalPath().equals(new File_B(System.getProperty("crushftp.home")).getCanonicalPath()) || new File_B(real_path).getCanonicalPath().equals(new File_S("./").getCanonicalPath())) && new File_B(real_path).getCanonicalPath().indexOf(String.valueOf(System.getProperty("appname", "CrushFTP")) + "_temp") < 0) {
                 Log.log("SERVER", 0, new Exception("Invalid delete attempted!"));
                 return;
             }
@@ -4959,9 +5049,9 @@ lbl26:
     }
 
     public static void updateObjectLog(Object source, Object dest, String path, Vector log, boolean update, StringBuffer log_summary) {
-        block21: {
-            block20: {
-                if (!(source instanceof Properties)) break block20;
+        block22: {
+            block21: {
+                if (!(source instanceof Properties)) break block21;
                 Enumeration<?> the_list = ((Properties)source).propertyNames();
                 while (the_list.hasMoreElements()) {
                     String cur = the_list.nextElement().toString();
@@ -4987,9 +5077,11 @@ lbl26:
                                 }
                             }
                             String s = String.valueOf(path) + ":" + cur + ", new=" + logged_item1 + " old=" + logged_item2;
-                            log.addElement(s);
-                            if (log_summary != null) {
-                                log_summary.append(s).append("<br/>\r\n");
+                            if (!cur.endsWith("web_buttons")) {
+                                log.addElement(s);
+                                if (log_summary != null) {
+                                    log_summary.append(s).append("<br/>\r\n");
+                                }
                             }
                         }
                         if (!update) continue;
@@ -4998,9 +5090,9 @@ lbl26:
                     }
                     Common.updateObjectLog(sourceO, destO, String.valueOf(path) + "/" + cur, log, update, log_summary);
                 }
-                break block21;
+                break block22;
             }
-            if (!(source instanceof Vector)) break block21;
+            if (!(source instanceof Vector)) break block22;
             while (((Vector)source).size() < ((Vector)dest).size()) {
                 Object delO = ((Vector)dest).elementAt(((Vector)dest).size() - 1);
                 String s = String.valueOf(path) + ":remove " + (((Vector)dest).size() - 1) + "=" + delO;
@@ -5101,12 +5193,12 @@ lbl26:
     }
 
     public static void initSystemProperties(boolean osxAppOK) {
-        System.setProperty("crushftp.executable", "../../MacOS/CrushFTP.command");
+        System.setProperty("crushftp.executable", "../../MacOS/" + System.getProperty("appname", "CrushFTP") + ".command");
         if (!new File(System.getProperty("crushftp.executable")).exists()) {
-            System.setProperty("crushftp.executable", "./CrushFTP.command");
+            System.setProperty("crushftp.executable", "./" + System.getProperty("appname", "CrushFTP") + ".command");
         }
         System.setProperty("crushftp.osxprefix", "../../../../");
-        String backupLocation = "/Library/Application Support/CrushFTP/";
+        String backupLocation = "/Library/Application Support/" + System.getProperty("appname", "CrushFTP") + "/";
         if (Common.OSXApp()) {
             new File(backupLocation).mkdirs();
             if (!new File(backupLocation).exists()) {
@@ -5136,9 +5228,9 @@ lbl26:
         }
         if (System.getProperty("crushftp.log") == null) {
             if (Common.OSXApp() && osxAppOK) {
-                System.setProperty("crushftp.log", String.valueOf(System.getProperty("crushftp.home")) + System.getProperty("crushftp.osxprefix") + "CrushFTP.log");
+                System.setProperty("crushftp.log", String.valueOf(System.getProperty("crushftp.home")) + System.getProperty("crushftp.osxprefix") + System.getProperty("appname", "CrushFTP") + ".log");
             } else {
-                System.setProperty("crushftp.log", String.valueOf(System.getProperty("crushftp.home")) + "CrushFTP.log");
+                System.setProperty("crushftp.log", String.valueOf(System.getProperty("crushftp.home")) + System.getProperty("appname", "CrushFTP") + ".log");
             }
         }
         if (System.getProperty("crushftp.plugins") == null) {
@@ -5227,7 +5319,7 @@ lbl26:
     public static void startMultiThreadZipper(VFS uVFS, RETR_handler retr, String path, int msDelay, boolean singleThread, Vector activeThreads) throws Exception {
         if (singleThread) {
             try {
-                uVFS.getListing(retr.zipFiles, path, 999, 10000, true);
+                uVFS.getListing(retr.zipFiles, path, 999, 10000, true, null, null, true);
             }
             catch (Exception exception) {
                 // empty catch block
@@ -5251,7 +5343,7 @@ lbl26:
                 @Override
                 public void run() {
                     try {
-                        this.uVFS.getListing(this.retr.zipFiles, this.other_the_dir, 999, 500, true);
+                        this.uVFS.getListing(this.retr.zipFiles, this.other_the_dir, 999, 500, true, null, null, true);
                     }
                     catch (Exception exception) {
                         // empty catch block
@@ -5464,7 +5556,7 @@ lbl26:
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
-    public static Socket getSTORSocket(SessionCrush thisSession, STOR_handler stor_files, String upload_item, boolean httpUpload, String user_dir, boolean random_access, long start_resume_loc, Properties metaInfo) throws Exception {
+    public static Socket getSTORSocket(SessionCrush thisSession, STOR_handler stor_files, String upload_item, boolean httpUpload, String user_dir, boolean random_access, long start_resume_loc, Properties metaInfo, boolean binary) throws Exception {
         Socket local_s = null;
         while (stor_files.active2.getProperty("active", "").equals("true")) {
             Thread.sleep(1L);
@@ -5488,7 +5580,11 @@ lbl26:
                 ++x;
             }
         }
-        thisSession.uiPUT("file_transfer_mode", "BINARY");
+        if (binary) {
+            thisSession.uiPUT("file_transfer_mode", "BINARY");
+        } else {
+            thisSession.uiPUT("file_transfer_mode", "ASCII");
+        }
         stor_files.httpUpload = httpUpload;
         try {
             stor_files.c.close();
@@ -5509,7 +5605,7 @@ lbl26:
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
-    public static Socket getRETRSocket(SessionCrush thisSession, RETR_handler retr_files, long start_resume_loc, String upload_item, boolean httpDownload) throws Exception {
+    public static Socket getRETRSocket(SessionCrush thisSession, RETR_handler retr_files, long start_resume_loc, String upload_item, boolean httpDownload, boolean binary) throws Exception {
         Socket local_s = null;
         String path = String.valueOf(thisSession.uiSG("current_dir")) + upload_item;
         if (path.indexOf(":filetree") >= 0 && ServerStatus.BG("allow_filetree")) {
@@ -5531,7 +5627,11 @@ lbl26:
                 ++x;
             }
         }
-        thisSession.uiPUT("file_transfer_mode", "BINARY");
+        if (binary) {
+            thisSession.uiPUT("file_transfer_mode", "BINARY");
+        } else {
+            thisSession.uiPUT("file_transfer_mode", "ASCII");
+        }
         try {
             retr_files.c.close();
         }
@@ -5821,7 +5921,7 @@ lbl26:
                     throw new Exception("CANCELLED");
                 }
                 status.setLength(0);
-                status.append("Getting list:" + vrl1.safe()).append("...");
+                status.append("Getting list:" + vrl1.getPath()).append("...");
             }
             c1.list(vrl1.getPath().endsWith("/") ? vrl1.getPath() : String.valueOf(vrl1.getPath()) + "/", list);
             int x = 0;
@@ -5834,7 +5934,7 @@ lbl26:
                         throw new Exception("CANCELLED");
                     }
                     status.setLength(0);
-                    status.append("Copying:" + vrl2.safe() + p1.getProperty("name")).append("...");
+                    status.append("Copying:" + vrl2.getPath() + p1.getProperty("name")).append("...");
                 }
                 Common.copy(new VRL(Common.url_decode(p1.getProperty("url"))), vrl2_copy, c1, c2, overwrite);
                 if (p1.getProperty("type").equalsIgnoreCase("DIR")) {
@@ -5912,6 +6012,7 @@ lbl26:
     }
 
     public static long get_free_disk_space(String disk) {
+        disk = Common.check_valid_disk_path_chars(disk);
         String line = "";
         String totalData = "";
         try {
@@ -6025,6 +6126,21 @@ lbl26:
             Log.log("SERVER", 1, e);
             return -1L;
         }
+    }
+
+    public static String check_valid_disk_path_chars(String s) {
+        boolean ok = true;
+        int x = 0;
+        while (ok && x < s.length()) {
+            if (!(s.charAt(x) >= '.' && s.charAt(x) <= ':' || s.charAt(x) >= '@' && s.charAt(x) <= 'z' || s.charAt(x) == '-' || s.charAt(x) == '(' || s.charAt(x) == ')')) {
+                ok = false;
+            }
+            ++x;
+        }
+        if (ok) {
+            return s;
+        }
+        return null;
     }
 
     public static String replaceFormVariables(Properties form_email, String s) {
@@ -6452,7 +6568,7 @@ lbl26:
     }
 
     public static void trackSync(String action, String path1, String path2, boolean isDir, long size, long modified, String root_dir, String privs, String clientid, String md5Str) throws Exception {
-        if (privs.indexOf("(sync") >= 0 && !com.crushftp.client.Common.dmz_mode) {
+        if (privs.indexOf("(sync") >= 0 && Common.parseSyncPart(privs, "name") != null && !com.crushftp.client.Common.dmz_mode) {
             Log.log("SYNC", 2, "Track Sync:" + action + " path1=" + path1 + " path2=" + path2 + " clientid=" + clientid);
             String syncIDTemp = Common.parseSyncPart(privs, "name").toUpperCase();
             if (path2 == null) {
@@ -6503,7 +6619,7 @@ lbl26:
     }
 
     public static void trackSyncRevision(GenericClient c, VRL vrl, String path, String root_dir, String privs, boolean renameMove, Properties info) throws Exception {
-        if (privs.indexOf("(sync") >= 0 && !vrl.getName().equals(".DS_Store") && !com.crushftp.client.Common.dmz_mode) {
+        if (privs.indexOf("(sync") >= 0 && Common.parseSyncPart(privs, "revisionsPath") != null && !vrl.getName().equals(".DS_Store") && !com.crushftp.client.Common.dmz_mode) {
             String revPath;
             if (path.startsWith(root_dir)) {
                 path = path.substring(root_dir.length() - 1);
@@ -6527,7 +6643,7 @@ lbl26:
             if (!(c instanceof FileClient)) {
                 renameMove = false;
             }
-            if (!(renameMove && c.rename(vrl.getPath(), String.valueOf(revPath) + path + "/0/" + vrl.getName()) || c.stat(vrl.getPath()) == null)) {
+            if (!(renameMove && c.rename(vrl.getPath(), String.valueOf(revPath) + path + "/0/" + vrl.getName(), true) || c.stat(vrl.getPath()) == null)) {
                 if (c instanceof S3CrushClient) {
                     String rawXML = ((S3CrushClient)c).getRawXmlPath(path);
                     Common.recurseCopy_U(rawXML, new File_U(String.valueOf(revPath) + path + "/0/" + vrl.getName()).getCanonicalPath(), false);
@@ -6543,13 +6659,13 @@ lbl26:
         }
     }
 
-    public static Vector getSyncTableData(String syncIDTemp, long rid, String table, String clientid, String root_dir, VFS uVFS) throws IOException {
-        return SyncTools.getSyncTableData(syncIDTemp.toUpperCase(), rid, table, clientid, root_dir, uVFS);
+    public static Vector getSyncTableData(String syncIDTemp, long rid, String table, String clientid, String root_dir, VFS uVFS, String prior_md5s_item_path) throws IOException {
+        return SyncTools.getSyncTableData(syncIDTemp.toUpperCase(), rid, table, clientid, root_dir, uVFS, prior_md5s_item_path);
     }
 
     public static void buildPrivateKeyFile(String path) throws Exception {
         SecretKey key = KeyGenerator.getInstance("AES").generateKey();
-        FileOutputStream out = new FileOutputStream(new File_S(path) + "CrushFTP.key");
+        FileOutputStream out = new FileOutputStream(new File_S(path) + System.getProperty("appname", "CrushFTP") + ".key");
         ObjectOutputStream s = new ObjectOutputStream(out);
         s.writeObject(key);
         s.flush();
@@ -6560,13 +6676,17 @@ lbl26:
         return Common.getEncryptedStream(out, keyLocation, streamPosition, ascii, c, path, "");
     }
 
-    public static OutputStream getEncryptedStream(final OutputStream out, String keyLocation, long streamPosition, final boolean ascii, GenericClient c, String path, final String encryption_cypher) throws Exception {
+    public static OutputStream getEncryptedStream(OutputStream out, String keyLocation, long streamPosition, boolean ascii, GenericClient c, String path, String encryption_cypher) throws Exception {
+        return Common.getEncryptedStream(out, keyLocation, streamPosition, ascii, c, path, encryption_cypher, !ascii, false, "", "");
+    }
+
+    public static OutputStream getEncryptedStream(final OutputStream out, String keyLocation, long streamPosition, final boolean ascii, GenericClient c, String path, final String encryption_cypher, boolean hint_decrypted_size, final boolean encryption_sign, String privateKeyLocation, final String pass) throws Exception {
         if (keyLocation.replace('\\', '/').endsWith("/")) {
             ObjectInputStream ois = null;
             if (!new File_S(keyLocation).exists()) {
                 Common.buildPrivateKeyFile(keyLocation);
             }
-            ois = new ObjectInputStream(new FileInputStream(new File_S(String.valueOf(keyLocation) + "CrushFTP.key")));
+            ois = new ObjectInputStream(new FileInputStream(new File_S(String.valueOf(keyLocation) + System.getProperty("appname", "CrushFTP") + ".key")));
             SecretKey key = (SecretKey)ois.readObject();
             ois.close();
             IvParameterSpec paramSpec = new IvParameterSpec(iv);
@@ -6584,34 +6704,23 @@ lbl26:
             pgp = new PGPLib();
         }
         pgp.setUseExpiredKeys(true);
-        final ByteArrayOutputStream baos_key = new ByteArrayOutputStream();
+        ByteArrayOutputStream pub_key = new ByteArrayOutputStream();
+        ByteArrayOutputStream priv_key = new ByteArrayOutputStream();
         boolean pbe = false;
         if (keyLocation.toLowerCase().startsWith("password:")) {
             pbe = true;
         } else {
-            if (keyLocation.indexOf(":") < 0 || keyLocation.indexOf(":") < 3 && !keyLocation.toLowerCase().startsWith("s3:") && !keyLocation.toLowerCase().startsWith("b2:")) {
-                keyLocation = "FILE://" + keyLocation;
+            if (new VRL(keyLocation).getProtocol().equalsIgnoreCase("file")) {
+                Log.log("SERVER", 1, "PGP key info: Path: " + keyLocation + " Info :" + com.crushftp.client.Common.getPgpKeyInfo(new VRL(keyLocation).getPath()));
             }
-            if (ServerStatus.BG("v10_beta") && com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + keyLocation.toUpperCase().replace('\\', '/')) && !keyLocation.equals("")) {
-                Properties p = (Properties)com.crushftp.client.Common.System2.get("crushftp.keystores." + keyLocation.toUpperCase().replace('\\', '/'));
-                baos_key.write((byte[])p.get("bytes"));
-            } else {
-                VRL key_vrl = new VRL(keyLocation);
-                GenericClient c_key = com.crushftp.client.Common.getClient(Common.getBaseUrl(key_vrl.toString()), "CrushFTP", new Vector());
-                if (ServerStatus.BG("v10_beta") && key_vrl.getConfig() != null && key_vrl.getConfig().size() > 0) {
-                    c_key.setConfigObj(key_vrl.getConfig());
-                }
-                c_key.login(key_vrl.getUsername(), key_vrl.getPassword(), "");
-                com.crushftp.client.Common.streamCopier(null, null, c_key.download(key_vrl.getPath(), 0L, -1L, true), baos_key, false, true, true);
-                c_key.logout();
-                if (ServerStatus.BG("v10_beta")) {
-                    Properties p2 = new Properties();
-                    p2.put("bytes", baos_key.toByteArray());
-                    com.crushftp.client.Common.System2.put("crushftp.keystores." + keyLocation.toUpperCase().replace('\\', '/'), p2);
-                }
+            pub_key = Common.loadPgpKey(keyLocation);
+            if (encryption_sign) {
+                priv_key = Common.loadPgpKey(privateKeyLocation);
             }
         }
         final String keyLocationF = keyLocation;
+        final ByteArrayOutputStream baos_key = pub_key;
+        final ByteArrayOutputStream prive_baos_key = priv_key;
         final boolean pbeF = pbe;
         final Properties socks = Common.getConnectedSockets();
         Socket sock1 = (Socket)socks.remove("sock1");
@@ -6622,7 +6731,8 @@ lbl26:
             public void run() {
                 try {
                     Socket sock2 = (Socket)socks.remove("sock2");
-                    ByteArrayInputStream bytesIn = new ByteArrayInputStream(baos_key.toByteArray());
+                    ByteArrayInputStream bytesIn = baos_key == null ? null : new ByteArrayInputStream(baos_key.toByteArray());
+                    ByteArrayInputStream priv_bytesIn = prive_baos_key == null ? null : new ByteArrayInputStream(prive_baos_key.toByteArray());
                     pgp.setCompression("UNCOMPRESSED");
                     String cypher = encryption_cypher;
                     if (cypher.equals("")) {
@@ -6639,14 +6749,18 @@ lbl26:
                         pgp.setCypher(cypher.trim());
                     }
                     if (ascii) {
-                        pgp.setAsciiVersionHeader("CRUSHFTP#                                        ");
+                        pgp.setAsciiVersionHeader(String.valueOf(System.getProperty("appname", "CrushFTP").toUpperCase()) + "#                                        ");
                     }
                     if (pbeF) {
-                        pgp.encryptStreamPBE(sock2.getInputStream(), "", keyLocationF.substring(keyLocationF.indexOf(":") + 1), out, ascii, false);
+                        pgp.encryptStreamPBE(sock2.getInputStream(), "", keyLocationF.substring(keyLocationF.indexOf(":") + 1), out, ascii, ServerStatus.BG("pgp_integrity_protect"));
+                    } else if (encryption_sign) {
+                        pgp.signAndEncryptStream(sock2.getInputStream(), "", (InputStream)priv_bytesIn, ServerStatus.thisObj.common_code.decode_pass(pass), bytesIn, out, ascii, ServerStatus.BG("pgp_integrity_protect"));
                     } else {
-                        pgp.encryptStream(sock2.getInputStream(), "", (InputStream)bytesIn, out, ascii, false);
+                        pgp.encryptStream(sock2.getInputStream(), "", bytesIn, out, ascii, ServerStatus.BG("pgp_integrity_protect"));
                     }
-                    bytesIn.close();
+                    if (bytesIn != null) {
+                        bytesIn.close();
+                    }
                     status.put("status", "SUCCESS");
                 }
                 catch (Exception e) {
@@ -6656,7 +6770,34 @@ lbl26:
                 }
             }
         }, String.valueOf(Thread.currentThread().getName()) + ":PGP Encrypt Streamer");
-        return new OutputStreamCloser(sock1.getOutputStream(), status, c, path, !ascii, ascii, out);
+        return new OutputStreamCloser(sock1.getOutputStream(), status, c, path, hint_decrypted_size && !ascii, ascii, out);
+    }
+
+    public static ByteArrayOutputStream loadPgpKey(String keyLocation) throws IOException, Exception, InterruptedException {
+        ByteArrayOutputStream baos_key = new ByteArrayOutputStream();
+        if (ServerStatus.BG("v10_beta") && com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + keyLocation.toUpperCase().replace('\\', '/')) && !keyLocation.equals("")) {
+            Properties p = (Properties)com.crushftp.client.Common.System2.get("crushftp.keystores." + keyLocation.toUpperCase().replace('\\', '/'));
+            baos_key.write((byte[])p.get("bytes"));
+        } else {
+            VRL key_vrl = new VRL(keyLocation);
+            GenericClient c_key = com.crushftp.client.Common.getClient(Common.getBaseUrl(key_vrl.toString()), System.getProperty("appname", "CrushFTP"), new Vector());
+            if (ServerStatus.BG("v10_beta") && key_vrl.getConfig() != null && key_vrl.getConfig().size() > 0) {
+                c_key.setConfigObj(key_vrl.getConfig());
+            }
+            c_key.login(key_vrl.getUsername(), key_vrl.getPassword(), "");
+            com.crushftp.client.Common.streamCopier(null, null, c_key.download(key_vrl.getPath(), 0L, -1L, true, true), baos_key, false, true, true);
+            c_key.logout();
+            if (ServerStatus.BG("v10_beta")) {
+                Properties p2 = new Properties();
+                p2.put("bytes", baos_key.toByteArray());
+                if (ServerStatus.BG("v11_beta")) {
+                    p2.put("name", "");
+                    p2.put("type", "pgp");
+                }
+                com.crushftp.client.Common.System2.put("crushftp.keystores." + keyLocation.toUpperCase().replace('\\', '/'), p2);
+            }
+        }
+        return baos_key;
     }
 
     public static InputStream getDecryptedStream(InputStream in, String oldKeyLocation, String keyLocation, final String pass) throws Exception {
@@ -6672,7 +6813,7 @@ lbl26:
         }
         if (!oldKeyLocation.equals("") && header.equals(com.crushftp.client.Common.encryptedNote)) {
             ObjectInputStream ois = null;
-            ois = new ObjectInputStream(new FileInputStream(new File_S(String.valueOf(oldKeyLocation) + "CrushFTP.key")));
+            ois = new ObjectInputStream(new FileInputStream(new File_S(String.valueOf(oldKeyLocation) + System.getProperty("appname", "CrushFTP") + ".key")));
             SecretKey key = (SecretKey)ois.readObject();
             ois.close();
             IvParameterSpec paramSpec = new IvParameterSpec(iv);
@@ -6687,33 +6828,17 @@ lbl26:
                 pgp = new PGPLib();
             }
             pgp.setUseExpiredKeys(true);
-            final ByteArrayOutputStream baos_key = new ByteArrayOutputStream();
+            ByteArrayOutputStream baos_priv_key = new ByteArrayOutputStream();
             boolean pbe = false;
             if (keyLocation.toLowerCase().startsWith("password:")) {
                 pbe = true;
             } else {
-                if (keyLocation.indexOf(":") < 0 || keyLocation.indexOf(":") < 3 && !keyLocation.toLowerCase().startsWith("s3:") && !keyLocation.toLowerCase().startsWith("b2:")) {
-                    keyLocation = "FILE://" + keyLocation;
+                if (new VRL(keyLocation).getProtocol().equalsIgnoreCase("file")) {
+                    Log.log("SERVER", 1, "PGP key info: Path: " + keyLocation + " Info :" + com.crushftp.client.Common.getPgpKeyInfo(new VRL(keyLocation).getPath()));
                 }
-                if (ServerStatus.BG("v10_beta") && com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + keyLocation.toUpperCase().replace('\\', '/')) && !keyLocation.equals("")) {
-                    Properties p = (Properties)com.crushftp.client.Common.System2.get("crushftp.keystores." + keyLocation.toUpperCase().replace('\\', '/'));
-                    baos_key.write((byte[])p.get("bytes"));
-                } else {
-                    VRL key_vrl = new VRL(keyLocation);
-                    GenericClient c_key = com.crushftp.client.Common.getClient(Common.getBaseUrl(key_vrl.toString()), "CrushFTP", new Vector());
-                    if (ServerStatus.BG("v10_beta") && key_vrl.getConfig() != null && key_vrl.getConfig().size() > 0) {
-                        c_key.setConfigObj(key_vrl.getConfig());
-                    }
-                    c_key.login(key_vrl.getUsername(), key_vrl.getPassword(), "");
-                    com.crushftp.client.Common.streamCopier(null, null, c_key.download(key_vrl.getPath(), 0L, -1L, true), baos_key, false, true, true);
-                    c_key.logout();
-                    if (ServerStatus.BG("v10_beta")) {
-                        Properties p2 = new Properties();
-                        p2.put("bytes", baos_key.toByteArray());
-                        com.crushftp.client.Common.System2.put("crushftp.keystores." + keyLocation.toUpperCase().replace('\\', '/'), p2);
-                    }
-                }
+                baos_priv_key = Common.loadPgpKey(keyLocation);
             }
+            final ByteArrayOutputStream baos_key = baos_priv_key;
             final String keyLocationF = keyLocation;
             final boolean pbeF = pbe;
             final Properties socks = Common.getConnectedSockets();
@@ -6729,9 +6854,9 @@ lbl26:
                         pgp.setCompression("UNCOMPRESSED");
                         out4 = sock1.getOutputStream();
                         if (pbeF) {
-                            pgp.decryptStreamPBE((InputStream)bin, keyLocationF.substring(keyLocationF.indexOf(":") + 1), out4);
+                            pgp.decryptStreamPBE(bin, keyLocationF.substring(keyLocationF.indexOf(":") + 1), out4);
                         } else {
-                            pgp.decryptStream((InputStream)bin, (InputStream)bytesIn, ServerStatus.thisObj.common_code.decode_pass(pass), out4);
+                            pgp.decryptStream((InputStream)bin, bytesIn, ServerStatus.thisObj.common_code.decode_pass(pass), out4);
                         }
                         bytesIn.close();
                     }
@@ -6798,7 +6923,7 @@ lbl26:
             if (s.toUpperCase().startsWith("GLACIER:/") && !s.endsWith("/")) {
                 s = String.valueOf(s) + "/";
             }
-            s = s.indexOf("@") != s.lastIndexOf("@") ? s.substring(0, s.indexOf("/", s.indexOf("@")) + 1) : (s.lastIndexOf("@") > s.lastIndexOf(":") ? s.substring(0, s.indexOf("/", s.lastIndexOf("@")) + 1) : (s.length() > 8 && s.indexOf(":", 8) != s.lastIndexOf(":") ? s.substring(0, s.indexOf("/", s.indexOf(":", 8)) + 1) : s.substring(0, s.indexOf("/", s.lastIndexOf(":")) + 1)));
+            s = s.indexOf("@") != s.lastIndexOf("@") ? s.substring(0, s.indexOf("/", s.indexOf("@")) + 1) : (s.lastIndexOf("@") > s.lastIndexOf(":") ? s.substring(0, s.indexOf("/", s.lastIndexOf("@")) + 1) : (s.length() > 8 && s.indexOf(":", 8) != s.lastIndexOf(":") && !s.toUpperCase().startsWith("SHAREPOINT2:/") ? s.substring(0, s.indexOf("/", s.indexOf(":", 8)) + 1) : s.substring(0, s.indexOf("/", s.lastIndexOf(":")) + 1)));
         } else {
             s = s.toLowerCase().startsWith("file:/") && !s.toLowerCase().startsWith("file://") ? s.substring(0, s.indexOf("/", s.indexOf(":") + 1) + 1) : (s.toLowerCase().startsWith("file://") && !s.toLowerCase().startsWith("file:///") ? s.substring(0, s.indexOf("/", s.indexOf(":") + 2) + 1) : s.substring(0, s.indexOf("/", s.indexOf(":") + 3) + 1));
         }
@@ -6868,24 +6993,40 @@ lbl26:
     public static void send_change_pass_email(SessionCrush session) {
         Properties template = Common.get_email_template("Change Pass Email");
         if (template != null) {
-            Properties email_info = new Properties();
-            email_info.put("server", ServerStatus.SG("smtp_server"));
-            email_info.put("user", ServerStatus.SG("smtp_user"));
-            email_info.put("pass", ServerStatus.SG("smtp_pass"));
-            email_info.put("ssl", ServerStatus.SG("smtp_ssl"));
-            email_info.put("html", ServerStatus.SG("smtp_html"));
-            email_info.put("from", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailFrom"), session));
-            email_info.put("reply_to", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailReplyTo"), session));
-            email_info.put("to", session.SG("email"));
-            email_info.put("cc", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailCC"), session));
-            email_info.put("bcc", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailBCC"), session));
-            email_info.put("subject", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailSubject"), session));
-            email_info.put("body", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailBody"), session));
-            ServerStatus.thisObj.sendEmail(email_info);
+            try {
+                String username = "";
+                if (session != null && session.user_info != null) {
+                    username = session.uiSG("user_name");
+                }
+                final Properties email_info = new Properties();
+                email_info.put("server", ServerStatus.SG("smtp_server"));
+                email_info.put("user", ServerStatus.SG("smtp_user"));
+                email_info.put("pass", ServerStatus.SG("smtp_pass"));
+                email_info.put("ssl", ServerStatus.SG("smtp_ssl"));
+                email_info.put("html", ServerStatus.SG("smtp_html"));
+                email_info.put("from", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailFrom"), session));
+                email_info.put("reply_to", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailReplyTo"), session));
+                email_info.put("to", session.SG("email"));
+                email_info.put("cc", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailCC"), session));
+                email_info.put("bcc", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailBCC"), session));
+                email_info.put("subject", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailSubject"), session));
+                email_info.put("body", ServerStatus.thisObj.change_vars_to_values(template.getProperty("emailBody"), session));
+                Worker.startWorker(new Runnable(){
+
+                    @Override
+                    public void run() {
+                        ServerStatus.thisObj.sendEmail(email_info);
+                    }
+                }, "Change Pass Email Username:" + username);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 1, e);
+            }
         }
     }
 
     public static Properties get_email_template(String template_name) {
+        template_name = Common.remove_html_special_chars(template_name);
         Vector email_templates = ServerStatus.VG("email_templates");
         if (email_templates != null) {
             int x = 0;
@@ -7085,22 +7226,94 @@ lbl26:
         }
     }
 
+    public static String remove_html_special_chars(String data) {
+        data = Common.replace_str(data, "&quot;", "\"");
+        data = Common.replace_str(data, "&gt;", ">");
+        data = Common.replace_str(data, "&lt;", "<");
+        data = Common.replace_str(data, "&apos;", "'");
+        data = Common.replace_str(data, "&amp;", "&");
+        data = Common.replace_str(data, "&nbsp;", " ");
+        return data;
+    }
+
+    public static boolean isValidTemplateUserOfDMZ() {
+        boolean valid = true;
+        if (com.crushftp.client.Common.dmz_mode && System.getProperty("crushftp.dmz.allow.invalid.template.user", "false").equals("false")) {
+            Vector server_groups = ServerStatus.VG("server_groups");
+            int x = 0;
+            while (x < server_groups.size()) {
+                String serverGroup = ((String)server_groups.get(x)).trim();
+                if (!serverGroup.equals("ConnectionProfiles")) {
+                    Properties template = UserTools.ut.getUser(serverGroup, "template", true);
+                    if (template == null) {
+                        try {
+                            UserTools.addTemplateUserForDMZ(serverGroup, "template");
+                            Log.log("SERVER", 0, "DMZ's template user is missing! User connection group: " + serverGroup + " Creating default template user for DMZ.");
+                        }
+                        catch (Exception e) {
+                            Log.log("SERVER", 0, "Error: Could not create template user! Error message : " + e);
+                            valid = false;
+                        }
+                    } else {
+                        VFS vfs = UserTools.ut.getVFS(serverGroup, "template");
+                        if (vfs.homes.size() != 1) {
+                            Log.log("SERVER", 0, "Error: Invalid template user. User connection group : " + serverGroup + "  It has more then one VFS define. Server port items will not start.");
+                            valid = false;
+                        } else {
+                            Properties virtual = (Properties)vfs.homes.get(0);
+                            if (virtual.size() != 3) {
+                                Log.log("SERVER", 0, "Error: Invalid template user. User connection group : " + serverGroup + " It has more then one VFS define. Server port items will not start.");
+                                valid = false;
+                            } else if (!(virtual.containsKey("/Internal") || virtual.containsKey("/internal") || virtual.containsKey("/internal1") || virtual.containsKey("/Internal1"))) {
+                                Log.log("SERVER", 0, "Error: Invalid template user. User connection group : " + serverGroup + " VFS: Missing Internal VFS item! Server port items will not start.");
+                                valid = false;
+                            }
+                        }
+                    }
+                }
+                ++x;
+            }
+        }
+        return valid;
+    }
+
+    public static void sendResetPasswordTokenEmail(Properties user, String lang, String hostString, String token) throws Exception {
+        String url = String.valueOf(Common.replace_str(Common.replace_str(ServerStatus.SG("reset_url"), "www.domain.com", hostString), "{host}", hostString)) + "?token=" + token;
+        if (lang == null || lang.length() != 2 || lang.charAt(0) > 'z' || lang.charAt(0) < 'a' || lang.charAt(1) > 'z' || lang.charAt(1) < 'a') {
+            lang = "en";
+        }
+        lang = lang.toLowerCase();
+        String resetMsg = ServerStatus.SG("password_reset_message");
+        File f = new File(String.valueOf(System.getProperty("crushftp.web")) + "localizations/password_reset_message_" + lang + ".html");
+        if (f.exists() && f.length() < 0x100000L) {
+            resetMsg = Common.getFileText(f.getPath());
+        }
+        resetMsg = Common.replace_str(resetMsg, "{url}", url);
+        resetMsg = ServerStatus.change_vars_to_values_static(resetMsg, user, new Properties(), null);
+        String resetSubject = ServerStatus.SG("password_reset_subject");
+        f = new File(String.valueOf(System.getProperty("crushftp.web")) + "localizations/password_reset_subject_" + lang + ".html");
+        if (f.exists() && f.length() < 0x100000L) {
+            resetSubject = Common.getFileText(f.getPath());
+        }
+        com.crushftp.client.Common.send_mail(ServerStatus.SG("discovered_ip"), user.getProperty("email"), "", "", ServerStatus.SG("smtp_from"), resetSubject, resetMsg, ServerStatus.SG("smtp_server"), ServerStatus.SG("smtp_user"), ServerStatus.SG("smtp_pass"), ServerStatus.SG("smtp_ssl").equals("true"), true, null);
+    }
+
     public void set_defaults(Properties default_settings) {
         default_settings.put("rid", String.valueOf(System.currentTimeMillis()));
         default_settings.put("listing_buffer_count", "500");
-        default_settings.put("listing_multithreaded", "false");
+        default_settings.put("listing_multithreaded", "true");
         default_settings.put("registration_name", "crush");
         default_settings.put("registration_email", "ftp");
         default_settings.put("registration_code", "crushftp:(MAX=5)(V=5)");
-        default_settings.put("ftp_welcome_message", "Welcome to CrushFTP!");
-        default_settings.put("server_start_message", "CrushFTP Server Ready!");
-        default_settings.put("ssh_comments", "http://www.crushftp.com/");
-        default_settings.put("http_server_header", "CrushFTP HTTP Server");
+        default_settings.put("ftp_welcome_message", "Welcome to " + System.getProperty("appname", "CrushFTP") + "!");
+        default_settings.put("server_start_message", String.valueOf(System.getProperty("appname", "CrushFTP")) + " Server Ready!");
+        default_settings.put("ssh_comments", "http://www." + System.getProperty("appname", "CrushFTP") + ".com/");
+        default_settings.put("http_server_header", String.valueOf(System.getProperty("appname", "CrushFTP")) + " HTTP Server");
         default_settings.put("username_uppercase", "false");
         default_settings.put("allow_session_caching", "true");
         default_settings.put("allow_session_caching_on_exit", "true");
         default_settings.put("replicate_users", "true");
-        default_settings.put("tls_version", "SSLv2Hello,TLSv1,TLSv1.1,TLSv1.2");
+        default_settings.put("tls_version", "TLSv1.2,TLSv1.3");
         default_settings.put("relaxed_event_grouping", "false");
         default_settings.put("syslog_protocol", "udp");
         default_settings.put("syslog_host", "127.0.0.1");
@@ -7111,7 +7324,6 @@ lbl26:
         default_settings.put("allow_local_ip_pasv", "true");
         default_settings.put("allow_local_ip_pasv_any", "false");
         default_settings.put("Access-Control-Allow-Origin", "");
-        default_settings.put("X-Frame-Options", "SAMEORIGIN");
         default_settings.put("http_session_timeout", "60");
         default_settings.put("log_debug_level", "0");
         default_settings.put("domain_cookie", "");
@@ -7124,7 +7336,7 @@ lbl26:
         default_settings.put("allow_zipstream", "true");
         default_settings.put("allow_filetree", "true");
         default_settings.put("create_home_folder", "false");
-        default_settings.put("allow_x_forwarded_host", "true");
+        default_settings.put("allow_x_forwarded_host", "false");
         default_settings.put("recent_user_count", "100");
         default_settings.put("tunnel_ram_cache", "128");
         default_settings.put("s3_buffer", "5");
@@ -7163,8 +7375,8 @@ lbl26:
         default_settings.put("zipCompressionLevel", "Best");
         default_settings.put("log_transfer_speeds", "true");
         default_settings.put("smtp_subject_utf8", "true");
-        default_settings.put("log_location", System.getProperty("crushftp.log", "./CrushFTP.log"));
-        default_settings.put("user_log_location", String.valueOf(Common.all_but_last(System.getProperty("crushftp.log", "./CrushFTP.log"))) + "logs/session_logs/");
+        default_settings.put("log_location", System.getProperty("crushftp.log", "./" + System.getProperty("appname", "CrushFTP") + ".log"));
+        default_settings.put("user_log_location", String.valueOf(Common.all_but_last(System.getProperty("crushftp.log", "./" + System.getProperty("appname", "CrushFTP") + ".log"))) + "logs/session_logs/");
         default_settings.put("logging_provider", "");
         default_settings.put("extended_logging", "false");
         default_settings.put("temp_accounts_path", "./TempAccounts/");
@@ -7200,8 +7412,8 @@ lbl26:
         default_settings.put("epsveprt", "true");
         default_settings.put("allow_mlst", "true");
         default_settings.put("cert_path", "builtin");
-        default_settings.put("globalKeystorePass", "crushftp");
-        default_settings.put("globalKeystoreCertPass", "crushftp");
+        default_settings.put("globalKeystorePass", System.getProperty("appname", "CrushFTP").toLowerCase());
+        default_settings.put("globalKeystoreCertPass", System.getProperty("appname", "CrushFTP").toLowerCase());
         default_settings.put("disabled_ciphers", "(TLS_RSA_WITH_AES_128_CBC_SHA)(TLS_RSA_WITH_AES_256_CBC_SHA)(TLS_DHE_RSA_WITH_AES_128_CBC_SHA)(TLS_DHE_RSA_WITH_AES_256_CBC_SHA)(SSL_RSA_WITH_3DES_EDE_CBC_SHA)(SSL_DHE_RSA_WITH_3DES_EDE_CBC_SHA)(SSL_RSA_WITH_DES_CBC_SHA)(SSL_DHE_RSA_WITH_DES_CBC_SHA)(SSL_RSA_EXPORT_WITH_RC4_40_MD5)(SSL_RSA_EXPORT_WITH_DES40_CBC_SHA)(SSL_DHE_RSA_EXPORT_WITH_DES40_CBC_SHA)(SSL_RSA_WITH_NULL_MD5)(SSL_RSA_WITH_NULL_SHA)(TLS_ECDH_ECDSA_WITH_NULL_SHA)(TLS_ECDH_RSA_WITH_NULL_SHA)(TLS_ECDHE_ECDSA_WITH_NULL_SHA)(TLS_ECDHE_RSA_WITH_NULL_SHA)(SSL_DH_anon_WITH_RC4_128_MD5)(TLS_DH_anon_WITH_AES_128_CBC_SHA)(TLS_DH_anon_WITH_AES_256_CBC_SHA)(SSL_DH_anon_WITH_3DES_EDE_CBC_SHA)(SSL_DH_anon_WITH_DES_CBC_SHA)(TLS_ECDH_anon_WITH_RC4_128_SHA)(TLS_ECDH_anon_WITH_AES_128_CBC_SHA)(TLS_ECDH_anon_WITH_AES_256_CBC_SHA)(TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA)(SSL_DH_anon_EXPORT_WITH_RC4_40_MD5)(SSL_DH_anon_EXPORT_WITH_DES40_CBC_SHA)(TLS_ECDH_anon_WITH_NULL_SHA)");
         default_settings.put("user_backup_count", "100");
         default_settings.put("proxyDownloadRepository", "./");
@@ -7213,7 +7425,7 @@ lbl26:
         default_settings.put("default_system_owner", "");
         default_settings.put("default_system_group", "");
         default_settings.put("default_logo", "logo.png");
-        default_settings.put("default_title", "CrushFTP WebInterface");
+        default_settings.put("default_title", String.valueOf(System.getProperty("appname", "CrushFTP")) + " WebInterface");
         default_settings.put("webFooterText", "");
         default_settings.put("web404Text", "The selected resource was not found.");
         default_settings.put("emailReminderSubjectText", LOC.G("Password Reminder"));
@@ -7327,8 +7539,12 @@ lbl26:
         server_item.put("ftp_welcome_message", "");
         server_item.put("ssh_rsa_key", String.valueOf(System.getProperty("crushftp.prefs")) + "ssh_host_rsa_key");
         server_item.put("ssh_dsa_key", String.valueOf(System.getProperty("crushftp.prefs")) + "ssh_host_dsa_key");
-        server_item.put("ssh_dsa_enabled", "true");
+        server_item.put("ssh_ecsa_key", String.valueOf(System.getProperty("crushftp.prefs")) + "ssh_host_ecdsa_key");
+        server_item.put("ssh_ed25519_key", String.valueOf(System.getProperty("crushftp.prefs")) + "ssh_host_ed25519_key");
+        server_item.put("ssh_dsa_enabled", "false");
         server_item.put("ssh_rsa_enabled", "true");
+        server_item.put("ssh_ecdsa_enabled", "false");
+        server_item.put("ssh_ed25519_enabled", "false");
         server_item.put("ssh_transfer_threads", "2");
         server_item.put("ssh_accept_threads", "2");
         server_item.put("ssh_connect_threads", "2");
@@ -7450,23 +7666,15 @@ lbl26:
         default_settings.put("stop_listing_on_login_failure", "true");
         default_settings.put("acl_mode", "2");
         default_settings.put("acl_lookup_tool", "plugins/lib/aclchk.exe");
-        if (Common.machine_is_windows()) {
-            default_settings.put("serverbeat_command", "netsh");
-        } else {
-            default_settings.put("serverbeat_command", "/sbin/ifconfig");
-        }
-        default_settings.put("serverbeat_ifup_command", "/sbin/ifup");
-        default_settings.put("serverbeat_ifdown_command", "/sbin/ifdown");
-        default_settings.put("serverbeat_post_command", "");
-        default_settings.put("ssh_header", "CrushFTPSSHD");
-        default_settings.put("logging_db_url", "jdbc:mysql://127.0.0.1:3306/crushftp?autoReconnect=true");
+        default_settings.put("ssh_header", String.valueOf(System.getProperty("appname", "CrushFTP")) + "SSHD");
+        default_settings.put("logging_db_url", "jdbc:mysql://127.0.0.1:3306/" + System.getProperty("appname", "CrushFTP").toLowerCase() + "?autoReconnect=true");
         default_settings.put("logging_db_driver_file", "./mysql-connector-java-5.0.4-bin.jar");
         default_settings.put("logging_db_driver", "org.gjt.mm.mysql.Driver");
-        default_settings.put("logging_db_user", "crushftp");
+        default_settings.put("logging_db_user", System.getProperty("appname", "CrushFTP").toLowerCase());
         default_settings.put("logging_db_pass", "");
-        default_settings.put("logging_db_insert", "insert into CRUSHFTP_LOG (LOG_MILLIS,LOG_TAG,LOG_DATA,LOG_ROW_NUM) values(?,?,?,?)");
-        default_settings.put("logging_db_query_count", "select max(LOG_ROW_NUM) from CRUSHFTP_LOG");
-        default_settings.put("logging_db_query", "select LOG_DATA,LOG_MILLIS,LOG_ROW_NUM from CRUSHFTP_LOG where LOG_ROW_NUM >= ? and LOG_ROW_NUM <= ? order by LOG_ROW_NUM");
+        default_settings.put("logging_db_insert", "insert into " + System.getProperty("appname", "CrushFTP").toUpperCase() + "_LOG (LOG_MILLIS,LOG_TAG,LOG_DATA,LOG_ROW_NUM) values(?,?,?,?)");
+        default_settings.put("logging_db_query_count", "select max(LOG_ROW_NUM) from " + System.getProperty("appname", "CrushFTP").toUpperCase() + "_LOG");
+        default_settings.put("logging_db_query", "select LOG_DATA,LOG_MILLIS,LOG_ROW_NUM from " + System.getProperty("appname", "CrushFTP").toUpperCase() + "_LOG where LOG_ROW_NUM >= ? and LOG_ROW_NUM <= ? order by LOG_ROW_NUM");
         default_settings.put("custom_delete_msg", "\"%user_the_command_data%\" delete successful.");
         default_settings.put("trust_expired_client_cert", "false");
         default_settings.put("email_reset_token", "false");
@@ -7499,7 +7707,7 @@ lbl26:
         default_settings.put("http_buffer", "10");
         default_settings.put("memcache", "false");
         default_settings.put("normalize_utf8", "true");
-        default_settings.put("track_last_logins", "false");
+        default_settings.put("track_last_logins", "true");
         default_settings.put("allow_session_caching_memory", "false");
         default_settings.put("ssl_renegotiation_blocked", "true");
         default_settings.put("reset_token_timeout", "10");
@@ -7549,17 +7757,14 @@ lbl26:
         default_settings.put("dmz_stat_caching", "false");
         default_settings.put("direct_link_to_webinterface", "true");
         default_settings.put("stor_pooling", "true");
-        default_settings.put("tls_version_client", "SSLv2Hello,TLSv1,TLSv1.1,TLSv1.2");
+        default_settings.put("tls_version_client", "SSLv2Hello,TLSv1.2,TLSv1.3");
         default_settings.put("tunnel_minimum_version", "3.4.0");
         default_settings.put("delete_threads", "40");
         default_settings.put("drop_folder_rename_new", "false");
-        default_settings.put("serverbeat_plumb", "true");
-        default_settings.put("serverbeat_unplumb", "true");
         default_settings.put("serverbeat_relative_timing", "true");
         default_settings.put("windows_character_encoding_process", "windows-1252");
         default_settings.put("memory_log_interval", "600");
         default_settings.put("dump_threads_log_interval", "-1");
-        default_settings.put("Strict-Transport-Security", "");
         default_settings.put("replicated_vfs_url", "");
         default_settings.put("replicated_vfs_root_url", "");
         default_settings.put("replicated_vfs_user", "");
@@ -7688,11 +7893,10 @@ lbl26:
         default_settings.put("sql_users_reset_cache_on_changes", "true");
         default_settings.put("thread_dump_delayed_login", "false");
         default_settings.put("include_ftp_nlst_path_for_all_pattern", "false");
-        default_settings.put("pgp_integrity_protect", "false");
+        default_settings.put("pgp_integrity_protect", "true");
         default_settings.put("http_same_site", "None");
         default_settings.put("sftp_chunk_buffer", "200");
         default_settings.put("dmz_memory_queue", "20");
-        default_settings.put("Content-Security-Policy", "");
         default_settings.put("pgp_http_downloads_variable_size", "false");
         default_settings.put("dmz_pong_timeout", "20");
         default_settings.put("reverse_dns_user_ip", "true");
@@ -7717,7 +7921,6 @@ lbl26:
         default_settings.put("ssh_disable_rsa_checks", "false");
         default_settings.put("test_vfs_return_error", "false");
         default_settings.put("webdav_agents", "");
-        default_settings.put("limited_admin_custom_user_menu_actions", "false");
         default_settings.put("dmzv3_two_sockets", "false");
         default_settings.put("azure_share_list_threads_count", "10");
         default_settings.put("login_autocomplete_off", "false");
@@ -7731,13 +7934,102 @@ lbl26:
         default_settings.put("otp_numeric", "false");
         default_settings.put("validate_upload_physical_file_size", "false");
         default_settings.put("validate_upload_physical_file_size_error", "false");
+        default_settings.put("hint_decrypted_size", "true");
+        default_settings.put("encryption_sign", "false");
+        default_settings.put("sftp_client_disableAutoFlush", "false");
         default_settings.put("login_hammer_attempts", "60");
         default_settings.put("login_hammer_interval", "30");
         default_settings.put("login_hammer_timeout", "1");
-        default_settings.put("v10_beta", "false");
+        default_settings.put("v10_beta", "true");
         default_settings.put("reverse_events", "false");
+        default_settings.put("reverse_events_skip_sender", "false");
         default_settings.put("reset_url", "https://www.domain.com/WebInterface/jQuery/reset.html");
+        default_settings.put("generatetoken_limited_admin_group_only", "false");
+        default_settings.put("block_failed_filetransfer_events", "false");
+        default_settings.put("http_cleaner_interval", "60");
+        default_settings.put("webdav_timeout_secs", "10");
         default_settings.put("s3_buffer_download", "5");
+        default_settings.put("encrypt_job_files_sensitive_data", "true");
+        default_settings.put("pasv_simple_logic", "true");
+        default_settings.put("max_resume_job_size_mb", "200");
+        default_settings.put("thread_dump_port", "");
+        default_settings.put("job_link_task_render", "true");
+        default_settings.put("serverbeat_start_ports", "false");
+        default_settings.put("as2_from_as_to_for_username", "false");
+        default_settings.put("as2_prepend_as2_username", "true");
+        default_settings.put("check_file_length_download_event", "true");
+        if (Common.machine_is_windows()) {
+            default_settings.put("serverbeat_command", "netsh");
+        } else {
+            default_settings.put("serverbeat_command", "/sbin/ifconfig {adapter}:{index} {vip} netmask {netmask} up");
+        }
+        default_settings.put("serverbeat_ifup_command", "/sbin/ifup {adapter}:{index}");
+        default_settings.put("serverbeat_ifdown_command", "/sbin/ifdown {adapter}:{index}");
+        default_settings.put("serverbeat_post_command", "");
+        default_settings.put("serverbeat_command_disable", "/sbin/ifconfig {adapter}:{index} {ip} netmask {netmask} down");
+        if (Common.machine_is_windows()) {
+            default_settings.put("serverbeat_command_disable", "netsh");
+        } else {
+            default_settings.put("serverbeat_command_disable", "/sbin/ifconfig {adapter}:{index} {vip} netmask {netmask} down");
+        }
+        default_settings.put("vfs_lazy_load", "false");
+        default_settings.put("quota_async", "false");
+        default_settings.put("quota_async_cache_interval", "60");
+        default_settings.put("quota_async_local_only", "false");
+        default_settings.put("quota_async_threads", "3");
+        default_settings.put("quota_async_user_threads", "3");
+        default_settings.put("sftpclient_ls_dot", "false");
+        default_settings.put("log_buffer_memory", "0");
+        default_settings.put("s3_global_cache", "true");
+        default_settings.put("dfs_default_enabled", "true");
+        default_settings.put("blocked_ssh_clients", "");
+        default_settings.put("jvm_timezone", "default");
+        default_settings.put("replicated_vfs_root_url_offset", "0");
+        default_settings.put("extra_system_properties", "");
+        default_settings.put("block_symlinks", "false");
+        default_settings.put("md5sum_native_exec", "false");
+        default_settings.put("xml_user_read_retries", "5");
+        default_settings.put("password_blacklist", "{working_dir}/password_blacklist.txt");
+        default_settings.put("job_log_name", "{scheduleName}_{id}.log");
+        default_settings.put("sftp_login_timeout_max", "10");
+        default_settings.put("html5_max_pending_download_chunks", "40");
+        default_settings.put("html5_max_pending_download_mb", "200");
+        default_settings.put("temp_upload_ext_ignore_protocols", "s3,glacier,azure,sharepoint,sharepoint2,onedrive,dropbox,hadoop,box");
+        default_settings.put("reveal_vfs_protocol_end_user", "false");
+        default_settings.put("user_manager_admin_all_connection_groups", "false");
+        default_settings.put("allow_default_user_updates", "true");
+        default_settings.put("kill_prior_upload_session_if_file_in_use", "true");
+        default_settings.put("user_reveal_version", "false");
+        default_settings.put("user_reveal_hostname", "false");
+        default_settings.put("active_jobs_shutdown_wait_secs", "5");
+        default_settings.put("merged_vfs", "false");
+        default_settings.put("filepart_silent_ignore", "false");
+        default_settings.put("sftp_loadbalancer_header_presend", "false");
+        default_settings.put("stats_ignore_unauthenticated_users", "false");
+        default_settings.put("icap_scanning", "false");
+        default_settings.put("icap_server_host_port", "");
+        default_settings.put("icap_service", "avscan");
+        default_settings.put("icap_max_bytes", "104857600");
+        default_settings.put("ssh_client_key_exchanges", "");
+        default_settings.put("ssh_client_mac_list", "");
+        default_settings.put("ssh_client_cipher_list", "");
+        default_settings.put("successful_login_hammering_neverban", "");
+        default_settings.put("max_password_length", "500");
+        default_settings.put("smb3_kerberos_kdc", "");
+        default_settings.put("smb3_kerberos_realm", "");
+        default_settings.put("fail_stor_0_byte_versus_data_received", "false");
+        default_settings.put("job_cache_update_interval_minutes", "1");
+        default_settings.put("job_summary_on_dashboard", "true");
+        default_settings.put("s3_ec2_imdsv2", "false");
+        default_settings.put("max_job_xml_size", "400");
+        default_settings.put("job_start_threads", "50");
+        default_settings.put("validate_upload_physical_file_size_ignore_protocols", "sharepoint,sharepoint2,onedrive");
+        default_settings.put("sftp_client_listing_disableDirectoryCheck", "false");
+        default_settings.put("quota_async_user_delay", "1");
+        default_settings.put("quota_async_vfs_delay", "1");
+        default_settings.put("proxy_protocol_ftp_pasv", "false");
+        default_settings.put("ftp_pre_check_mkdir", "false");
+        default_settings.put("v11_beta", "false");
         PreviewWorker.getDefaults(default_settings);
         StatTools.setDefaults(default_settings);
         SearchTools.setDefaults(default_settings);

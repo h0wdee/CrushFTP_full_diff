@@ -9,7 +9,9 @@ package crushftp.server;
 import com.crushftp.client.Base64;
 import com.crushftp.client.File_S;
 import com.crushftp.client.GenericClient;
+import com.crushftp.client.S3Client;
 import com.crushftp.client.VRL;
+import com.crushftp.client.WRunnable;
 import com.crushftp.client.Worker;
 import com.crushftp.tunnel2.Chunk;
 import com.crushftp.tunnel2.DVector;
@@ -25,12 +27,14 @@ import crushftp.handlers.SessionCrush;
 import crushftp.handlers.SharedSession;
 import crushftp.handlers.SharedSessionReplicated;
 import crushftp.handlers.UserTools;
+import crushftp.handlers.WebTransfer;
 import crushftp.server.QuickConnect;
 import crushftp.server.RETR_handler;
 import crushftp.server.STOR_handler;
 import crushftp.server.ServerSessionAJAX;
 import crushftp.server.ServerSessionDAV;
 import crushftp.server.ServerSessionHTTPWI;
+import crushftp.server.ServerSessionS3;
 import crushftp.server.ServerSessionTunnel3;
 import crushftp.server.ServerStatus;
 import crushftp.server.VFS;
@@ -48,6 +52,7 @@ import java.io.RandomAccessFile;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.security.cert.X509Certificate;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
@@ -58,11 +63,13 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.SimpleTimeZone;
 import java.util.StringTokenizer;
+import java.util.TimeZone;
 import java.util.Vector;
 import javax.net.ssl.SSLSocket;
 import org.jdom.output.XMLOutputter;
 
-public class ServerSessionHTTP {
+public class ServerSessionHTTP
+extends WRunnable {
     static Properties proppatches = null;
     static Properties locktokens = null;
     String http_dir = null;
@@ -77,6 +84,7 @@ public class ServerSessionHTTP {
     public BufferedInputStream original_is = null;
     public boolean keepGoing = true;
     SimpleDateFormat sdf_rfc1123 = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.US);
+    SimpleDateFormat sdf_iso_6801 = new SimpleDateFormat("YYYYMMDD'T'HHMMSS'Z'", Locale.US);
     int timeoutSeconds = 300;
     boolean done = false;
     RETR_handler retr = new RETR_handler();
@@ -95,6 +103,7 @@ public class ServerSessionHTTP {
     long http_len_max = 0L;
     ServerSessionAJAX ssa = null;
     ServerSessionDAV ssd = null;
+    ServerSessionS3 sss3 = null;
     String CRLF = "\r\n";
     String secureCookie = "";
     boolean reverseProxyHttps = false;
@@ -163,10 +172,7 @@ public class ServerSessionHTTP {
         throw new IllegalStateException("Decompilation failed");
     }
 
-    public void give_thread_pointer(Thread this_thread) {
-        this.this_thread = this_thread;
-    }
-
+    @Override
     public void run() {
         String disconnectReason;
         block18: {
@@ -202,6 +208,7 @@ public class ServerSessionHTTP {
                         com.crushftp.client.Common.sockLog(this.sock, "HTTP Session created:" + this.user_number);
                     }
                     this.thread_killer_item.calling_session = this.thisSession;
+                    this.put("session", this.thisSession);
                     if (ServerStatus.IG("log_debug_level") >= 2) {
                         this.logVector(this.headers, req_id);
                     }
@@ -214,8 +221,9 @@ public class ServerSessionHTTP {
                     }
                     if (loops++ == 0) {
                         String ip;
-                        if (this.headerLookup.containsKey("X-FORWARDED-HOST") && ServerStatus.BG("allow_x_forwarded_host") && !QuickConnect.validate_ip(ip = this.thisSession.uiSG("user_ip"), this.server_item)) {
-                            throw new Exception("BANNED:" + ip);
+                        String reason;
+                        if (this.headerLookup.containsKey("X-FORWARDED-HOST") && ServerStatus.BG("allow_x_forwarded_host") && !(reason = QuickConnect.validate_ip(ip = this.thisSession.uiSG("user_ip"), this.server_item)).equals("")) {
+                            throw new Exception("BANNED:" + ip + ":" + reason);
                         }
                         this.thisSession.add_log("[" + this.server_item.getProperty("serverType", "ftp") + ":" + this.thisSession.uiSG("user_number") + "_" + this.sock.getPort() + ":" + this.server_item.getProperty("ip", "0.0.0.0") + ":" + this.server_item.getProperty("port", "21") + "] " + this.SG("Accepting connection from") + ": " + this.thisSession.uiSG("user_ip") + ":" + this.sock.getPort() + this.CRLF, "ACCEPT");
                     }
@@ -519,11 +527,11 @@ public class ServerSessionHTTP {
             while (x < v.size()) {
                 String data = v.elementAt(x).toString();
                 String data_l = data.toLowerCase();
-                if (data_l.startsWith("cache-control".toLowerCase()) || data_l.startsWith("pragma") || data_l.startsWith("dnt") || data_l.startsWith("accept") || data_l.startsWith("connection") || data_l.startsWith("content-type") || data_l.startsWith("date") || data_l.startsWith("access-control-") || data_l.startsWith("etag") || data_l.startsWith("referer") || data_l.startsWith("if-modified-") || data_l.startsWith("if-none-") || data_l.startsWith("origin") || data_l.startsWith("x-requested-") || data_l.startsWith("upgrade-insecure-")) {
+                if (data_l.startsWith("cache-control") || data_l.startsWith("pragma") || data_l.startsWith("dnt") || data_l.startsWith("accept") || data_l.startsWith("connection") || data_l.startsWith("content-type") || data_l.startsWith("date") || data_l.startsWith("access-control-") || data_l.startsWith("etag") || data_l.startsWith("referer") || data_l.startsWith("if-modified-") || data_l.startsWith("if-none-") || data_l.startsWith("origin") || data_l.startsWith("x-requested-") || data_l.startsWith("upgrade-insecure-") || data_l.startsWith("sec-") || data_l.startsWith("x-webkit") || data_l.startsWith("x-content")) {
                     if (ServerStatus.IG("log_debug_level") >= 3) {
                         this.thisSession.add_log_formatted(data, "POST", req_id);
                     }
-                } else if (data_l.startsWith("user-agent".toLowerCase())) {
+                } else if (data_l.startsWith("user-agent") || data_l.startsWith("x-proxy_user_ip")) {
                     if (ServerStatus.IG("log_debug_level") >= 1) {
                         this.thisSession.add_log_formatted(data, "POST", req_id);
                     }
@@ -551,7 +559,7 @@ public class ServerSessionHTTP {
         Properties request;
         String http_boundary;
         String header0;
-        block272: {
+        block287: {
             ObjectInputStream ois;
             if (proppatches == null && new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/proppatches.prop").exists()) {
                 try {
@@ -582,6 +590,9 @@ public class ServerSessionHTTP {
             if (this.ssa == null) {
                 this.ssa = new ServerSessionAJAX(this);
             }
+            if (this.sss3 == null) {
+                this.sss3 = new ServerSessionS3(this);
+            }
             header0 = "";
             http_boundary = this.getBoundary();
             this.http_len_max = this.getContentLength();
@@ -595,6 +606,7 @@ public class ServerSessionHTTP {
                     this.thisSession.uiPUT("user_port", this.headerLookup.getProperty("X-PROXY_USER_PORT"));
                 }
                 if (this.headerLookup.containsKey("X-PROXY_USER_PROTOCOL")) {
+                    this.thisSession.uiPUT("user_protocol_actual", this.thisSession.user_info.getProperty("user_protocol_actual", this.thisSession.uiSG("user_protocol")));
                     this.thisSession.uiPUT("user_protocol_proxy", this.headerLookup.getProperty("X-PROXY_USER_PROTOCOL"));
                     this.thisSession.uiPUT("user_protocol", this.headerLookup.getProperty("X-PROXY_USER_PROTOCOL"));
                 }
@@ -613,7 +625,7 @@ public class ServerSessionHTTP {
                 return;
             }
             try {
-                boolean ipAllowed;
+                String reason;
                 this.thisSession.user_info.put("header_user-agent", this.headerLookup.getProperty("User-Agent".toUpperCase(), "").trim());
                 if (this.headerLookup.containsKey("X-PROXY_CONNECTION_INFO")) {
                     this.thisSession.user_info.put("connection_info", this.headerLookup.getProperty("X-PROXY_CONNECTION_INFO"));
@@ -651,18 +663,15 @@ public class ServerSessionHTTP {
                     }
                     this.thisSession.uiPUT("user_ip", temp_ip.trim());
                 }
-                if ((ipAllowed = Common.check_ip((Vector)ServerStatus.server_settings.get("ip_restrictions"), this.thisSession.uiSG("user_ip"))) && this.server_item.get("ip_restrictions") != null && !Common.check_ip((Vector)this.server_item.get("ip_restrictions"), this.thisSession.uiSG("user_ip"))) {
-                    ipAllowed = false;
+                if ((reason = Common.check_ip((Vector)ServerStatus.server_settings.get("ip_restrictions"), this.thisSession.uiSG("user_ip"))).equals("") && this.server_item.get("ip_restrictions") != null && !Common.check_ip((Vector)this.server_item.get("ip_restrictions"), this.thisSession.uiSG("user_ip")).equals("")) {
+                    reason = Common.check_ip((Vector)this.server_item.get("ip_restrictions"), this.thisSession.uiSG("user_ip"));
                 }
-                if (!ipAllowed) {
+                if (!reason.equals("")) {
                     this.done = true;
-                    ServerStatus.thisObj.append_log("!" + new Date().toString() + "!  ---" + ServerStatus.SG("BANNED IP CONNECTION TERMINATED") + "---:" + this.thisSession.uiSG("user_ip"), "DENIAL");
+                    ServerStatus.thisObj.append_log("!" + new Date().toString() + "!  ---" + ServerStatus.SG("BANNED IP CONNECTION TERMINATED") + "---:" + this.thisSession.uiSG("user_ip") + ":" + reason, "DENIAL");
                     ServerStatus.put_in("failed_logins", "" + (ServerStatus.IG("failed_logins") + 1));
                     this.write_command_http("HTTP/1.1 429 Banned");
                     this.write_command_http("Connection: close");
-                    if (!ServerStatus.SG("X-Frame-Options").equals("")) {
-                        this.write_command_http("X-Frame-Options: " + ServerStatus.SG("X-Frame-Options"));
-                    }
                     this.write_command_http("");
                     this.done = true;
                     return;
@@ -692,21 +701,20 @@ public class ServerSessionHTTP {
                     this.thisSession.uiPUT("user_ip", SharedSession.find("crushftp.usernames").getProperty(String.valueOf(Common.getPartialIp("127.0.0.1")) + "_" + this.thisSession.getProperty("clientid") + "_ip", this.thisSession.uiSG("user_ip")));
                 }
                 Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
-                ipAllowed = Common.check_ip((Vector)ServerStatus.server_settings.get("ip_restrictions"), this.thisSession.uiSG("user_ip"));
-                if (!ipAllowed) {
+                reason = Common.check_ip((Vector)ServerStatus.server_settings.get("ip_restrictions"), this.thisSession.uiSG("user_ip"));
+                Common cfr_ignored_1 = ServerStatus.thisObj.common_code;
+                reason = String.valueOf(reason) + Common.check_ip((Vector)ServerStatus.thisObj.server_info.get("ip_restrictions_temp"), this.thisSession.uiSG("user_ip"));
+                if (!reason.equals("")) {
                     this.done = true;
-                    ServerStatus.thisObj.append_log("!" + new Date().toString() + "!  ---" + ServerStatus.SG("BANNED IP CONNECTION TERMINATED") + "---:" + this.thisSession.uiSG("user_ip"), "DENIAL");
+                    ServerStatus.thisObj.append_log("!" + new Date().toString() + "!  ---" + ServerStatus.SG("BANNED IP CONNECTION TERMINATED") + "---:" + this.thisSession.uiSG("user_ip") + ":" + reason, "DENIAL");
                     ServerStatus.put_in("failed_logins", "" + (ServerStatus.IG("failed_logins") + 1));
                     this.write_command_http("HTTP/1.1 429 Banned");
                     this.write_command_http("Connection: close");
-                    if (!ServerStatus.SG("X-Frame-Options").equals("")) {
-                        this.write_command_http("X-Frame-Options: " + ServerStatus.SG("X-Frame-Options"));
-                    }
                     this.write_command_http("");
                     this.done = true;
                     return;
                 }
-                if (this.headers.size() <= 0) break block272;
+                if (this.headers.size() <= 0) break block287;
                 if (this.thisSession.server_item.getProperty("https_redirect", "false").equalsIgnoreCase("true") && this.thisSession.server_item.getProperty("serverType", "FTP").toUpperCase().equals("HTTP")) {
                     this.logVector(this.headers, req_id);
                     String path = this.headers.elementAt(0).toString();
@@ -722,6 +730,10 @@ public class ServerSessionHTTP {
                     return;
                 }
                 header0 = this.headers.elementAt(0).toString();
+                if (header0.indexOf("/SSO_SAML/NONE") >= 0) {
+                    header0 = String.valueOf(header0.split(" ")[0]) + " /?u=SSO_SAML&p=none HTTP/1.1";
+                    this.headers.setElementAt(header0, 0);
+                }
                 if (header0.indexOf("\r") >= 0) {
                     header0 = "GET / HTTP/1.1";
                 }
@@ -806,6 +818,40 @@ public class ServerSessionHTTP {
                         Log.log("HTTP_SERVER", 1, e);
                     }
                 }
+                if (header0.startsWith("GET /register_microsoft_graph_api/")) {
+                    try {
+                        if (this.thisSession != null) {
+                            String code = "";
+                            String adminconsent = "";
+                            if (header0.indexOf("admin_consent=True") > 0 && (header0.indexOf("tenant=") > 0 || header0.indexOf("error=") > 0)) {
+                                adminconsent = header0.indexOf("error=") > 0 ? "Error: " + header0.substring(header0.indexOf("error=")) : "Success!";
+                            } else if (header0.indexOf("&", header0.indexOf("code=")) > 0) {
+                                code = header0.substring(header0.indexOf("code=") + 5, header0.indexOf("&", header0.indexOf("code=")));
+                            } else if (header0.indexOf(" ", header0.indexOf("code=")) > 0) {
+                                code = header0.substring(header0.indexOf("code=") + 5, header0.indexOf(" ", header0.indexOf("code=")));
+                            }
+                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                            baos.write("Finished.".getBytes());
+                            if (!code.equals("")) {
+                                this.thisSession.user_info.put("microsoft_graph_api_code", code);
+                            }
+                            if (!adminconsent.equals("")) {
+                                this.thisSession.user_info.put("microsoft_graph_api_adminconsent", adminconsent);
+                            }
+                            this.write_command_http("HTTP/1.1 200 OK");
+                            this.write_command_http("Cache-Control: no-store");
+                            this.write_command_http("Content-Type: text/html");
+                            this.write_standard_headers();
+                            this.write_command_http("Content-Length: " + baos.size());
+                            this.write_command_http("");
+                            this.original_os.write(baos.toByteArray());
+                            this.original_os.flush();
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("HTTP_SERVER", 1, e);
+                    }
+                }
                 if (blockLog.toString().indexOf("true") >= 0) {
                     int e = 8;
                 } else {
@@ -834,11 +880,16 @@ public class ServerSessionHTTP {
                         Log.log("HTTP_SERVER", 1, e);
                         this.keepGoing = false;
                         this.done = true;
-                        this.write_command_http("HTTP/1.1 400 CHUNK SIZE FAILURE " + e.getMessage());
+                        String msg = String.valueOf(e.getMessage()) + ":" + header0;
+                        if (msg.indexOf("ERROR:") >= 0) {
+                            this.write_command_http("HTTP/1.1 404 CHUNK ERROR " + msg);
+                        } else {
+                            this.write_command_http("HTTP/1.1 400 CHUNK SIZE FAILURE " + msg);
+                        }
                         this.write_standard_headers();
-                        this.write_command_http("Content-Length: " + e.getMessage().length() + 2);
+                        this.write_command_http("Content-Length: " + msg.length() + 2);
                         this.write_command_http("");
-                        this.write_command_http(e.getMessage());
+                        this.write_command_http(msg);
                     }
                     return;
                 }
@@ -856,7 +907,7 @@ public class ServerSessionHTTP {
                     }
                     return;
                 }
-                if (header0.toUpperCase().startsWith("POST ") && header0.toUpperCase().indexOf("/CRUSH_STREAMING_HTTP_PROXY") < 0 && header0.indexOf("/put?filename") < 0) {
+                if (header0.toUpperCase().startsWith("POST ") && header0.toUpperCase().indexOf("/CRUSH_STREAMING_HTTP_PROXY") < 0 && header0.indexOf("/put?filename") < 0 && (header0.indexOf("uploadId=") <= 0 || !this.headerLookup.containsKey("X-AMZ-DATE"))) {
                     if (!http_boundary.equals("") && !this.isAS2()) {
                         items = this.parsePostArguments(http_boundary, this.http_len_max, this.thisSession.uiBG("user_logged_in"), req_id);
                     } else {
@@ -1150,32 +1201,13 @@ public class ServerSessionHTTP {
             }
             this.thisSession.uiPUT("last_logged_command", header0);
             long start_resume_loc = 0L;
-            Vector<Properties> byteRanges = new Vector<Properties>();
-            if (this.headerLookup.getProperty("RANGE", "").toUpperCase().indexOf("BYTES=") >= 0 || request.containsKey("range")) {
-                String amount = String.valueOf(this.headerLookup.getProperty("RANGE", "").toUpperCase()) + ",";
-                if (request.containsKey("range")) {
-                    amount = request.getProperty("range");
-                }
-                StringTokenizer st = new StringTokenizer(amount, ",");
-                while (st.hasMoreElements()) {
-                    String amountStart = st.nextElement().toString().trim();
-                    amountStart = amountStart.substring(amountStart.toUpperCase().indexOf("=") + 1).trim();
-                    String amountEnd = amountStart.substring(amountStart.indexOf("-") + 1).trim();
-                    if ((amountStart = amountStart.substring(0, amountStart.indexOf("-")).trim()).equals("")) {
-                        amountStart = "0";
-                    }
-                    Properties p = new Properties();
-                    p.put("start", amountStart);
-                    p.put("end", amountEnd);
-                    byteRanges.addElement(p);
-                    if (byteRanges.size() != 1) continue;
-                    this.thisSession.uiPUT("start_resume_loc", amountStart);
-                    start_resume_loc = Long.parseLong(amountStart);
-                }
+            Vector byteRanges = new Vector();
+            if (this.headerLookup.getProperty("RANGE", "").toUpperCase().indexOf("BYTES=") >= 0 && !this.headerLookup.getProperty("RANGE", "").toUpperCase().equals("BYTES=0-") || request.containsKey("range")) {
+                start_resume_loc = this.setRange(request, start_resume_loc, byteRanges);
             }
             if (header0.toUpperCase().startsWith("GET ") || header0.toUpperCase().startsWith("HEAD ")) {
                 this.thisSession.runPlugin("check_path", null);
-                if (this.pwd().endsWith("/") && this.pwd().toLowerCase().indexOf("crushftp.jnlp") < 0 && !headersOnly) {
+                if (this.pwd().endsWith("/") && !headersOnly) {
                     action = "serve dir";
                 } else {
                     action = "serve file";
@@ -1440,6 +1472,28 @@ public class ServerSessionHTTP {
                 }
                 this.parsePostArguments(http_boundary, this.http_len_max, true, req_id);
             }
+            if (this.headerLookup.containsKey("X-AMZ-DATE")) {
+                Properties result;
+                request.put("header0", header0);
+                this.thisSession.user.put("root_dir", SessionCrush.getRootDir(domain, this.thisSession.uVFS, this.thisSession.user, false, false));
+                if (this.headerLookup.containsKey("EXPECT")) {
+                    request.put("expect", this.headerLookup.get("EXPECT"));
+                }
+                if (!(result = this.sss3.process(request)).getProperty("action", "").equals("")) {
+                    boolean ok;
+                    action = result.getProperty("action");
+                    this.cd(result.getProperty("path"));
+                    user_dir = initial_current_dir = result.getProperty("path");
+                    Properties item = (Properties)result.remove("item");
+                    boolean bl2 = ok = this.thisSession.check_access_privs(this.pwd(), "RETR") && Common.filter_check("D", Common.last(this.pwd()), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter")) && Common.filter_check("F", Common.last(this.pwd()), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter"));
+                    if (ok && item != null) {
+                        otherFile = new VRL(item.getProperty("url"));
+                    }
+                }
+                if (header0.toUpperCase().startsWith("GET ") && this.headerLookup.getProperty("RANGE", "").toUpperCase().indexOf("BYTES=") >= 0 && !this.headerLookup.getProperty("RANGE", "").toUpperCase().equals("BYTES=0-")) {
+                    start_resume_loc = this.setRange(request, start_resume_loc, byteRanges);
+                }
+            }
             if (!this.ssa.processItems(request, byteRanges, req_id)) {
                 if (action.equals("propfind") && webDavOK) {
                     if (this.ssd == null) {
@@ -1598,17 +1652,41 @@ public class ServerSessionHTTP {
         }
     }
 
+    private long setRange(Properties request, long start_resume_loc, Vector byteRanges) {
+        String amount = String.valueOf(this.headerLookup.getProperty("RANGE", "").toUpperCase()) + ",";
+        if (request.containsKey("range")) {
+            amount = request.getProperty("range");
+        }
+        StringTokenizer st = new StringTokenizer(amount, ",");
+        while (st.hasMoreElements()) {
+            String amountStart = st.nextElement().toString().trim();
+            amountStart = amountStart.substring(amountStart.toUpperCase().indexOf("=") + 1).trim();
+            String amountEnd = amountStart.substring(amountStart.indexOf("-") + 1).trim();
+            if ((amountStart = amountStart.substring(0, amountStart.indexOf("-")).trim()).equals("")) {
+                amountStart = "0";
+            }
+            Properties p = new Properties();
+            p.put("start", amountStart);
+            p.put("end", amountEnd);
+            byteRanges.addElement(p);
+            if (byteRanges.size() != 1) continue;
+            this.thisSession.uiPUT("start_resume_loc", amountStart);
+            start_resume_loc = Long.parseLong(amountStart);
+        }
+        return start_resume_loc;
+    }
+
     /*
      * Unable to fully structure code
      */
     public void doServeFile(VRL otherFile, Vector headers, String ifnonematch, boolean headersOnly, Properties request, Vector byteRanges) throws Exception {
-        block126: {
-            block129: {
-                block128: {
-                    block127: {
-                        block124: {
-                            block125: {
-                                if (otherFile != null) break block125;
+        block116: {
+            block119: {
+                block118: {
+                    block117: {
+                        block114: {
+                            block115: {
+                                if (otherFile != null) break block115;
                                 if (this.pwd().indexOf("/:filetree") >= 0 && ServerStatus.BG("allow_filetree")) {
                                     this.retr.data_os = this.original_os;
                                     this.retr.httpDownload = true;
@@ -1658,7 +1736,7 @@ public class ServerSessionHTTP {
                                     this.write_command_http("");
                                     this.write_command_http(html404);
                                 }
-                                break block126;
+                                break block116;
                             }
                             this.thisSession.uiPUT("the_command", "RETR");
                             if (ServerStatus.SG("default_logo").equals("logo.gif")) {
@@ -1728,46 +1806,6 @@ public class ServerSessionHTTP {
                                     }
                                 } else if (otherFile.getName().equalsIgnoreCase("CUSTOM.CSS")) {
                                     htmlData = String.valueOf(htmlData) + this.thisSession.SG("css");
-                                }
-                                if (this.SG("site").indexOf("(SITE_WEBFTPPROXY)") >= 0) {
-                                    proxyInfo = "<script defer=\"true\">\r\nvar whitelist = new Array();\r\n";
-                                    whitelist = new Vector<Properties>();
-                                    whitelistval = new Vector<String>();
-                                    proxyRules = ServerStatus.VG("proxyRules");
-                                    x = 0;
-                                    while (x < proxyRules.size()) {
-                                        pp = (Properties)proxyRules.elementAt(x);
-                                        part1 = ServerStatus.thisObj.change_vars_to_values(pp.getProperty("criteria1"), this.thisSession);
-                                        if ((com.crushftp.client.Common.do_search(part1, part2 = ServerStatus.thisObj.change_vars_to_values(pp.getProperty("criteria2"), this.thisSession), false, 0) || com.crushftp.client.Common.do_search(part2, part1, false, 0)) && pp.getProperty("condition").equals("=")) {
-                                            val = String.valueOf(pp.getProperty("protocol")) + "://" + pp.getProperty("host") + ":" + pp.getProperty("port");
-                                            if (pp.getProperty("host").indexOf("*") < 0) {
-                                                whitelistval.addElement(val);
-                                                whitelist.addElement(pp);
-                                            }
-                                        } else if (!com.crushftp.client.Common.do_search(part1, part2, false, 0) && !com.crushftp.client.Common.do_search(part2, part1, false, 0) && pp.getProperty("condition").equals("!=")) {
-                                            val = String.valueOf(pp.getProperty("protocol")) + "://" + pp.getProperty("host") + ":" + pp.getProperty("port");
-                                            if (pp.getProperty("host").indexOf("*") < 0) {
-                                                whitelistval.addElement(val);
-                                                whitelist.addElement(pp);
-                                            }
-                                        } else if (part1.equals("1") && part2.equals("2")) {
-                                            pp.getProperty("condition").equals("=");
-                                        }
-                                        ++x;
-                                    }
-                                    x = 0;
-                                    while (x < whitelist.size()) {
-                                        pp = (Properties)whitelist.elementAt(x);
-                                        proxyInfo = String.valueOf(proxyInfo) + "whitelist[" + x + "] = new Object();\r\n";
-                                        proxyInfo = String.valueOf(proxyInfo) + "whitelist[" + x + "].proxyName = \"" + pp.getProperty("proxyName") + "\";\r\n";
-                                        proxyInfo = String.valueOf(proxyInfo) + "whitelist[" + x + "].protocol = \"" + pp.getProperty("protocol") + "\";\r\n";
-                                        proxyInfo = String.valueOf(proxyInfo) + "whitelist[" + x + "].host = \"" + pp.getProperty("host") + "\";\r\n";
-                                        proxyInfo = String.valueOf(proxyInfo) + "whitelist[" + x + "].port = \"" + pp.getProperty("port") + "\";\r\n";
-                                        ++x;
-                                    }
-                                    proxyInfo = String.valueOf(proxyInfo) + "var siteprivs = \"" + this.SG("site") + "\";\r\n";
-                                    proxyInfo = String.valueOf(proxyInfo) + "</script>\r\n";
-                                    htmlData = Common.replace_str(htmlData, "<!-- PROXY_INFO --!>", proxyInfo);
                                 }
                                 if (this.thisSession.BG("WebServerSSI") && com.crushftp.client.Common.mimes.getProperty(ext, "").toUpperCase().endsWith("/HTML")) {
                                     depth = 0;
@@ -1850,7 +1888,7 @@ public class ServerSessionHTTP {
                                         }
                                         Log.log("SERVER", 1, e);
                                         c = this.thisSession.uVFS.releaseClient(c);
-                                        break block124;
+                                        break block114;
                                     }
                                 }
                                 catch (Throwable replacer) {
@@ -1874,10 +1912,10 @@ public class ServerSessionHTTP {
                                 ++x;
                             }
                         }
-                        if (otherFile.getName().equalsIgnoreCase("crushftp.jnlp") || htmlData.length() > 0) {
+                        if (otherFile.getPath().toUpperCase().indexOf("/WEBINTERFACE/") < 0 && this.thisSession.BG("WebServerMode")) {
                             checkOK = false;
                         }
-                        if (!checkOK) break block127;
+                        if (!checkOK) break block117;
                         validSecs = 30;
                         if ((otherFile.getPath().toUpperCase().indexOf("/WEBINTERFACE/") >= 0 || this.thisSession.BG("WebServerMode")) && (otherFile.getName().toUpperCase().endsWith(".GIF") || otherFile.getName().toUpperCase().endsWith(".PNG") || otherFile.getName().toUpperCase().endsWith(".JPG") || otherFile.getName().toUpperCase().endsWith(".CSS") || otherFile.getName().toUpperCase().endsWith(".XSL") || otherFile.getName().toUpperCase().endsWith(".JS") || otherFile.getName().toUpperCase().endsWith(".ICO") || otherFile.getName().toUpperCase().endsWith(".HTML"))) {
                             validSecs = 3000;
@@ -1893,7 +1931,7 @@ public class ServerSessionHTTP {
                         this.write_command_http("ETag: " + Long.parseLong(stat.getProperty("modified", String.valueOf(System.currentTimeMillis()))));
                         this.write_command_http("Content-Length: 0");
                         this.write_command_http("");
-                        break block126;
+                        break block116;
                     }
                     if (byteRanges.size() == 1 && htmlData.length() == 0 && stat != null && Long.parseLong(((Properties)byteRanges.elementAt(0)).getProperty("start", "0")) > Long.parseLong(stat.getProperty("size"))) {
                         this.write_command_http("HTTP/1.1 416 Invalid start location");
@@ -1908,6 +1946,9 @@ public class ServerSessionHTTP {
                         this.write_command_http("HTTP/1.1 200 OK");
                     }
                     this.write_standard_headers();
+                    if (otherFile.getPath().toUpperCase().indexOf("/WEBINTERFACE/") < 0 && this.thisSession.BG("WebServerMode")) {
+                        this.write_command_http("Cache-Control: no-store");
+                    }
                     byteRangeBoundary = Common.makeBoundary();
                     contentType = com.crushftp.client.Common.mimes.getProperty(ext, "");
                     web_customizations = (Vector)this.thisSession.user.get("web_customizations");
@@ -1957,9 +1998,6 @@ public class ServerSessionHTTP {
                     if (headersOnly) {
                         this.write_command_http("Pragma: no-cache");
                     }
-                    if (otherFile.getName().equalsIgnoreCase("crushftp.jnlp") || htmlData.length() > 0) {
-                        this.write_command_http("Cache-Control: post-check=1,pre-check=1");
-                    }
                     quickWrite = false;
                     if (htmlData.length() > 0) {
                         quickWrite = true;
@@ -1974,16 +2012,16 @@ public class ServerSessionHTTP {
                         }
                         ++x;
                     }
-                    if (!zipDownload || !otherFile.getName().toUpperCase().endsWith(".ZIP")) break block128;
+                    if (!zipDownload || !otherFile.getName().toUpperCase().endsWith(".ZIP")) break block118;
                     Common.startMultiThreadZipper(this.thisSession.uVFS, this.retr, this.pwd(), 5000, false, new Vector<E>());
                     this.done = true;
-                    break block129;
+                    break block119;
                 }
                 content_length = 0L;
                 try {
                     content_length = Long.parseLong(stat.getProperty("size"));
                 }
-                catch (Exception var23_62) {
+                catch (Exception var23_54) {
                     // empty catch block
                 }
                 if (ServerStatus.BG("fileEncryption")) ** GOTO lbl-1000
@@ -2165,9 +2203,66 @@ public class ServerSessionHTTP {
      * Lifted jumps to return sites
      */
     public void loginCheckHeaderAuth() throws Exception {
+        String user_pass;
         if (this.thisSession.uiBG("user_logged_in") && !this.thisSession.uiSG("user_name").equalsIgnoreCase("anonymous") && !this.thisSession.uiSG("user_name").equalsIgnoreCase("") && this.thisSession.user != null || !this.headerLookup.containsKey("Authorization".toUpperCase()) && !this.headerLookup.containsKey("Proxy-Authorization".toUpperCase()) && !this.headerLookup.containsKey("as2-to".toUpperCase())) return;
         String authorization = "";
-        if (this.headerLookup.containsKey("Authorization".toUpperCase())) {
+        if (this.headerLookup.containsKey("Authorization".toUpperCase()) && this.headerLookup.getProperty("Authorization".toUpperCase()).trim().startsWith("AWS4-HMAC")) {
+            String region;
+            String s3_username = this.headerLookup.getProperty("Authorization".toUpperCase()).trim();
+            s3_username = s3_username.substring(s3_username.indexOf("=") + 1);
+            s3_username = s3_username.substring(0, s3_username.indexOf("/"));
+            user_pass = null;
+            String user_name = s3_username;
+            boolean lookup_user_pass = true;
+            if (s3_username.indexOf("~") >= 0) {
+                user_pass = user_name.substring(user_name.indexOf("~") + 1);
+                user_name = user_name.substring(0, user_name.indexOf("~"));
+                lookup_user_pass = false;
+            }
+            String params = this.headers.elementAt(0).toString();
+            params = params.substring(params.indexOf(" ") + 1, params.lastIndexOf(" "));
+            VRL s3_vrl = new VRL("https://127.0.0.1:8443" + params);
+            String region_host = s3_vrl.getHost().toLowerCase();
+            String region_name = "";
+            if (s3_vrl.getPort() != 443) {
+                region_host = String.valueOf(s3_vrl.getHost().toLowerCase()) + ":" + s3_vrl.getPort();
+            }
+            if ((region = region_host).contains(":")) {
+                region = region.substring(0, region.indexOf(":"));
+            }
+            region_name = region.substring(3).substring(0, region.substring(3).indexOf("."));
+            if (this.thisSession.login_user_pass(lookup_user_pass, false, user_name, lookup_user_pass ? "" : user_pass)) {
+                if (lookup_user_pass) {
+                    user_pass = com.crushftp.client.Common.encryptDecrypt(this.thisSession.user.getProperty("password"), false);
+                }
+                Properties config = new Properties();
+                boolean remove_double_encoding = false;
+                SimpleDateFormat yyyyMMddtHHmmssZ = new SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", Locale.US);
+                if (!yyyyMMddtHHmmssZ.getTimeZone().getID().equals("GMT")) {
+                    yyyyMMddtHHmmssZ.setTimeZone(TimeZone.getTimeZone("GMT"));
+                }
+                String verb = this.headers.elementAt(0).toString();
+                verb = verb.substring(0, verb.indexOf(" "));
+                Properties headerLookup_lower = new Properties();
+                Enumeration<Object> keys = this.headerLookup.keys();
+                String signed_headers = this.headerLookup.getProperty("Authorization".toUpperCase()).trim().substring(this.headerLookup.getProperty("Authorization".toUpperCase()).trim().indexOf("SignedHeaders"));
+                signed_headers = String.valueOf(signed_headers.substring(signed_headers.indexOf("=") + 1, signed_headers.indexOf(","))) + ";";
+                while (keys.hasMoreElements()) {
+                    String key = keys.nextElement().toString();
+                    if (signed_headers.indexOf(String.valueOf(key.toLowerCase()) + ";") < 0) continue;
+                    headerLookup_lower.put(key.toLowerCase(), this.headerLookup.getProperty(key));
+                }
+                Date date = new Date();
+                if (this.headerLookup.getProperty("DATE") != null) {
+                    date = this.sdf_rfc1123.parse(this.headerLookup.getProperty("DATE").trim());
+                } else if (this.headerLookup.getProperty("X-AMZ-DATE") != null) {
+                    date = this.sdf_iso_6801.parse(this.headerLookup.getProperty("X-AMZ-DATE").trim());
+                }
+                String auth_header = S3Client.calculateAmazonSignaturev4(verb, headerLookup_lower, config, s3_vrl, signed_headers, date, true, s3_username, lookup_user_pass ? user_pass : "s3", region_name, region_host, yyyyMMddtHHmmssZ, remove_double_encoding);
+                boolean success = this.headerLookup.getProperty("Authorization".toUpperCase()).trim().replaceAll(" ", "").equals(auth_header.replaceAll(" ", ""));
+                authorization = success || !success && !lookup_user_pass ? String.valueOf(user_name) + ":" + user_pass : ":";
+            }
+        } else if (this.headerLookup.containsKey("Authorization".toUpperCase())) {
             authorization = this.headerLookup.getProperty("Authorization".toUpperCase()).trim();
             authorization = Common.decode64(authorization.substring("Basic".length()).trim());
             this.checkWebDAV(this.thisSession.uiSG("header_user-agent"), true);
@@ -2177,6 +2272,9 @@ public class ServerSessionHTTP {
             authorization = Common.decode64(authorization.substring("Basic".length()).trim());
             this.checkWebDAV(this.thisSession.uiSG("header_user-agent"), true);
         } else if (this.headerLookup.containsKey("as2-to".toUpperCase())) {
+            if (this.headerLookup.getProperty("as2-to".toUpperCase()).trim().indexOf("-_-") < 0 && !ServerStatus.BG("blank_passwords")) {
+                return;
+            }
             authorization = this.headerLookup.getProperty("as2-to".toUpperCase()).trim();
             if ((authorization = Common.replace_str(authorization, "-_-", ":")).indexOf(":") < 0) {
                 authorization = String.valueOf(authorization) + ":";
@@ -2186,7 +2284,7 @@ public class ServerSessionHTTP {
             Log.log("HTTP_SERVER", 0, "Authentication as AS2 user:" + authorization.substring(0, authorization.indexOf(":")));
         }
         String user_name = authorization.substring(0, authorization.indexOf(":"));
-        String user_pass = authorization.substring(authorization.indexOf(":") + 1);
+        user_pass = authorization.substring(authorization.indexOf(":") + 1);
         this.thisSession.uiPUT("current_password", user_pass);
         this.thisSession.uiPUT("user_name", user_name);
         if (ServerStatus.BG("username_uppercase")) {
@@ -2209,6 +2307,7 @@ public class ServerSessionHTTP {
         }
         boolean good = this.thisSession.login_user_pass(false, true, user_name, user_pass);
         this.setupSession();
+        this.thisSession.uiPUT("webdav_login", "true");
         if (good) {
             this.thisSession.uiPUT("user_name", user_name);
             this.thisSession.uiPUT("current_password", user_pass);
@@ -2265,12 +2364,12 @@ public class ServerSessionHTTP {
         if (needClientAuth && this.thisSession.uiBG("secure")) {
             String subject = "";
             try {
-                subject = ((SSLSocket)this.sock).getSession().getPeerCertificateChain()[0].getSubjectDN().toString();
+                subject = ((X509Certificate)((SSLSocket)this.sock).getSession().getPeerCertificates()[0]).getSubjectDN().toString();
                 Log.log("SERVER", 0, "ClientAuth:Subject=" + subject);
             }
             catch (Exception e) {
                 Log.log("SERVER", 1, e);
-                Log.log("SERVER", 1, "" + ((SSLSocket)this.sock).getSession().getPeerCertificateChain()[0]);
+                Log.log("SERVER", 1, "" + (X509Certificate)((SSLSocket)this.sock).getSession().getPeerCertificates()[0]);
             }
             String certUsername = subject.substring(subject.indexOf("CN=") + 3).trim();
             if (certUsername.indexOf(",") >= 0) {
@@ -2376,22 +2475,22 @@ public class ServerSessionHTTP {
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
-    public Properties getStorOutputStream(String user_dir, long start_resume_loc, boolean random_access, Properties metaInfo) throws Exception {
+    public static Properties getStorOutputStream(SessionCrush thisSession, String user_dir, long start_resume_loc, boolean random_access, Properties metaInfo) throws Exception {
         Properties active;
         STOR_handler stor = null;
-        Vector vector = this.thisSession.stor_files_pool_free;
+        Vector vector = thisSession.stor_files_pool_free;
         synchronized (vector) {
-            stor = this.thisSession.stor_files_pool_free.size() > 0 ? (STOR_handler)this.thisSession.stor_files_pool_free.remove(0) : new STOR_handler();
+            stor = thisSession.stor_files_pool_free.size() > 0 ? (STOR_handler)thisSession.stor_files_pool_free.remove(0) : new STOR_handler();
         }
         stor.wait_for_parent_free = true;
-        this.thisSession.stor_files_pool_used.addElement(stor);
-        stor.setThreadName(String.valueOf(this.thisSession.uiSG("user_name")) + ":(" + this.thisSession.uiSG("user_number") + "_" + this.sock.getPort() + ")-" + this.thisSession.uiSG("user_ip") + " (stor)");
-        if (this.thisSession.uiSG("user_protocol_proxy").equalsIgnoreCase("FTP")) {
+        thisSession.stor_files_pool_used.addElement(stor);
+        stor.setThreadName(String.valueOf(thisSession.uiSG("user_name")) + ":(" + thisSession.uiSG("user_number") + "_)-" + thisSession.uiSG("user_ip") + " (stor)");
+        if (thisSession.uiSG("user_protocol_proxy").equalsIgnoreCase("FTP")) {
             stor.block_ftp_fix = true;
         }
         stor.active2 = active = new Properties();
-        Socket local_s = Common.getSTORSocket(this.thisSession, stor, "", true, user_dir, random_access, start_resume_loc, metaInfo);
-        local_s.setSoTimeout((this.thisSession.IG("max_idle_time") <= 0 ? 60 : this.thisSession.IG("max_idle_time")) * 1000 * 60);
+        Socket local_s = Common.getSTORSocket(thisSession, stor, "", true, user_dir, random_access, start_resume_loc, metaInfo, true);
+        local_s.setSoTimeout((thisSession.IG("max_idle_time") <= 0 ? 60 : thisSession.IG("max_idle_time")) * 1000 * 60);
         int loops = 0;
         while (loops++ < 10000 && (active.getProperty("streamOpenStatus", "").equals("STOPPED") || active.getProperty("streamOpenStatus", "").equals("PENDING") || active.getProperty("streamOpenStatus", "").equals("CLOSED"))) {
             Thread.sleep(loops < 100 ? loops : 100);
@@ -2406,19 +2505,19 @@ public class ServerSessionHTTP {
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
-    public Properties getRetrInputStream(String user_dir, long start_resume_loc, Properties metaInfo) throws Exception {
+    public static Properties getRetrInputStream(SessionCrush thisSession, String user_dir, long start_resume_loc, Properties metaInfo) throws Exception {
         Properties active;
         RETR_handler retr = null;
-        Vector vector = this.thisSession.retr_files_pool_free;
+        Vector vector = thisSession.retr_files_pool_free;
         synchronized (vector) {
-            retr = this.thisSession.retr_files_pool_free.size() > 0 ? (RETR_handler)this.thisSession.retr_files_pool_free.remove(0) : new RETR_handler();
+            retr = thisSession.retr_files_pool_free.size() > 0 ? (RETR_handler)thisSession.retr_files_pool_free.remove(0) : new RETR_handler();
         }
-        this.thisSession.retr_files_pool_used.addElement(retr);
-        retr.setThreadName(String.valueOf(this.thisSession.uiSG("user_name")) + ":(" + this.thisSession.uiSG("user_number") + "_" + this.sock.getPort() + ")-" + this.thisSession.uiSG("user_ip") + " (retr)");
+        thisSession.retr_files_pool_used.addElement(retr);
+        retr.setThreadName(String.valueOf(thisSession.uiSG("user_name")) + ":(" + thisSession.uiSG("user_number") + ")-" + thisSession.uiSG("user_ip") + " (retr)");
         retr.active2 = active = new Properties();
-        this.thisSession.uiPUT("current_dir", user_dir);
-        Socket local_s = Common.getRETRSocket(this.thisSession, retr, start_resume_loc, "", true);
-        local_s.setSoTimeout((this.thisSession.IG("max_idle_time") <= 0 ? 60 : this.thisSession.IG("max_idle_time")) * 1000 * 60);
+        thisSession.uiPUT("current_dir", user_dir);
+        Socket local_s = Common.getRETRSocket(thisSession, retr, start_resume_loc, "", true, true);
+        local_s.setSoTimeout((thisSession.IG("max_idle_time") <= 0 ? 60 : thisSession.IG("max_idle_time")) * 1000 * 60);
         int loops = 0;
         while (loops++ < 10000 && (active.getProperty("streamOpenStatus", "").equals("STOPPED") || active.getProperty("streamOpenStatus", "").equals("PENDING") || active.getProperty("streamOpenStatus", "").equals("CLOSED"))) {
             Thread.sleep(loops < 100 ? loops : 100);
@@ -2435,6 +2534,14 @@ public class ServerSessionHTTP {
         boolean ok = false;
         if (this.thisSession.check_access_privs(user_dir, "STOR") && Common.filter_check("U", Common.last(user_dir), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter")) && Common.filter_check("F", Common.last(user_dir), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter"))) {
             ok = true;
+        }
+        if (this.headerLookup.getProperty("EXPECT", "").equalsIgnoreCase("100-continue")) {
+            if (!ok) {
+                return "";
+            }
+            this.write_command_http("HTTP/1.1 100 Continue");
+            this.write_command_http("Content-Length: 0");
+            this.write_command_http("");
         }
         STOR_handler stor = null;
         if (ok) {
@@ -2467,7 +2574,7 @@ public class ServerSessionHTTP {
                 return "";
             }
             if (of_stream == null) {
-                Properties result = this.getStorOutputStream(user_dir, start_resume_loc, random_access, metaInfo);
+                Properties result = ServerSessionHTTP.getStorOutputStream(this.thisSession, user_dir, start_resume_loc, random_access, metaInfo);
                 of_stream = (OutputStream)result.remove("out");
                 stor = (STOR_handler)result.remove("stor");
                 active = (Properties)result.get("active");
@@ -2498,13 +2605,22 @@ public class ServerSessionHTTP {
                         of_stream.write(b, 0, bytes_read);
                     }
                     of_stream.flush();
+                    this.thisSession.uiPUT("last_upload_error", "");
                 }
                 catch (IOException e) {
                     if (Log.log("SERVER", 2, "")) {
                         Log.log("HTTP_SERVER", 2, "Write data error:  bufferSize=" + this.bufferSize + " content_length=" + content_length + " connectionClose=" + connectionClose + " chunked=" + this.chunked + " error=" + e);
                     }
+                    if (stor != null) {
+                        Log.log("HTTP_SERVER", 1, stor.stop_message);
+                    }
+                    if (stor != null) {
+                        this.thisSession.uiPUT("last_upload_error", stor.stop_message);
+                    }
                     Log.log("HTTP_SERVER", 1, e);
-                    stor.inError = true;
+                    if (stor != null) {
+                        stor.inError = true;
+                    }
                     this.done = true;
                 }
             }
@@ -2538,10 +2654,15 @@ public class ServerSessionHTTP {
                 Log.log("HTTP_SERVER", 2, "Stor handler check complete: active: " + active.getProperty("active", "") + " stream status: " + active.getProperty("streamOpenStatus", ""));
             }
         } else {
+            this.done = true;
             if (!Common.filter_check("U", Common.last(user_dir), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter")) || !Common.filter_check("F", Common.last(user_dir), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter"))) {
                 this.thisSession.add_log_formatted("550 STOR error: Upload attempt was rejected because the block matching names! File name :" + Common.last(user_dir) + " Filters :" + ServerStatus.SG("filename_filters_str"), "STOR");
             }
-            this.get_raw_http_command((int)content_length);
+            if (content_length > 0x100000L) {
+                this.get_raw_http_command(0x100000);
+            } else {
+                this.get_raw_http_command((int)content_length);
+            }
         }
         if (stor != null) {
             Log.log("HTTP_SERVER", 2, "Stor error check: " + stor.inError + " stop message: " + stor.stop_message);
@@ -2553,7 +2674,7 @@ public class ServerSessionHTTP {
         String md5_str = "";
         if (stor != null) {
             if (ok) {
-                md5_str = stor.getLastMd5().toLowerCase();
+                md5_str = stor.getLastMd5Path(user_dir).toLowerCase();
                 if (md5_str.length() < 32) {
                     md5_str = "0" + md5_str;
                 }
@@ -2680,6 +2801,9 @@ public class ServerSessionHTTP {
             if (data_log.indexOf("<password>") >= 0 && data_log.indexOf("</password>") >= 0) {
                 data_log = String.valueOf(data_log.substring(0, data_log.indexOf("<password>") + "<password>".length())) + "*******" + data_log.substring(data_log.indexOf("</password>"));
             }
+            if (data_log.indexOf("&p=") >= 0) {
+                data_log = String.valueOf(data_log.substring(0, data_log.indexOf("&p=") + 3)) + "*******" + (data_log.indexOf("&", data_log.indexOf("&p=") + 1) > 0 ? data_log.substring(data_log.indexOf("&", data_log.indexOf("&p=") + 1)) : "");
+            }
             if (data_log.indexOf("current_password") >= 0) {
                 data_log = String.valueOf(data_log.substring(0, data_log.indexOf(":") + 1)) + "*******";
             }
@@ -2689,11 +2813,11 @@ public class ServerSessionHTTP {
             if (data_lower.indexOf("authorization: basic ") >= 0) {
                 data_log = String.valueOf(data_log.substring(0, data_log.indexOf(":") + 1)) + "*******";
             }
-            if (data_lower.startsWith("cache-control") || data_lower.startsWith("content-type") || data_lower.startsWith("date") || data_lower.startsWith("server") || data_lower.startsWith("p3p") || data_lower.startsWith("keep-alive") || data_lower.startsWith("connection") || data_lower.startsWith("content-type") || data_lower.startsWith("access-control") || data_lower.startsWith("x-ua-com") || data_lower.startsWith("accept-ranges") || data_lower.startsWith("etag") || data_lower.startsWith("pragma") || data_lower.startsWith("strict-transport")) {
+            if (data_lower.startsWith("cache-control") || data_lower.startsWith("content-type") || data_lower.startsWith("date") || data_lower.startsWith("server") || data_lower.startsWith("p3p") || data_lower.startsWith("keep-alive") || data_lower.startsWith("connection") || data_lower.startsWith("content-type") || data_lower.startsWith("access-control") || data_lower.startsWith("x-ua-com") || data_lower.startsWith("accept-ranges") || data_lower.startsWith("etag") || data_lower.startsWith("pragma") || data_lower.startsWith("strict-transport") || data_lower.startsWith("content-security-policy") || data_lower.startsWith("referrer-policy") || data_lower.startsWith("x-content-type-options") || data_lower.startsWith("x-xss-protection")) {
                 if (ServerStatus.IG("log_debug_level") >= 3) {
                     this.thisSession.add_log("[" + this.server_item.getProperty("serverType", "ftp") + ":" + this.thisSession.uiSG("user_number") + "_" + this.sock.getPort() + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *" + data.trim() + "*", "POST");
                 }
-            } else if (data_lower.startsWith("X-PROXY_USER_PORT".toLowerCase()) || data_lower.startsWith("X-PROXY_BIND_IP".toLowerCase()) || data_lower.startsWith("X-Frame".toLowerCase()) || data_lower.startsWith("Last-Modified".toLowerCase())) {
+            } else if (data_lower.startsWith("x-proxy_user_port") || data_lower.startsWith("x-proxy_bind_ip") || data_lower.startsWith("x-frame") || data_lower.startsWith("last-modified")) {
                 if (ServerStatus.IG("log_debug_level") >= 2) {
                     this.thisSession.add_log("[" + this.server_item.getProperty("serverType", "ftp") + ":" + this.thisSession.uiSG("user_number") + "_" + this.sock.getPort() + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *" + data.trim() + "*", "POST");
                 }
@@ -2833,6 +2957,9 @@ public class ServerSessionHTTP {
         synchronized (object) {
             SessionCrush existing = (SessionCrush)SharedSession.find("crushftp.sessions").get(this.thisSession.getId());
             if (existing == null) {
+                if (Log.log("SERVER", 2, "")) {
+                    Log.log("SERVER", 2, "Adding http session:" + this.thisSession.getId());
+                }
                 SharedSession.find("crushftp.sessions").put(this.thisSession.getId(), this.thisSession);
             } else {
                 if (existing.session_socks == null) {
@@ -2897,15 +3024,6 @@ public class ServerSessionHTTP {
             this.write_command_http("Access-Control-Allow-Credentials: true");
             this.write_command_http("Access-Control-Max-Age: 600");
             this.write_command_http("Access-Control-Allow-Methods: GET,POST,OPTIONS,PUT,PROPFIND,DELETE,MKCOL,MOVE,COPY,HEAD,PROPPATCH,LOCK,UNLOCK,ACL,TR");
-        }
-        if (!ServerStatus.SG("Strict-Transport-Security").equals("") && this.thisSession.uiBG("secure")) {
-            this.write_command_http("Strict-Transport-Security: " + ServerStatus.SG("Strict-Transport-Security"));
-        }
-        if (!ServerStatus.SG("Content-Security-Policy").equals("")) {
-            this.write_command_http("Content-Security-Policy: " + ServerStatus.SG("Content-Security-Policy"));
-        }
-        if (!ServerStatus.SG("X-Frame-Options").equals("")) {
-            this.write_command_http("X-Frame-Options: " + ServerStatus.SG("X-Frame-Options"));
         }
         if (this.done) {
             this.write_command_http("Connection: close", log, true);
@@ -3178,6 +3296,7 @@ public class ServerSessionHTTP {
         Vector<String> logData = new Vector<String>();
         STOR_handler stor_shared = null;
         this.start_idle_timer(-30);
+        String stor_path = "null";
         try {
             while (!this.done) {
                 if (boundary.equals("")) {
@@ -3252,7 +3371,7 @@ public class ServerSessionHTTP {
                     if (data.indexOf("filename") >= 0 && allow_file) {
                         this.stop_idle_timer();
                         String session_id = this.thisSession.getId();
-                        if (ServerStatus.BG("csrf") && ("," + ServerStatus.SG("whitelist_web_commands") + ",").indexOf("," + globalItems.getProperty("command") + ",") < 0 && this.thisSession.user_info.getProperty("authorization_header", "false").equals("false") && !globalItems.getProperty("c2f", "").equalsIgnoreCase(session_id.substring(session_id.length() - 4)) && !globalItems.getProperty("c2f", "").equalsIgnoreCase(ServerStatus.thisObj.common_code.decode_pass(this.thisSession.user.getProperty("password")))) {
+                        if (ServerStatus.BG("csrf") && ("," + ServerStatus.SG("whitelist_web_commands") + ",").indexOf("," + globalItems.getProperty("command") + ",") < 0 && this.thisSession.user_info.getProperty("authorization_header", "false").equals("false") && !globalItems.getProperty("c2f", "").equals(session_id.substring(session_id.length() - 4)) && !globalItems.getProperty("c2f", "").equals(ServerStatus.thisObj.common_code.decode_pass(this.thisSession.user.getProperty("password")))) {
                             this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
                             if (lastUploadName != null && activeUpload != null) {
                                 activeUpload.put(String.valueOf(lastUploadName), String.valueOf(LOC.G("ERROR")) + ": FAILURE:Access Denied. (c2f)");
@@ -3305,13 +3424,14 @@ public class ServerSessionHTTP {
                             activeUpload.put(lastUploadName, "PROGRESS:" + len + "/" + speed_cheat_len + ";" + Common.url_encode(upload_item));
                         }
                         boolean ok = false;
+                        stor_path = String.valueOf(this.pwd()) + upload_item;
                         if (!globalItems.getProperty("uploadPath", "").equals("")) {
                             this.setupCurrentDir(globalItems.getProperty("uploadPath", ""));
                             this.thisSession.uiPUT("the_command_data", "");
                             this.thisSession.do_MKD(true, this.pwd());
                         }
                         this.thisSession.uiPUT("start_resume_loc", globalItems.getProperty("start_resume_loc", "0"));
-                        Properties dir_item = this.thisSession.uVFS.get_item(String.valueOf(this.pwd()) + upload_item);
+                        Properties dir_item = this.thisSession.uVFS.get_item(stor_path);
                         boolean file_filter = true;
                         boolean dir_filter = true;
                         if (dir_item != null && dir_item.getProperty("type").equalsIgnoreCase("FILE") && !Common.filter_check("F", String.valueOf(dir_item.getProperty("name")) + (dir_item.getProperty("type").equalsIgnoreCase("DIR") && !dir_item.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter"))) {
@@ -3320,11 +3440,11 @@ public class ServerSessionHTTP {
                         if (dir_item != null && dir_item.getProperty("type").equalsIgnoreCase("DIR") && !Common.filter_check("DIR", String.valueOf(dir_item.getProperty("name")) + (dir_item.getProperty("type").equalsIgnoreCase("DIR") && !dir_item.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter"))) {
                             dir_filter = false;
                         }
-                        if (this.thisSession.check_access_privs(String.valueOf(this.pwd()) + upload_item, "STOR") && Common.filter_check("U", Common.last(String.valueOf(this.pwd()) + upload_item), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter")) && file_filter && dir_filter && (dir_item == null || dir_item.getProperty("type").equalsIgnoreCase("file") || dir_item.getProperty("simple", "").equalsIgnoreCase("true"))) {
+                        if (this.thisSession.check_access_privs(stor_path, "STOR") && Common.filter_check("U", Common.last(stor_path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter")) && file_filter && dir_filter && (dir_item == null || dir_item.getProperty("type").equalsIgnoreCase("file") || dir_item.getProperty("simple", "").equalsIgnoreCase("true"))) {
                             ok = true;
                         } else {
-                            if (!(Common.filter_check("U", Common.last(String.valueOf(this.pwd()) + upload_item), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter")) && file_filter && dir_filter)) {
-                                this.thisSession.add_log_formatted("550 STOR error: Upload attempt was rejected because the block matching names! File name :" + Common.last(String.valueOf(this.pwd()) + upload_item) + " Filters :" + ServerStatus.SG("filename_filters_str"), "STOR");
+                            if (!(Common.filter_check("U", Common.last(stor_path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.SG("file_filter")) && file_filter && dir_filter)) {
+                                this.thisSession.add_log_formatted("550 STOR error: Upload attempt was rejected because the block matching names! File name :" + Common.last(stor_path) + " Filters :" + ServerStatus.SG("filename_filters_str"), "STOR");
                             }
                             activeUpload.put(lastUploadName, String.valueOf(LOC.G("ERROR")) + ": " + LOC.G("Access denied. (You do not have permission or the file extension is not allowed.)"));
                         }
@@ -3339,7 +3459,7 @@ public class ServerSessionHTTP {
                             if (max_len > 0L) {
                                 this.thisSession.uiPUT("file_length", String.valueOf(max_len - len));
                             }
-                            Properties result = this.getStorOutputStream(String.valueOf(this.pwd()) + upload_item, Long.parseLong(globalItems.getProperty("start_resume_loc", "0")), globalItems.getProperty("randomaccess", "false").equals("true"), metaInfo);
+                            Properties result = ServerSessionHTTP.getStorOutputStream(this.thisSession, stor_path, Long.parseLong(globalItems.getProperty("start_resume_loc", "0")), globalItems.getProperty("randomaccess", "false").equals("true"), metaInfo);
                             OutputStream of_stream = (OutputStream)result.remove("out");
                             stor_shared = (STOR_handler)result.remove("stor");
                             Properties active = (Properties)result.get("active");
@@ -3431,7 +3551,7 @@ public class ServerSessionHTTP {
                                 // empty catch block
                             }
                             try {
-                                Properties newItem1 = this.thisSession.uVFS.get_item(String.valueOf(this.pwd()) + upload_item);
+                                Properties newItem1 = this.thisSession.uVFS.get_item(stor_path);
                                 if (newItem1 != null) {
                                     String previewPath = Common.all_but_last(SearchHandler.getPreviewPath(newItem1.getProperty("url"), "1", 1)).trim();
                                     if (globalItems.getProperty("the_action2", "").equals("changeIcon")) {
@@ -3448,7 +3568,7 @@ public class ServerSessionHTTP {
                                             }
                                             ++x2;
                                         }
-                                        this.cd(String.valueOf(this.pwd()) + upload_item);
+                                        this.cd(stor_path);
                                         this.thisSession.uiPUT("the_command", "DELE");
                                         this.thisSession.uiPUT("the_command_data", this.pwd());
                                         this.thisSession.do_DELE(false, this.pwd());
@@ -3534,7 +3654,7 @@ public class ServerSessionHTTP {
             this.stop_idle_timer();
         }
         if (stor_shared != null) {
-            String md5_str = stor_shared.getLastMd5().toLowerCase();
+            String md5_str = stor_shared.getLastMd5Path(stor_path).toLowerCase();
             if (md5_str.length() < 32) {
                 md5_str = "0" + md5_str;
             }
@@ -3570,11 +3690,11 @@ public class ServerSessionHTTP {
             this.thisSession = (SessionCrush)SharedSession.find("crushftp.sessions").get(CrushAuth);
             this.writeCookieAuth = false;
         }
-        Properties html5_transfers = (Properties)this.thisSession.get("html5_downloads");
-        Properties transfer_lock = null;
+        Properties html5_transfers = ServerStatus.siPG("html5_transfers");
+        WebTransfer transfer_lock = null;
         int x = 0;
         while (x < 200 && transfer_lock == null) {
-            transfer_lock = (Properties)html5_transfers.get(transfer_key.split("~")[0]);
+            transfer_lock = (WebTransfer)html5_transfers.get(String.valueOf(this.thisSession.getId()) + "_" + transfer_key.split("~")[0]);
             if (transfer_lock != null) break;
             Thread.sleep(x < 100 ? x : 100);
             ++x;
@@ -3582,28 +3702,30 @@ public class ServerSessionHTTP {
         if (transfer_lock == null) {
             throw new Exception("No open file found for transfer_id:" + transfer_key);
         }
-        if (transfer_lock.getProperty("status", "").startsWith("ERROR:")) {
-            throw new Exception(transfer_lock.getProperty("status", ""));
+        if (transfer_lock.getVal("status", "").startsWith("ERROR:")) {
+            throw new Exception(transfer_lock.getVal("status", ""));
         }
         int chunk_num = Integer.parseInt(this.headerLookup.getProperty("X-TRANSFERSEGMENT", transfer_key.split("~")[1]));
+        Thread.currentThread().setName("HTML5Download:" + transfer_lock.getVal("transfer_path") + ":" + transfer_lock.getVal("transfer_id") + ":num=" + chunk_num + ":pending=" + transfer_lock.getBytes() + ":transfer_lock_size=" + transfer_lock.getChunkCount() + ":current_num=" + transfer_lock.getVal("current_num", "0") + " WAITING FOR CHUNK");
         int x2 = 0;
-        while (x2 < 200 && !transfer_lock.containsKey("total_chunks")) {
-            if (transfer_lock.containsKey(String.valueOf(chunk_num))) break;
+        while (x2 < 200 && !transfer_lock.hasObj("total_chunks")) {
+            if (transfer_lock.hasChunk(String.valueOf(chunk_num))) break;
             Thread.sleep(x2 < 100 ? x2 : 100);
             ++x2;
         }
-        if (transfer_lock.containsKey(String.valueOf(chunk_num))) {
-            if (Log.log("HTTP_SERVER", 2, "")) {
-                Log.log("HTTP_SERVER", 2, "Download segment SUCCESS request:id=" + transfer_lock.getProperty("transfer_id") + ":num=" + chunk_num + ":pending=" + transfer_lock.getProperty("pending_bytes", "0") + ":transfer_lock_size=" + transfer_lock.size() + ":current_num=" + transfer_lock.getProperty("current_num", "0"));
-            }
+        if (transfer_lock.hasChunk(String.valueOf(chunk_num))) {
             int bytes_read = 0;
             byte[] b = null;
-            Properties properties = transfer_lock;
-            synchronized (properties) {
-                Properties chunk = (Properties)transfer_lock.remove(String.valueOf(chunk_num));
+            long time = 0L;
+            WebTransfer webTransfer = transfer_lock;
+            synchronized (webTransfer) {
+                Properties chunk = (Properties)transfer_lock.removeChunk(String.valueOf(chunk_num));
+                time = Long.parseLong(chunk.getProperty("time"));
                 bytes_read = Integer.parseInt(chunk.getProperty("bytes_read"));
                 b = (byte[])chunk.remove("b");
-                transfer_lock.put("pending_bytes", String.valueOf(Long.parseLong(transfer_lock.getProperty("pending_bytes", "0")) - (long)bytes_read));
+            }
+            if (Log.log("HTTP_SERVER", 2, "")) {
+                Log.log("HTTP_SERVER", 2, "Download segment STARTED request:id=" + transfer_lock.getVal("transfer_id") + ":num=" + chunk_num + ":pending=" + transfer_lock.getBytes() + ":transfer_lock_size=" + transfer_lock.getChunkCount() + ":current_num=" + transfer_lock.getVal("current_num", "0") + " chunk_age=" + (System.currentTimeMillis() - time) + "ms");
             }
             this.write_command_http("HTTP/1.1 200 OK");
             this.write_standard_headers();
@@ -3612,9 +3734,12 @@ public class ServerSessionHTTP {
             this.original_os.write(b, 0, bytes_read);
             this.original_os.flush();
             this.thread_killer_item.last_activity = System.currentTimeMillis();
-        } else if (transfer_lock.containsKey("total_chunks") && chunk_num > Integer.parseInt(transfer_lock.getProperty("total_chunks"))) {
             if (Log.log("HTTP_SERVER", 2, "")) {
-                Log.log("HTTP_SERVER", 2, "Download completed with SUCCESS request:id=" + transfer_lock.getProperty("transfer_id") + ":num=" + chunk_num + ":pending=" + transfer_lock.getProperty("pending_bytes", "0") + ":transfer_lock_size=" + transfer_lock.size() + ":current_num=" + transfer_lock.getProperty("current_num", "0"));
+                Log.log("HTTP_SERVER", 2, "Download segment ENDED request:id=" + transfer_lock.getVal("transfer_id") + ":num=" + chunk_num + ":pending=" + transfer_lock.getBytes() + ":transfer_lock_size=" + transfer_lock.getChunkCount() + ":current_num=" + transfer_lock.getVal("current_num", "0") + " chunk_age=" + (System.currentTimeMillis() - time) + "ms");
+            }
+        } else if (transfer_lock.hasObj("total_chunks") && chunk_num > Integer.parseInt(transfer_lock.getVal("total_chunks"))) {
+            if (Log.log("HTTP_SERVER", 2, "")) {
+                Log.log("HTTP_SERVER", 2, "Download completed with SUCCESS request:id=" + transfer_lock.getVal("transfer_id") + ":num=" + chunk_num + ":pending=" + transfer_lock.getBytes() + ":transfer_lock_size=" + transfer_lock.getChunkCount() + ":current_num=" + transfer_lock.getVal("current_num", "0"));
             }
             this.write_command_http("HTTP/1.1 200 OK");
             this.write_standard_headers();
@@ -3623,8 +3748,8 @@ public class ServerSessionHTTP {
             this.original_os.flush();
             this.thread_killer_item.last_activity = System.currentTimeMillis();
         } else {
-            Log.log("SERVER", 0, "Download segment FAILURE request:id=" + transfer_lock.getProperty("transfer_id") + ":num=" + chunk_num + ":pending=" + transfer_lock.getProperty("pending_bytes", "0") + ":transfer_lock_size=" + transfer_lock.size() + ":current_num=" + transfer_lock.getProperty("current_num", "0"));
-            String msg = "Max chunk:" + transfer_lock.getProperty("current_num", "0");
+            Log.log("SERVER", 0, "Download segment FAILURE request:id=" + transfer_lock.getVal("transfer_id") + ":num=" + chunk_num + ":pending=" + transfer_lock.getBytes() + ":transfer_lock_size=" + transfer_lock.getChunkCount() + ":current_num=" + transfer_lock.getVal("current_num", "0"));
+            String msg = "Max chunk:" + transfer_lock.getVal("current_num", "0");
             this.write_command_http("HTTP/1.1 404 Failure");
             this.write_standard_headers();
             this.write_command_http("Content-Length: " + (msg.length() + 2));
@@ -3633,9 +3758,6 @@ public class ServerSessionHTTP {
         }
     }
 
-    /*
-     * WARNING - Removed try catching itself - possible behaviour change.
-     */
     public void parseUploadSegment(String boundary, long max_len, String req_id, String transfer_key) throws Exception {
         int chunk_num = 0;
         int chunk_size = 0;
@@ -3677,179 +3799,182 @@ public class ServerSessionHTTP {
                 if (data.endsWith(boundary)) {
                     start_new_item = true;
                 }
-                if (data.endsWith(String.valueOf(boundary) + "--")) break;
-                if (start_new_item) {
-                    data = this.get_http_command();
-                    len += (long)(data.length() + 2);
-                    data = data.trim();
-                    if ((data = Common.url_decode(data)).indexOf("CFCD") >= 0) {
-                        if (this.headerLookup.containsKey("X-TRANSFERSEGMENT")) {
-                            String ref_id = "0.0.0.0:" + transfer_key.split("~")[1].trim();
-                            String CrushAuth = ServerStatus.siPG("domain_cross_reference").getProperty(ref_id).split(":")[1];
-                            if (ServerStatus.siPG("domain_cross_reference").containsKey(ref_id)) {
-                                ServerStatus.siPG("domain_cross_reference").put(ref_id, String.valueOf(System.currentTimeMillis()) + ":" + CrushAuth);
-                            }
-                            this.thisSession = (SessionCrush)SharedSession.find("crushftp.sessions").get(CrushAuth);
-                            this.writeCookieAuth = false;
-                        }
-                        Properties html5_transfers = (Properties)this.thisSession.get("html5_uploads");
-                        Properties transfer_lock = null;
-                        int x = 0;
-                        while (x < 200 && transfer_lock == null) {
-                            transfer_lock = (Properties)html5_transfers.get(transfer_key.split("~")[0]);
-                            if (transfer_lock != null) break;
-                            Thread.sleep(x < 100 ? x : 100);
-                            ++x;
-                        }
-                        if (transfer_lock == null) {
-                            throw new Exception("No open file found for transfer_id:" + transfer_key);
-                        }
-                        if (transfer_lock.getProperty("status", "").startsWith("ERROR:")) {
-                            throw new Exception(transfer_lock.getProperty("status", ""));
-                        }
-                        chunk_num = 0;
-                        chunk_size = 0;
-                        if (this.headerLookup.getProperty("X-TRANSFERSEGMENT", "").equals("")) {
-                            chunk_num = Integer.parseInt(transfer_key.split("~")[1]);
-                            chunk_size = Integer.parseInt(transfer_key.split("~")[2]);
-                        } else {
-                            chunk_num = Integer.parseInt(this.headerLookup.getProperty("X-TRANSFERSEGMENT").split("~")[0]);
-                            chunk_size = Integer.parseInt(this.headerLookup.getProperty("X-TRANSFERSEGMENT").split("~")[1]);
-                        }
-                        ByteArrayOutputStream baos = new ByteArrayOutputStream(32768);
+                if (!data.endsWith(String.valueOf(boundary) + "--")) {
+                    if (start_new_item) {
                         data = this.get_http_command();
                         len += (long)(data.length() + 2);
                         data = data.trim();
-                        data = Common.url_decode(data);
-                        this.get_http_command();
-                        len += 2L;
-                        byte[] buffer = new byte[this.bufferSize * 2];
-                        byte[] boundaryBytes = ("\r\n--" + boundary).getBytes();
-                        int len1 = 0;
-                        int len2 = 0;
-                        byte[] b = new byte[this.bufferSize];
-                        int bytes_read = 0;
-                        this.original_is.mark(0);
-                        while (this.findSeparator(boundaryBytes, buffer, len1, len2) < 0 && bytes_read >= 0) {
-                            this.original_is.reset();
-                            if (len1 > 0 && len2 > 0) {
-                                baos.write(buffer, 0, len1);
-                                len += (long)len1;
-                                this.original_is.skip(len1);
-                                this.original_is.mark(b.length * 3);
-                                this.original_is.skip(len2);
-                                System.arraycopy(buffer, this.bufferSize, buffer, 0, len2);
-                                len1 = len2;
-                            } else {
-                                System.arraycopy(buffer, this.bufferSize, buffer, 0, len2);
-                                len1 = len2;
-                                this.original_is.mark(b.length * 3);
-                                this.original_is.skip(bytes_read);
-                            }
-                            bytes_read = this.original_is.read(b);
-                            if (bytes_read > 0) {
-                                System.arraycopy(b, 0, buffer, this.bufferSize, bytes_read);
-                                len2 = bytes_read;
-                            }
-                            if (baos.size() <= 0x1900000) continue;
-                            throw new Exception("Chunk buffer size too big:" + baos.size());
-                        }
-                        if (bytes_read < 0) {
-                            Log.log("HTTP_SERVER", 1, "An error occurred during the transfer:" + transfer_key);
-                        }
-                        this.original_is.reset();
-                        int loc = this.findSeparator(boundaryBytes, buffer, len1, len2);
-                        if (loc == this.bufferSize - 1) {
-                            this.original_is.skip(0L);
-                        } else if (loc < this.bufferSize) {
-                            baos.write(buffer, 0, loc);
-                            len += (long)loc;
-                            this.original_is.skip(loc);
-                        } else {
-                            baos.write(buffer, 0, len1);
-                            len += (long)len1;
-                            baos.write(buffer, this.bufferSize, loc - this.bufferSize);
-                            len += (long)(loc - this.bufferSize);
-                            this.original_is.skip(len1);
-                            this.original_is.skip((long)loc - (long)this.bufferSize);
-                        }
-                        if (chunk_size != baos.size()) {
-                            throw new IOException("FAILURE:Chunk size mismatch.  Expected " + chunk_size + " but got " + baos.size() + " for chunk " + chunk_num + ". " + transfer_key);
-                        }
-                        if (chunk_num >= Integer.parseInt(transfer_lock.getProperty("current_num", "0"))) {
-                            Object object = transfer_lock;
-                            synchronized (object) {
-                                transfer_lock.put("pending_bytes", String.valueOf(Long.parseLong(transfer_lock.getProperty("pending_bytes", "0")) + (long)baos.size()));
-                            }
-                            object = ServerSessionAJAX.pending_bytes_lock;
-                            synchronized (object) {
-                                ServerStatus.siPUT("ram_pending_bytes", String.valueOf(ServerStatus.siLG("ram_pending_bytes") + (long)baos.size()));
-                            }
-                            Object bytes_obj = baos.toByteArray();
-                            if (chunk_num > Integer.parseInt(transfer_lock.getProperty("current_num", "0"))) {
-                                String src_file;
-                                long max_chunks = ServerStatus.LG("max_html5_pending_upload_chunks");
-                                if (Long.parseLong(transfer_lock.getProperty("pending_bytes", "0")) > 0x100000L * (max_chunks * 10L)) {
-                                    if (!ServerStatus.SG("http_chunk_temp_storage").equals("")) {
-                                        String tmp = ServerStatus.SG("http_chunk_temp_storage");
-                                        if (!tmp.endsWith("/")) {
-                                            tmp = String.valueOf(tmp) + "/";
-                                        }
-                                        new File_S(tmp).mkdirs();
-                                        src_file = String.valueOf(tmp) + Common.dots((String.valueOf(transfer_key) + "~").split("~")[0]) + "." + chunk_num + ".tmp";
-                                        Common.streamCopier(new ByteArrayInputStream((byte[])bytes_obj), new FileOutputStream(new File_S(src_file)), false, true, true);
-                                        Log.log("HTTP_SERVER", 2, "Writing chunk_a to disk for offline storage of pending bytes:" + src_file + ":" + ((byte[])bytes_obj).length);
-                                        bytes_obj = src_file;
-                                    } else {
-                                        Log.log("HTTP_SERVER", 1, "WARNING!  Slowing incoming HTTP upload due to slow disk speed (max buffer used).  This HTTP session buffer:" + com.crushftp.client.Common.format_bytes_short(Long.parseLong(transfer_lock.getProperty("pending_bytes", "0"))) + " Total for all HTTP sessions:" + com.crushftp.client.Common.format_bytes_short(ServerStatus.siLG("ram_pending_bytes")) + " max_html5_pending_upload_chunks=" + max_chunks);
-                                        int half_secs = 0;
-                                        while (Long.parseLong(transfer_lock.getProperty("pending_bytes", "0")) > 0x100000L * (max_chunks * 10L) && half_secs++ < 120) {
-                                            Thread.sleep(500L);
-                                        }
-                                    }
-                                } else if ((long)transfer_lock.size() > max_chunks) {
-                                    if (!ServerStatus.SG("http_chunk_temp_storage").equals("")) {
-                                        String tmp = ServerStatus.SG("http_chunk_temp_storage");
-                                        if (!tmp.endsWith("/")) {
-                                            tmp = String.valueOf(tmp) + "/";
-                                        }
-                                        new File_S(tmp).mkdirs();
-                                        src_file = String.valueOf(tmp) + Common.dots((String.valueOf(transfer_key) + "~").split("~")[0]) + "." + chunk_num + ".tmp";
-                                        Common.streamCopier(new ByteArrayInputStream((byte[])bytes_obj), new FileOutputStream(new File_S(src_file)), false, true, true);
-                                        Log.log("HTTP_SERVER", 2, "Writing chunk_b to disk for offline storage of pending bytes:" + src_file + ":" + ((byte[])bytes_obj).length);
-                                        bytes_obj = src_file;
-                                    } else {
-                                        Log.log("HTTP_SERVER", 1, "WARNING!  Slowing incoming HTTP upload due to slow disk speed (max chunk count used).  This HTTP session buffer:" + com.crushftp.client.Common.format_bytes_short(Long.parseLong(transfer_lock.getProperty("pending_bytes", "0"))) + " Total for all HTTP sessions:" + com.crushftp.client.Common.format_bytes_short(ServerStatus.siLG("ram_pending_bytes")) + " max_html5_pending_upload_chunks=" + max_chunks);
-                                        Thread.sleep(1000L);
-                                    }
-                                } else {
-                                    Log.log("HTTP_SERVER", 2, "Writing chunk_c to memory:" + chunk_num + ":" + transfer_key + ":" + ((byte[])bytes_obj).length);
+                        if ((data = Common.url_decode(data)).indexOf("CFCD") >= 0) {
+                            if (this.headerLookup.containsKey("X-TRANSFERSEGMENT")) {
+                                String ref_id = "0.0.0.0:" + transfer_key.split("~")[1].trim();
+                                String CrushAuth = ServerStatus.siPG("domain_cross_reference").getProperty(ref_id).split(":")[1];
+                                if (ServerStatus.siPG("domain_cross_reference").containsKey(ref_id)) {
+                                    ServerStatus.siPG("domain_cross_reference").put(ref_id, String.valueOf(System.currentTimeMillis()) + ":" + CrushAuth);
                                 }
-                            } else {
-                                Log.log("HTTP_SERVER", 2, "Writing chunk_d to memory:" + chunk_num + ":" + transfer_key + ":" + ((byte[])bytes_obj).length);
+                                this.thisSession = (SessionCrush)SharedSession.find("crushftp.sessions").get(CrushAuth);
+                                this.writeCookieAuth = false;
                             }
-                            transfer_lock.put(String.valueOf(chunk_num), bytes_obj);
-                        }
-                    } else {
-                        data = this.get_http_command();
-                        len += (long)(data.length() + 2);
-                        data = data.trim();
-                        data = Common.url_decode(data);
-                        String data_item = "";
-                        dataAlreadyRead = true;
-                        while (true) {
+                            Properties html5_transfers = ServerStatus.siPG("html5_transfers");
+                            WebTransfer transfer_lock = null;
+                            int x = 0;
+                            while (x < 200 && transfer_lock == null) {
+                                transfer_lock = (WebTransfer)html5_transfers.get(String.valueOf(this.thisSession.uiSG("user_protocol")) + this.thisSession.uiSG("user_name") + this.thisSession.uiSG("user_ip") + "_" + transfer_key.split("~")[0]);
+                                if (transfer_lock != null) break;
+                                Thread.sleep(x < 100 ? x : 100);
+                                ++x;
+                            }
+                            boolean no_transfer = false;
+                            if (transfer_lock == null) {
+                                no_transfer = true;
+                            }
+                            if (transfer_lock != null && transfer_lock.getVal("status", "").startsWith("ERROR:")) {
+                                throw new Exception(transfer_lock.getVal("status", ""));
+                            }
+                            chunk_num = 0;
+                            chunk_size = 0;
+                            if (this.headerLookup.getProperty("X-TRANSFERSEGMENT", "").equals("")) {
+                                chunk_num = Integer.parseInt(transfer_key.split("~")[1]);
+                                chunk_size = Integer.parseInt(transfer_key.split("~")[2]);
+                            } else {
+                                chunk_num = Integer.parseInt(this.headerLookup.getProperty("X-TRANSFERSEGMENT").split("~")[0]);
+                                chunk_size = Integer.parseInt(this.headerLookup.getProperty("X-TRANSFERSEGMENT").split("~")[1]);
+                            }
+                            ByteArrayOutputStream baos = new ByteArrayOutputStream(32768);
                             data = this.get_http_command();
                             len += (long)(data.length() + 2);
                             data = data.trim();
-                            if ((data = Common.url_decode(data)).equals("") && emptyDataLoops++ > 500 || data.endsWith(boundary) || data.endsWith(String.valueOf(boundary) + "--") || len >= max_len && max_len > 0L) break;
-                            data_item = String.valueOf(data_item) + data + this.CRLF;
+                            data = Common.url_decode(data);
+                            this.get_http_command();
+                            len += 2L;
+                            byte[] buffer = new byte[this.bufferSize * 2];
+                            byte[] boundaryBytes = ("\r\n--" + boundary).getBytes();
+                            int len1 = 0;
+                            int len2 = 0;
+                            byte[] b = new byte[this.bufferSize];
+                            int bytes_read = 0;
+                            this.original_is.mark(0);
+                            while (this.findSeparator(boundaryBytes, buffer, len1, len2) < 0 && bytes_read >= 0) {
+                                this.original_is.reset();
+                                if (len1 > 0 && len2 > 0) {
+                                    baos.write(buffer, 0, len1);
+                                    len += (long)len1;
+                                    this.original_is.skip(len1);
+                                    this.original_is.mark(b.length * 3);
+                                    this.original_is.skip(len2);
+                                    System.arraycopy(buffer, this.bufferSize, buffer, 0, len2);
+                                    len1 = len2;
+                                } else {
+                                    System.arraycopy(buffer, this.bufferSize, buffer, 0, len2);
+                                    len1 = len2;
+                                    this.original_is.mark(b.length * 3);
+                                    this.original_is.skip(bytes_read);
+                                }
+                                bytes_read = this.original_is.read(b);
+                                if (bytes_read > 0) {
+                                    System.arraycopy(b, 0, buffer, this.bufferSize, bytes_read);
+                                    len2 = bytes_read;
+                                }
+                                if (baos.size() <= 0x1900000) continue;
+                                throw new Exception("ERROR:Chunk buffer size too big:" + baos.size());
+                            }
+                            if (bytes_read < 0) {
+                                Log.log("HTTP_SERVER", 1, "An error occurred during the transfer:" + transfer_key);
+                            }
+                            this.original_is.reset();
+                            int loc = this.findSeparator(boundaryBytes, buffer, len1, len2);
+                            if (loc == this.bufferSize - 1) {
+                                this.original_is.skip(0L);
+                            } else if (loc < this.bufferSize) {
+                                baos.write(buffer, 0, loc);
+                                len += (long)loc;
+                                this.original_is.skip(loc);
+                            } else {
+                                baos.write(buffer, 0, len1);
+                                len += (long)len1;
+                                baos.write(buffer, this.bufferSize, loc - this.bufferSize);
+                                len += (long)(loc - this.bufferSize);
+                                this.original_is.skip(len1);
+                                this.original_is.skip((long)loc - (long)this.bufferSize);
+                            }
+                            if (no_transfer) {
+                                throw new Exception("ERROR:No open file found for transfer_id:" + transfer_key);
+                            }
+                            if (chunk_size != baos.size()) {
+                                throw new IOException("FAILURE:Chunk size mismatch.  Expected " + chunk_size + " but got " + baos.size() + " for chunk " + chunk_num + ". " + transfer_key);
+                            }
+                            if (chunk_num >= Integer.parseInt(transfer_lock.getVal("current_num", "0"))) {
+                                Object bytes_obj = baos.toByteArray();
+                                if (chunk_num > Integer.parseInt(transfer_lock.getVal("current_num", "0"))) {
+                                    String src_file;
+                                    long max_chunks = ServerStatus.LG("max_html5_pending_upload_chunks");
+                                    if (transfer_lock.getBytes() > 0x100000L * (max_chunks * 10L)) {
+                                        if (!ServerStatus.SG("http_chunk_temp_storage").equals("")) {
+                                            String tmp = ServerStatus.SG("http_chunk_temp_storage");
+                                            if (!tmp.endsWith("/")) {
+                                                tmp = String.valueOf(tmp) + "/";
+                                            }
+                                            new File_S(tmp).mkdirs();
+                                            src_file = String.valueOf(tmp) + Common.dots((String.valueOf(transfer_key) + "~").split("~")[0]) + "." + chunk_num + ".tmp";
+                                            Common.streamCopier(new ByteArrayInputStream((byte[])bytes_obj), new FileOutputStream(new File_S(src_file)), false, true, true);
+                                            Log.log("HTTP_SERVER", 2, "Writing chunk_a to disk for offline storage of pending bytes:" + src_file + ":" + ((byte[])bytes_obj).length);
+                                            bytes_obj = src_file;
+                                        } else {
+                                            Log.log("HTTP_SERVER", 1, "WARNING!  Slowing incoming HTTP upload due to slow disk speed (max buffer used).  This HTTP session buffer:" + com.crushftp.client.Common.format_bytes_short(transfer_lock.getBytes()) + " Total for all HTTP sessions:" + com.crushftp.client.Common.format_bytes_short(ServerStatus.siLG("ram_pending_bytes")) + " max_html5_pending_upload_chunks=" + max_chunks);
+                                            int half_secs = 0;
+                                            while (transfer_lock.getBytes() > 0x100000L * (max_chunks * 10L) && half_secs++ < 120) {
+                                                if (transfer_lock.getVal("status", "").indexOf("ERROR:") >= 0) {
+                                                    throw new IOException(transfer_lock.getVal("status", ""));
+                                                }
+                                                Thread.sleep(500L);
+                                            }
+                                        }
+                                    } else if ((long)transfer_lock.getChunkCount() > max_chunks) {
+                                        if (!ServerStatus.SG("http_chunk_temp_storage").equals("")) {
+                                            String tmp = ServerStatus.SG("http_chunk_temp_storage");
+                                            if (!tmp.endsWith("/")) {
+                                                tmp = String.valueOf(tmp) + "/";
+                                            }
+                                            new File_S(tmp).mkdirs();
+                                            src_file = String.valueOf(tmp) + Common.dots((String.valueOf(transfer_key) + "~").split("~")[0]) + "." + chunk_num + ".tmp";
+                                            Common.streamCopier(new ByteArrayInputStream((byte[])bytes_obj), new FileOutputStream(new File_S(src_file)), false, true, true);
+                                            Log.log("HTTP_SERVER", 2, "Writing chunk_b to disk for offline storage of pending bytes:" + src_file + ":" + ((byte[])bytes_obj).length);
+                                            bytes_obj = src_file;
+                                        } else {
+                                            Log.log("HTTP_SERVER", 1, "WARNING!  Slowing incoming HTTP upload due to slow disk speed (max chunk count used).  This HTTP session buffer:" + com.crushftp.client.Common.format_bytes_short(transfer_lock.getBytes()) + " Total for all HTTP sessions:" + com.crushftp.client.Common.format_bytes_short(ServerStatus.siLG("ram_pending_bytes")) + " max_html5_pending_upload_chunks=" + max_chunks);
+                                            Thread.sleep(1000L);
+                                        }
+                                    } else {
+                                        Log.log("HTTP_SERVER", 2, "Writing chunk_c to memory:" + chunk_num + ":" + transfer_key + ":" + ((byte[])bytes_obj).length);
+                                    }
+                                } else {
+                                    Log.log("HTTP_SERVER", 2, "Writing chunk_d to memory:" + chunk_num + ":" + transfer_key + ":" + ((byte[])bytes_obj).length);
+                                }
+                                if (transfer_lock.getVal("status", "").indexOf("ERROR:") >= 0) {
+                                    throw new IOException(transfer_lock.getVal("status", ""));
+                                }
+                                transfer_lock.addChunk(String.valueOf(chunk_num), bytes_obj);
+                            }
+                        } else {
+                            data = this.get_http_command();
+                            len += (long)(data.length() + 2);
+                            data = data.trim();
+                            data = Common.url_decode(data);
+                            String data_item = "";
+                            dataAlreadyRead = true;
+                            while (true) {
+                                data = this.get_http_command();
+                                len += (long)(data.length() + 2);
+                                data = data.trim();
+                                if ((data = Common.url_decode(data)).equals("") && emptyDataLoops++ > 500 || data.endsWith(boundary) || data.endsWith(String.valueOf(boundary) + "--") || len >= max_len && max_len > 0L) break;
+                                data_item = String.valueOf(data_item) + data + this.CRLF;
+                            }
+                            data_item = data_item.substring(0, data_item.length() - 2);
                         }
-                        data_item = data_item.substring(0, data_item.length() - 2);
+                        start_new_item = false;
                     }
-                    start_new_item = false;
-                }
-                if (len < max_len || max_len <= 0L) {
-                    continue;
+                    if (len < max_len || max_len <= 0L) {
+                        continue;
+                    }
                 }
                 break;
             }
@@ -3857,7 +3982,7 @@ public class ServerSessionHTTP {
         catch (Exception e) {
             Log.log("HTTP_SERVER", 1, "FAILURE:CHUNK_NUM_" + chunk_num);
             Log.log("HTTP_SERVER", 1, e);
-            throw new IOException("CHUNK_NUM_" + chunk_num);
+            throw new IOException("CHUNK_NUM_" + chunk_num + "_" + e);
         }
     }
 

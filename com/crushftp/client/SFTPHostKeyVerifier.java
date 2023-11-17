@@ -1,10 +1,5 @@
 /*
  * Decompiled with CFR 0.152.
- * 
- * Could not load the following classes:
- *  com.maverick.ssh.HostKeyVerification
- *  com.maverick.ssh.SshException
- *  com.maverick.ssh.components.SshPublicKey
  */
 package com.crushftp.client;
 
@@ -45,6 +40,7 @@ implements HostKeyVerification {
      * Enabled unnecessary exception pruning
      * Enabled aggressive exception aggregation
      */
+    @Override
     public boolean verifyHost(String host, SshPublicKey key) throws SshException {
         if (!this.verifyHost) return true;
         if (this.knownHostFile == null) {

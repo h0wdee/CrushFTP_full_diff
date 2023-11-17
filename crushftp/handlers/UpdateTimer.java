@@ -41,7 +41,11 @@ implements Runnable {
                         Log.log("SERVER", 0, e);
                     }
                     this_thread = Thread.currentThread();
-                    this_thread.setName(String.valueOf(this_thread.getName().substring(0, this_thread.getName().lastIndexOf(":") + 1)) + (new Date().getTime() - start_time));
+                    if (this_thread.getName().length() > 300) {
+                        this_thread.setName(String.valueOf(this_thread.getName().substring(0, this_thread.getName().indexOf(":") + 1)) + (new Date().getTime() - start_time));
+                    } else {
+                        this_thread.setName(String.valueOf(this_thread.getName().substring(0, this_thread.getName().lastIndexOf(":") + 1)) + (new Date().getTime() - start_time));
+                    }
                     Thread.sleep(this.sleep_interval);
                 }
             }

@@ -49,35 +49,43 @@ public class UserIPs {
             sql_ips = ReportTools.fixSqlUsernames(sql_ips, usernames);
             try (DVector allIps = ServerStatus.thisObj.statTools.executeSqlQuery(sql_ips, new Object[]{mmddyyyy.parse(params.getProperty("startDate", "1/1/2000 00:00:00")), mmddyyyy.parse(params.getProperty("endDate", "1/1/2100 00:00:00"))}, false, params);){
                 Properties uniques = new Properties();
+                int anonym_index = -1;
                 int x = 0;
                 while (x < ips.size()) {
                     Properties p = (Properties)ips.elementAt(x);
-                    int xx = 0;
-                    while (xx < allIps.size()) {
-                        Properties pp = (Properties)allIps.elementAt(xx);
-                        if (params.getProperty("reverseDNS", "").equals("true")) {
-                            try {
-                                String key = pp.getProperty("ip");
-                                if (lookupCache.getProperty(pp.getProperty("ip"), "").equals("")) {
-                                    InetAddress addr = InetAddress.getByName(key);
-                                    lookupCache.put(key, addr.getHostName());
+                    if (params.getProperty("excludeAnonymous", "true").equals("true") && p.getProperty("username", "").equals("anonymous")) {
+                        anonym_index = x;
+                    } else {
+                        int xx = 0;
+                        while (xx < allIps.size()) {
+                            Properties pp = (Properties)allIps.elementAt(xx);
+                            if (params.getProperty("reverseDNS", "").equals("true")) {
+                                try {
+                                    String key = pp.getProperty("ip");
+                                    if (lookupCache.getProperty(pp.getProperty("ip"), "").equals("")) {
+                                        InetAddress addr = InetAddress.getByName(key);
+                                        lookupCache.put(key, addr.getHostName());
+                                    }
+                                    key = String.valueOf(key) + " (" + lookupCache.getProperty(key) + ")";
+                                    p.put("ip", key);
                                 }
-                                key = String.valueOf(key) + " (" + lookupCache.getProperty(key) + ")";
-                                p.put("ip", key);
+                                catch (Exception exception) {
+                                    // empty catch block
+                                }
                             }
-                            catch (Exception exception) {
-                                // empty catch block
+                            if (pp.getProperty("ip") != null) {
+                                if (pp.getProperty("username", "").equals(p.getProperty("username", "")) && pp.getProperty("count") != null) {
+                                    p.put(pp.getProperty("ip"), pp.getProperty("count"));
+                                }
+                                uniques.put(pp.getProperty("ip"), "");
                             }
+                            ++xx;
                         }
-                        if (pp.getProperty("ip") != null) {
-                            if (pp.getProperty("username", "").equals(p.getProperty("username", "")) && pp.getProperty("count") != null) {
-                                p.put(pp.getProperty("ip"), pp.getProperty("count"));
-                            }
-                            uniques.put(pp.getProperty("ip"), "");
-                        }
-                        ++xx;
                     }
                     ++x;
+                }
+                if (anonym_index >= 0) {
+                    ips.remove(anonym_index);
                 }
                 Properties results = new Properties();
                 results.put("unique_ip_count", String.valueOf(uniques.size()));

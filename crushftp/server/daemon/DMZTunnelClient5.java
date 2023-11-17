@@ -30,14 +30,16 @@ public class DMZTunnelClient5 {
     boolean running = true;
     long last_write = 0L;
     Vector transfer_socket_pool = new Vector();
-    Properties dmz5_info = new Properties();
+    public Properties dmz5_info = new Properties();
     StringBuffer die_now = new StringBuffer();
+    DMZServerCommon dmz = null;
 
     public DMZTunnelClient5(String dest_server_ip, int dest_server_port, String name, byte[] tunnel_id2, StringBuffer die_now, DMZServerCommon dmz) {
         this.dest_server_ip = dest_server_ip;
         this.dest_server_port = dest_server_port;
         this.dmz5_info.put("in", "0");
         this.dmz5_info.put("out", "0");
+        this.dmz = dmz;
     }
 
     public void go() throws Exception {
@@ -99,12 +101,16 @@ public class DMZTunnelClient5 {
 
     public void close() {
         this.setStopped();
-        Common.log("DMZ", 0, new Exception("DMZ5:Stopped by close()."));
+        Exception e_stop = new Exception("DMZ5:Stopped by close().");
+        Common.log("DMZ", 0, e_stop);
         try {
             this.ss.close();
         }
         catch (Exception exception) {
             // empty catch block
+        }
+        if (this.dmz != null) {
+            this.dmz.triggerPortErrorAlert(e_stop);
         }
     }
 
@@ -127,7 +133,7 @@ public class DMZTunnelClient5 {
             }
             try {
                 chunked_socket_tmp.writeChunk(null, 0, 0, 3);
-                if (chunked_socket_tmp.readChunk().getProperty("c").equals("4")) {
+                if (chunked_socket_tmp.readChunk(2000).getProperty("c").equals("4")) {
                     return chunked_socket_tmp;
                 }
             }
@@ -272,7 +278,7 @@ public class DMZTunnelClient5 {
                                         out = new BufferedOutputStream(local.getOutputStream());
                                         while (DMZTunnelClient5.this.isRunning()) {
                                             Thread.currentThread().setName("DMZ5:route_socket_data_from_dmz:" + id + ":started=" + new Date(started) + " socklocal=" + local + " total_bytes=" + total_bytes + " last_read_time:" + time);
-                                            Properties p = remote.readChunk();
+                                            Properties p = remote.readChunk(300000);
                                             byte[] b = (byte[])p.get("b");
                                             int command = Integer.parseInt(p.getProperty("c"));
                                             long id2 = Long.parseLong(p.getProperty("id"));

@@ -32,7 +32,7 @@ import java.util.Vector;
 public class ReportTools {
     public String writeReport(String filename, String dir, Properties status, Properties config, Object reportItem, Properties server_settings, boolean export, String reportName, Properties params) {
         String s;
-        block16: {
+        block18: {
             s = "";
             String startDate = config.getProperty("startDate", "1/1/2000 00:00:00");
             String endDate = config.getProperty("endDate", "1/1/2100 00:00:00");
@@ -42,6 +42,7 @@ public class ReportTools {
             if (endDate.indexOf("/") > 0 && endDate.indexOf(":") < 0) {
                 config.setProperty("endDate", String.valueOf(endDate) + " 00:00:00");
             }
+            config.put("log_date_format", ServerStatus.SG("log_date_format"));
             StringBuffer sb = new StringBuffer();
             Method generate = reportItem.getClass().getMethod("generate", new Properties().getClass(), new Properties().getClass(), new StringBuffer().getClass(), new Properties().getClass());
             Object[] objectArray = new Object[4];
@@ -54,7 +55,7 @@ public class ReportTools {
                 status.put("report_text", s);
                 s = "";
             }
-            if (!status.getProperty("report_empty", "true").equals("true") || filename != null && filename.toUpperCase().indexOf("EMAIL") < 0) break block16;
+            if (!status.getProperty("report_empty", "true").equals("true") || filename != null && filename.toUpperCase().indexOf("EMAIL") < 0) break block18;
             return "";
         }
         try {
@@ -93,6 +94,9 @@ public class ReportTools {
                     crushftp.handlers.Common.streamCopier(new FileInputStream(new File_S(String.valueOf(System.getProperty("crushftp.web")) + "WebInterface/CrushReports/standalone_report.html")), baos, false, true, true);
                     html_template = new String(baos.toByteArray(), "UTF8");
                     int xml_loc = html_template.indexOf("//REPORT_XML");
+                    if (status.getProperty("report_empty", "true").equals("true")) {
+                        s = status.getProperty("report_text", "");
+                    }
                     html_template = String.valueOf(html_template.substring(0, xml_loc)) + s + html_template.substring(xml_loc + "//REPORT_XML".length());
                 }
                 RandomAccessFile out = new RandomAccessFile(new File_S(String.valueOf(dir) + filename), "rw");
@@ -101,6 +105,9 @@ public class ReportTools {
                 out.close();
                 crushftp.handlers.Common.updateOSXInfo(String.valueOf(dir) + filename);
             } else {
+                if (status.getProperty("report_empty", "true").equals("true")) {
+                    s = status.getProperty("report_text", "");
+                }
                 RandomAccessFile out = new RandomAccessFile(new File_S(String.valueOf(dir) + filename), "rw");
                 out.setLength(0L);
                 out.write(s.getBytes("UTF8"));
@@ -263,54 +270,58 @@ public class ReportTools {
                         if (!(p.get(key) instanceof String) || key.startsWith("schedule_")) continue;
                         config.put("schedule_" + key, p.get(key));
                     }
-                    class Runner
-                    implements Runnable {
-                        Properties server_settings;
-                        Properties server_info;
-                        Properties params;
+                    if (!p.getProperty("report_enabled", "true").equals("false")) {
+                        class Runner
+                        implements Runnable {
+                            Properties server_settings;
+                            Properties server_info;
+                            Properties params;
 
-                        public Runner(Properties server_settings, Properties server_info, Properties params) {
-                            this.server_settings = server_settings;
-                            this.server_info = server_info;
-                            this.params = params;
-                        }
+                            public Runner(Properties server_settings, Properties server_info, Properties params) {
+                                this.server_settings = server_settings;
+                                this.server_info = server_info;
+                                this.params = params;
+                            }
 
-                        @Override
-                        public void run() {
-                            Properties config = (Properties)this.params.get("config");
-                            config = (Properties)config.clone();
-                            Vector v = new Vector((Vector)config.get("usernames"));
-                            config.put("usernames", v);
-                            config.put("server_settings", this.server_settings);
-                            config.put("server_info", this.server_info);
-                            Properties status = new Properties();
-                            String dir = this.params.getProperty("reportFolder");
-                            String filename = this.params.getProperty("reportFilename");
-                            filename = ReportTools.this.replaceVars(filename, this.params, config);
-                            if (dir.indexOf(LOC.G("pick the folder")) >= 0 || dir.length() == 0 || filename.length() == 0) {
-                                return;
+                            @Override
+                            public void run() {
+                                Properties config = (Properties)this.params.get("config");
+                                config = (Properties)config.clone();
+                                Vector v = new Vector((Vector)config.get("usernames"));
+                                config.put("usernames", v);
+                                config.put("server_settings", this.server_settings);
+                                config.put("server_info", this.server_info);
+                                Properties status = new Properties();
+                                String dir = this.params.getProperty("reportFolder");
+                                String filename = this.params.getProperty("reportFilename");
+                                filename = ReportTools.this.replaceVars(filename, this.params, config);
+                                if (dir.indexOf(LOC.G("pick the folder")) >= 0 || dir.length() == 0 || filename.length() == 0) {
+                                    return;
+                                }
+                                if (!dir.endsWith("/")) {
+                                    dir = String.valueOf(dir) + "/";
+                                }
+                                if (this.params.getProperty("reportOverwrite").equals("false") && new File_S(String.valueOf(dir) + filename).exists()) {
+                                    return;
+                                }
+                                config.put("export", this.params.getProperty("export", ""));
+                                if (config.get("usernames") == null) {
+                                    config.put("usernames", new Vector());
+                                }
+                                ReportTools.this.writeReport(filename, dir, status, config, ReportTools.this.getReportItem(config.getProperty("reportName"), this.server_settings), this.server_settings, this.params.getProperty("export", "").equals("true"), config.getProperty("reportName"), this.params);
                             }
-                            if (!dir.endsWith("/")) {
-                                dir = String.valueOf(dir) + "/";
-                            }
-                            if (this.params.getProperty("reportOverwrite").equals("false") && new File_S(String.valueOf(dir) + filename).exists()) {
-                                return;
-                            }
-                            config.put("export", this.params.getProperty("export", ""));
-                            if (config.get("usernames") == null) {
-                                config.put("usernames", new Vector());
-                            }
-                            ReportTools.this.writeReport(filename, dir, status, config, ReportTools.this.getReportItem(config.getProperty("reportName"), this.server_settings), this.server_settings, this.params.getProperty("export", "").equals("true"), config.getProperty("reportName"), this.params);
                         }
-                    }
-                    Worker.startWorker(new Runner(server_settings, server_info, p), "report:" + p.getProperty("scheduleName") + ":" + new Date());
-                    Log.log("REPORT", 0, LOC.G("Ran Scheduled Report") + ":" + p.getProperty("scheduleName") + ":" + new Date());
-                    Log.log("REPORT", 1, "Report Config:" + p.toString());
-                    try {
-                        throw new Exception("Who called?");
-                    }
-                    catch (Exception e) {
-                        Log.log("REPORT", 2, e);
+                        Worker.startWorker(new Runner(server_settings, server_info, p), "report:" + p.getProperty("scheduleName") + ":" + new Date());
+                        Log.log("REPORT", 0, "Ran Scheduled Report:" + p.getProperty("scheduleName") + ":" + new Date());
+                        Log.log("REPORT", 1, "Report Config:" + p.toString());
+                        try {
+                            throw new Exception("Who called?");
+                        }
+                        catch (Exception e) {
+                            Log.log("REPORT", 2, e);
+                        }
+                    } else {
+                        Log.log("REPORT", 0, "Skipped Disabled Scheduled Report:" + p.getProperty("scheduleName") + ":" + new Date());
                     }
                 }
             }

@@ -9,12 +9,14 @@ import com.crushftp.client.GenericClient;
 import com.crushftp.client.VRL;
 import com.crushftp.client.Worker;
 import crushftp.gui.LOC;
+import crushftp.handlers.AlertTools;
 import crushftp.handlers.Common;
 import crushftp.handlers.Log;
 import crushftp.handlers.SessionCrush;
 import crushftp.handlers.SharedSession;
 import crushftp.handlers.SharedSessionReplicated;
 import crushftp.handlers.SyncTools;
+import crushftp.handlers.TaskBridge;
 import crushftp.handlers.UserTools;
 import crushftp.server.AdminControls;
 import crushftp.server.As2Msg;
@@ -59,10 +61,10 @@ extends GenericServer {
     int messages_received = 0;
     int messages_sent = 0;
     String singleton_id = Common.makeBoundary();
-    File_S prefs_file = null;
     public static Properties last_prefs_time = new Properties();
     public static transient Object stop_send_prefs = new Object();
     public String last_write_info = "";
+    long last_activity = System.currentTimeMillis();
     long last_ping = System.currentTimeMillis();
     long last_pong = System.currentTimeMillis();
     Socket logging_socket = null;
@@ -70,7 +72,7 @@ extends GenericServer {
     public static int MAX_DMZ_SOCKET_IDLE_TIME = 10000;
     DMZTunnelClient dmz_tunnel_client_d = null;
     DMZTunnelClient dmz_tunnel_client_s = null;
-    DMZTunnelClient5 dmz_tunnel_client_d5 = null;
+    public DMZTunnelClient5 dmz_tunnel_client_d5 = null;
     long last_logging_socket_time = 0L;
     String dmz_related_internal_settings_hash = "";
     Thread current_thread = null;
@@ -256,7 +258,7 @@ extends GenericServer {
             this.busyMessage = "Starting DMZ...";
             this.startSocketConnectors();
             this.dmz_related_internal_settings_hash = this.generateDMZRelatedInternalSettingsHash();
-            this.load_and_send_prefs(false);
+            DMZServerCommon.load_and_send_prefs(false, this.server_item);
             Worker.startWorker(new Runnable(){
 
                 /*
@@ -264,7 +266,7 @@ extends GenericServer {
                  */
                 @Override
                 public void run() {
-                    last_prefs_time.put(DMZServerCommon.this.server_item.getProperty("server_item_name"), String.valueOf(DMZServerCommon.this.prefs_file.lastModified()));
+                    last_prefs_time.put(DMZServerCommon.this.server_item.getProperty("server_item_name"), String.valueOf(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + DMZServerCommon.this.server_item.getProperty("server_item_name") + ".XML").lastModified()));
                     StringBuffer die_now2 = DMZServerCommon.this.die_now;
                     while (die_now2.length() == 0) {
                         Object object = stop_send_prefs;
@@ -275,13 +277,14 @@ extends GenericServer {
                                     DMZServerCommon.this.dmz_related_internal_settings_hash = temp_update_hash;
                                     Thread.sleep(1000L);
                                     Log.log("SERVER", 0, "DMZ related settings change were detected. Save and re-sending to DMZ");
-                                    DMZServerCommon.this.load_and_send_prefs(false);
+                                    DMZServerCommon.load_and_send_prefs(false, DMZServerCommon.this.server_item);
                                 }
+                                File_S prefs_file = new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + DMZServerCommon.this.server_item.getProperty("server_item_name") + ".XML");
                                 long old_time = Long.parseLong(last_prefs_time.getProperty(DMZServerCommon.this.server_item.getProperty("server_item_name", "")));
-                                if (DMZServerCommon.this.prefs_file.lastModified() != old_time) {
+                                if (prefs_file.lastModified() != old_time) {
                                     Thread.sleep(1000L);
-                                    Log.log("SERVER", 0, "DMZ prefs file change detected, re-sending to DMZ:" + DMZServerCommon.this.prefs_file + " Current time:" + DMZServerCommon.this.prefs_file.lastModified() + " Versus old recorded time:" + old_time + " Diff:" + (DMZServerCommon.this.prefs_file.lastModified() - old_time) + "ms");
-                                    DMZServerCommon.this.load_and_send_prefs(false);
+                                    Log.log("SERVER", 0, "DMZ prefs file change detected, re-sending to DMZ:" + prefs_file + " Current time:" + prefs_file.lastModified() + " Versus old recorded time:" + old_time + " Diff:" + (prefs_file.lastModified() - old_time) + "ms");
+                                    DMZServerCommon.load_and_send_prefs(false, DMZServerCommon.this.server_item);
                                 }
                             }
                             catch (Exception exception) {
@@ -296,7 +299,7 @@ extends GenericServer {
                         }
                     }
                 }
-            }, "DMZ prefs.XML file update monitor:" + this.prefs_file);
+            }, "DMZ prefs.XML file update monitor:" + new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + this.server_item.getProperty("server_item_name") + ".XML"));
             if (this.error != null) {
                 throw this.error;
             }
@@ -314,6 +317,7 @@ extends GenericServer {
             long lastToken = 0L;
             StringBuffer die_now2 = this.die_now;
             this.last_ping = System.currentTimeMillis();
+            this.last_activity = System.currentTimeMillis();
             this.last_pong = System.currentTimeMillis();
             while (this.socket_created && die_now2.length() == 0) {
                 if (System.currentTimeMillis() - lastToken > 30000L) {
@@ -324,7 +328,7 @@ extends GenericServer {
                     throw this.error;
                 }
                 Thread.sleep(500L);
-                if (System.currentTimeMillis() - this.last_ping > 10000L) {
+                if (System.currentTimeMillis() - this.last_ping > 4000L) {
                     Properties ping = new Properties();
                     ping.put("id", Common.makeBoundary());
                     ping.put("time", String.valueOf(System.currentTimeMillis()));
@@ -342,6 +346,7 @@ extends GenericServer {
         }
         catch (InterruptedException e) {
             Log.log("DMZ", 0, e);
+            this.triggerPortErrorAlert(e);
             this.die_now.append(System.currentTimeMillis());
         }
         catch (ConnectException e) {
@@ -351,11 +356,13 @@ extends GenericServer {
         }
         catch (SocketException e) {
             Log.log("DMZ", 2, e);
+            this.triggerPortErrorAlert(e);
             this.restart = true;
             this.die_now.append(System.currentTimeMillis());
         }
         catch (Exception e) {
             Log.log("DMZ", 0, e);
+            this.triggerPortErrorAlert(e);
             this.restart = true;
             this.die_now.append(System.currentTimeMillis());
         }
@@ -373,10 +380,14 @@ extends GenericServer {
         return (Properties)dmzResponses.remove(id);
     }
 
-    public void load_and_send_prefs(boolean needSave) throws Exception {
-        this.prefs_file = new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + this.server_item.getProperty("server_item_name") + ".XML");
-        ServerStatus.siPUT("currentFileDate_" + this.server_item.getProperty("server_item_name"), String.valueOf(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + this.server_item.getProperty("server_item_name") + ".XML").lastModified()));
-        Properties instance_server_settings = ServerStatus.thisObj.prefsProvider.loadPrefs(this.server_item.getProperty("server_item_name"));
+    public static void load_and_send_prefs(boolean needSave, Properties server_item) throws Exception {
+        File_S prefs_file = new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + server_item.getProperty("server_item_name") + ".XML");
+        if (!new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + server_item.getProperty("server_item_name") + ".XML").exists()) {
+            Log.log("SERVER", 0, "Cannot start DMZ port, DMZ prefs missing:" + System.getProperty("crushftp.prefs") + "prefs_" + server_item.getProperty("server_item_name") + ".XML");
+            throw new Exception("DMZ Preferneces file missing:" + System.getProperty("crushftp.prefs") + "prefs_" + server_item.getProperty("server_item_name") + ".XML");
+        }
+        ServerStatus.siPUT("currentFileDate_" + server_item.getProperty("server_item_name"), String.valueOf(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + server_item.getProperty("server_item_name") + ".XML").lastModified()));
+        Properties instance_server_settings = ServerStatus.thisObj.prefsProvider.loadPrefs(server_item.getProperty("server_item_name"));
         instance_server_settings.put("registration_name", ServerStatus.SG("registration_name"));
         instance_server_settings.put("registration_email", ServerStatus.SG("registration_email"));
         instance_server_settings.put("registration_code", ServerStatus.SG("registration_code"));
@@ -393,20 +404,23 @@ extends GenericServer {
             needSave = true;
         }
         if (needSave) {
-            Common.writeXMLObject(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + this.server_item.getProperty("server_item_name") + ".XML", (Object)instance_server_settings, "server_prefs");
+            Common.writeXMLObject(String.valueOf(System.getProperty("crushftp.prefs")) + "prefs_" + server_item.getProperty("server_item_name") + ".XML", (Object)instance_server_settings, "server_prefs");
         }
-        last_prefs_time.put(this.server_item.getProperty("server_item_name"), String.valueOf(this.prefs_file.lastModified()));
-        DMZServerCommon.sendFileToMemory(instance_server_settings.getProperty("cert_path", ""), this.server_item.getProperty("server_item_name"));
+        last_prefs_time.put(server_item.getProperty("server_item_name"), String.valueOf(prefs_file.lastModified()));
+        DMZServerCommon.sendFileToMemory(instance_server_settings.getProperty("cert_path", ""), server_item.getProperty("server_item_name"));
         Vector instance_servers = (Vector)instance_server_settings.get("server_list");
         int x = 0;
         while (x < instance_servers.size()) {
-            DMZServerCommon.sendFileToMemory(((Properties)instance_servers.elementAt(x)).getProperty("customKeystore", ""), this.server_item.getProperty("server_item_name"));
-            DMZServerCommon.sendFileToMemory(String.valueOf(((Properties)instance_servers.elementAt(x)).getProperty("customKeystore", "")) + "_trust", this.server_item.getProperty("server_item_name"));
-            DMZServerCommon.sendFileToMemory(((Properties)instance_servers.elementAt(x)).getProperty("ssh_rsa_key", ""), this.server_item.getProperty("server_item_name"));
-            DMZServerCommon.sendFileToMemory(((Properties)instance_servers.elementAt(x)).getProperty("ssh_dsa_key", ""), this.server_item.getProperty("server_item_name"));
+            DMZServerCommon.sendFileToMemory(((Properties)instance_servers.elementAt(x)).getProperty("customKeystore", ""), server_item.getProperty("server_item_name"));
+            DMZServerCommon.sendFileToMemory(String.valueOf(((Properties)instance_servers.elementAt(x)).getProperty("customKeystore", "")) + "_trust", server_item.getProperty("server_item_name"));
+            DMZServerCommon.sendFileToMemory(((Properties)instance_servers.elementAt(x)).getProperty("ssh_rsa_key", ""), server_item.getProperty("server_item_name"));
+            DMZServerCommon.sendFileToMemory(((Properties)instance_servers.elementAt(x)).getProperty("ssh_dsa_key", ""), server_item.getProperty("server_item_name"));
+            DMZServerCommon.sendFileToMemory(((Properties)instance_servers.elementAt(x)).getProperty("ssh_ecdsa_key", ""), server_item.getProperty("server_item_name"));
+            DMZServerCommon.sendFileToMemory(((Properties)instance_servers.elementAt(x)).getProperty("ssh_ed25519_key", ""), server_item.getProperty("server_item_name"));
             ++x;
         }
-        DMZServerCommon.sendCommand(this.server_item.getProperty("server_item_name"), instance_server_settings, "PUT:SERVER_SETTINGS", "");
+        DMZServerCommon.sendCommand(server_item.getProperty("server_item_name"), instance_server_settings, "PUT:SERVER_SETTINGS", "");
+        DMZServerCommon.sendCommand(server_item.getProperty("server_item_name"), new Properties(), "PUT:RELOAD_SSL", "");
     }
 
     private String generateDMZRelatedInternalSettingsHash() throws Exception {
@@ -432,6 +446,10 @@ extends GenericServer {
             log.append(";");
             log.append(String.valueOf(((Properties)instance_servers.elementAt(x)).getProperty("ssh_dsa_key", "")) + "_trust");
             log.append(";");
+            log.append(String.valueOf(((Properties)instance_servers.elementAt(x)).getProperty("ssh_ecdsa_key", "")) + "_trust");
+            log.append(";");
+            log.append(String.valueOf(((Properties)instance_servers.elementAt(x)).getProperty("ssh_ed25519_key", "")) + "_trust");
+            log.append(";");
             ++x;
         }
         return log.toString();
@@ -445,11 +463,22 @@ extends GenericServer {
         SharedSessionReplicated.send("", "anyPassToken", "anyPassToken", UserTools.anyPassTokens.elementAt(0).toString());
     }
 
-    public void processResponse(Properties p) throws Exception {
+    public void processResponse(final Properties p) throws Exception {
         Log.log("DMZ", 2, "READ:" + this.server_item.getProperty("server_item_name") + ":" + p.getProperty("type") + ":" + p.getProperty("id"));
         if (p.getProperty("type").equalsIgnoreCase("RESPONSE")) {
             p.put("received", String.valueOf(System.currentTimeMillis()));
             dmzResponses.put(p.getProperty("id"), p);
+        } else if (p.getProperty("type").equalsIgnoreCase("PUT:SEND_EMAIL")) {
+            final Properties p2 = p;
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    String email_results = TaskBridge.sendEmail(p2.getProperty("to"), p2.getProperty("cc"), p2.getProperty("bcc"), p2.getProperty("from"), p2.getProperty("reply_to"), p2.getProperty("subject"), p2.getProperty("body"), null, null, null);
+                    p2.put("email_results", email_results == null ? "" : email_results);
+                    DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
+                }
+            });
         } else if (p.getProperty("type").equalsIgnoreCase("GET:USER_SSH_KEYS")) {
             final Properties p2 = p;
             Worker.startWorker(new Runnable(){
@@ -537,120 +566,32 @@ extends GenericServer {
 
                 @Override
                 public void run() {
-                    try {
-                        VFS uVFS;
-                        Properties user;
-                        Vector public_keys;
-                        Properties server_item_temp;
-                        block29: {
-                            block28: {
-                                Log.log("HTTP_SERVER", 2, "DMZ GET USER :" + p2.getProperty("username"));
-                                server_item_temp = null;
-                                int x = 0;
-                                while (x < ServerStatus.VG("server_list").size()) {
-                                    Properties si = (Properties)ServerStatus.VG("server_list").elementAt(x);
-                                    if (si.getProperty("serverType").startsWith("HTTP") && si.getProperty("port").equals(String.valueOf(Integer.parseInt(p2.getProperty("preferred_port", "0"))))) {
-                                        Log.log("SERVER", 2, "GET:SOCKET:Prefered port found:" + p2.getProperty("preferred_port", "0") + ":" + si.getProperty("linkedServer"));
-                                        server_item_temp = si;
-                                        break;
-                                    }
-                                    ++x;
-                                }
-                                if (server_item_temp == null) {
-                                    Log.log("SERVER", 2, "GET:SOCKET:Prefered port not found...finding first HTTP(s) item to use..." + p2);
-                                    x = 0;
-                                    while (x < ServerStatus.VG("server_list").size()) {
-                                        server_item_temp = (Properties)ServerStatus.VG("server_list").elementAt(x);
-                                        if (server_item_temp.getProperty("serverType").equals("HTTP") || server_item_temp.getProperty("serverType").equals("HTTPS")) break;
-                                        ++x;
-                                    }
-                                }
-                                if (server_item_temp == null) {
-                                    server_item_temp = DMZServerCommon.this.server_item;
-                                }
-                                public_keys = null;
-                                user = UserTools.ut.getUser(server_item_temp.getProperty("linkedServer", ""), p2.getProperty("username"), true);
-                                uVFS = null;
-                                try {
-                                    uVFS = UserTools.ut.getVFS(server_item_temp.getProperty("linkedServer", ""), p2.getProperty("username"));
-                                }
-                                catch (Exception e) {
-                                    Log.log("SERVER", 0, e);
-                                    user = null;
-                                }
-                                if (user == null && System.getProperty("crushftp.webapplication.enabled", "false").equals("false")) break block28;
-                                if (!ServerStatus.BG("always_validate_plugins_for_dmz_lookup")) break block29;
-                            }
-                            Log.log("SERVER", 2, "GET:SOCKET:Attempting simulated login via plugins...");
-                            SessionCrush tempSession = new SessionCrush(null, 1, "127.0.0.1", 0, "0.0.0.0", server_item_temp.getProperty("linkedServer", ""), server_item_temp);
-                            try {
-                                tempSession.user_info.put("request", p2);
-                                tempSession.user_info.put("no_log_invalid_password", "true");
-                                boolean otp_validation = false;
-                                if (user != null) {
-                                    boolean bl = otp_validation = user.getProperty("otp_auth", "").equals("true") && p2.getProperty("password", "").indexOf(":") >= 0;
-                                }
-                                if (!otp_validation) {
-                                    tempSession.verify_user(p2.getProperty("username"), p2.getProperty("password", String.valueOf(System.currentTimeMillis())), false, false);
-                                }
-                                if (!otp_validation) {
-                                    user = tempSession.user;
-                                }
-                                if (!otp_validation) {
-                                    uVFS = tempSession.uVFS;
-                                }
-                            }
-                            catch (Exception e) {
-                                Log.log("DMZ", 1, e);
-                            }
+                    Log.log("HTTP_SERVER", 2, "DMZ GET USER :" + p2.getProperty("username"));
+                    Properties server_item_temp = null;
+                    int x = 0;
+                    while (x < ServerStatus.VG("server_list").size()) {
+                        Properties si = (Properties)ServerStatus.VG("server_list").elementAt(x);
+                        if (si.getProperty("serverType").startsWith("HTTP") && si.getProperty("port").equals(String.valueOf(Integer.parseInt(p2.getProperty("preferred_port", "0"))))) {
+                            Log.log("SERVER", 2, "GET:SOCKET:Prefered port found:" + p2.getProperty("preferred_port", "0") + ":" + si.getProperty("linkedServer"));
+                            server_item_temp = si;
+                            break;
                         }
-                        if (user != null) {
-                            public_keys = UserTools.buildPublicKeys(p2.getProperty("username"), user, server_item_temp.getProperty("linkedServer", ""));
-                        }
-                        if (user != null) {
-                            DMZServerCommon.sendFileToMemory(user.getProperty("as2EncryptKeystorePath", ""), DMZServerCommon.this.server_item.getProperty("server_item_name", ""));
-                            DMZServerCommon.sendFileToMemory(user.getProperty("as2SignKeystorePath", ""), DMZServerCommon.this.server_item.getProperty("server_item_name", ""));
-                            UserTools.setupVFSLinking(server_item_temp.getProperty("linkedServer", ""), p2.getProperty("username"), uVFS, user);
-                            user.remove("filePublicEncryptionKey");
-                            user.remove("fileEncryptionKey");
-                            user.remove("fileDecryptionKey");
-                            if (user.getProperty("otp_auth", "").equals("true")) {
-                                Properties otp_tokens = (Properties)ServerStatus.thisObj.server_info.get("otp_tokens");
-                                String username = p2.getProperty("username", "");
-                                if (ServerStatus.BG("username_uppercase")) {
-                                    username = username.toUpperCase();
-                                }
-                                if (ServerStatus.BG("lowercase_usernames")) {
-                                    username = username.toLowerCase();
-                                }
-                                Log.log("LOGIN", 1, "DMZ CHALLENGE_OTP : User: " + username + " with Ip: " + p2.getProperty("user_ip", ""));
-                                if (otp_tokens != null && otp_tokens.containsKey(String.valueOf(username) + (p2.getProperty("user_ip", "").equals("") ? "127.0.0.1" : p2.getProperty("user_ip"))) && p2.getProperty("password", "").indexOf(":") >= 0) {
-                                    Properties token = (Properties)otp_tokens.get(String.valueOf(username) + (p2.getProperty("user_ip", "").equals("") ? "127.0.0.1" : p2.getProperty("user_ip")));
-                                    String password = p2.getProperty("password");
-                                    if (password.indexOf(":") >= 0) {
-                                        password = password.substring(password.lastIndexOf(":") + 1);
-                                    }
-                                    if (!user.getProperty("twofactor_secret", "").equals("")) {
-                                        password = "TOTP:" + ServerStatus.thisObj.common_code.decode_pass(user.getProperty("twofactor_secret"));
-                                    }
-                                    if (token.getProperty("token", "").equalsIgnoreCase(password)) {
-                                        Log.log("LOGIN", 1, "DMZ CHALLENGE_OTP : OTP token is valid.");
-                                        user.put("otp_valid", "true");
-                                    } else {
-                                        user.put("otp_valid", "false");
-                                        Log.log("LOGIN", 1, "DMZ CHALLENGE_OTP : OTP invalid.");
-                                    }
-                                }
-                            }
-                            p2.put("public_keys", public_keys);
-                            p2.put("user", user);
-                            p2.put("vfs", uVFS.homes);
-                        }
-                        DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name", ""), p2, "RESPONSE", p2.getProperty("id"));
+                        ++x;
                     }
-                    catch (Exception e) {
-                        Log.log("DMZ", 0, e);
+                    if (server_item_temp == null) {
+                        Log.log("SERVER", 2, "GET:SOCKET:Prefered port not found...finding first HTTP(s) item to use..." + p2);
+                        x = 0;
+                        while (x < ServerStatus.VG("server_list").size()) {
+                            server_item_temp = (Properties)ServerStatus.VG("server_list").elementAt(x);
+                            if (server_item_temp.getProperty("serverType").equals("HTTP") || server_item_temp.getProperty("serverType").equals("HTTPS")) break;
+                            ++x;
+                        }
                     }
+                    if (server_item_temp == null) {
+                        server_item_temp = DMZServerCommon.this.server_item;
+                    }
+                    DMZServerCommon.doGetUser(server_item_temp, p2.getProperty("username"), p2.getProperty("password", String.valueOf(System.currentTimeMillis())), p2.getProperty("user_ip", ""), p2);
+                    DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name", ""), p2, "RESPONSE", p2.getProperty("id"));
                 }
             });
         } else if (p.getProperty("type").equalsIgnoreCase("GET:RESET_TOKEN")) {
@@ -690,7 +631,7 @@ extends GenericServer {
                                 Log.log("HTTP_SERVER", 1, e);
                             }
                         }
-                        String responseText = ServerSessionAJAX.doResetToken(p2.getProperty("reset_username_email"), p2.getProperty("currentURL"), server_item2.getProperty("linkedServer", ""), p2.getProperty("reset_token"), DMZServerCommon.this.singleton_id.equals(p2.getProperty("singleton_id", DMZServerCommon.this.singleton_id)), p2.getProperty("lang", "en"));
+                        String responseText = ServerSessionAJAX.doResetToken(p2.getProperty("reset_host"), p2.getProperty("reset_username_email"), p2.getProperty("currentURL"), server_item2.getProperty("linkedServer", ""), p2.getProperty("reset_token"), DMZServerCommon.this.singleton_id.equals(p2.getProperty("singleton_id", DMZServerCommon.this.singleton_id)), p2.getProperty("lang", "en"));
                         p2.put("responseText", responseText);
                         DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
                     }
@@ -1159,22 +1100,24 @@ extends GenericServer {
                 }
             });
         } else if (p.getProperty("type").equalsIgnoreCase("PUT:AS2MDN")) {
-            final Properties mdnInfo = (Properties)p.get("mdnInfo");
+            final Properties as2_item = (Properties)p.get("as2_item");
+            final Properties mdn_item = (Properties)as2_item.get("mdnInfo");
             Worker.startWorker(new Runnable(){
 
                 @Override
                 public void run() {
-                    As2Msg.mdnResponses.put(mdnInfo.getProperty("Original-Message-ID".toLowerCase()), mdnInfo);
+                    As2Msg.mdnResponses.put(mdn_item.getProperty("Original-Message-ID".toLowerCase()), as2_item);
                     try {
                         Thread.sleep(5000L);
                     }
                     catch (InterruptedException interruptedException) {
                         // empty catch block
                     }
-                    As2Msg.mdnResponses.remove(mdnInfo.getProperty("Original-Message-ID".toLowerCase()));
+                    As2Msg.mdnResponses.remove(as2_item.getProperty("Original-Message-ID".toLowerCase()));
                 }
             });
         } else if (p.getProperty("type").equalsIgnoreCase("PUT:PONG")) {
+            this.last_pong = System.currentTimeMillis();
             Properties pong = (Properties)p.remove("data");
             Log.log("DMZ", 1, "DMZ command queue ping:" + (System.currentTimeMillis() - Long.parseLong(pong.getProperty("time"))) + "ms");
             this.last_pong = System.currentTimeMillis();
@@ -1184,7 +1127,7 @@ extends GenericServer {
 
                 @Override
                 public void run() {
-                    ServerStatus.thisObj.runAlerts(alert_info.getProperty("alert_action"), (Properties)alert_info.get("info"), (Properties)alert_info.get("user_info"), (Properties)alert_info.get("user"), null, (Properties)alert_info.get("alert"), true);
+                    AlertTools.runAlertAction((Properties)alert_info.get("the_alert_p"), (Properties)alert_info.get("info"), alert_info.getProperty("alert_action"), (Properties)alert_info.get("user_info"), null, (Properties)alert_info.get("user"), alert_info.getProperty("from"), alert_info.getProperty("to"), alert_info.getProperty("cc"), alert_info.getProperty("bcc"), alert_info.getProperty("subject"), alert_info.getProperty("body"), alert_info.getProperty("dmz_mode", "").equals("true"), alert_info.getProperty("hours_key"));
                 }
             });
         } else if (p.getProperty("type").equalsIgnoreCase("GET:SYNC")) {
@@ -1212,7 +1155,7 @@ extends GenericServer {
                                 vfs_path = String.valueOf(root_dir) + vfs_path.substring(1);
                             }
                             try {
-                                Vector o = Common.getSyncTableData(p2.getProperty("syncID").toUpperCase(), Long.parseLong(request2.getProperty("lastRID")), request2.getProperty("table"), p2.getProperty("clientid"), vfs_path, uVFS2);
+                                Vector o = Common.getSyncTableData(p2.getProperty("syncID").toUpperCase(), Long.parseLong(request2.getProperty("lastRID")), request2.getProperty("table"), p2.getProperty("clientid"), vfs_path, uVFS2, request2.getProperty("prior_md5s_item_path", ""));
                                 if (o != null) {
                                     p2.put("object_response", o);
                                 }
@@ -1245,14 +1188,14 @@ extends GenericServer {
 
                 @Override
                 public void run() {
-                    String q = "-12345";
+                    String q = "-12345:0";
                     try {
                         SessionCrush thisSession = (SessionCrush)SharedSession.find("crushftp.sessions").get(p2.getProperty("crushAuth"));
                         if (thisSession != null && thisSession.uVFS != null) {
                             String root_dir = SessionCrush.getRootDir(null, thisSession.uVFS, null, true);
                             String the_dir = String.valueOf(root_dir) + p2.getProperty("the_dir").substring(1);
-                            q = String.valueOf(SessionCrush.get_quota(the_dir, thisSession.uVFS, "", new Properties(), null, true));
-                            q = String.valueOf(q) + ":" + SessionCrush.get_quota(the_dir, thisSession.uVFS, "", new Properties(), null, false);
+                            q = String.valueOf(SessionCrush.get_quota(the_dir, thisSession.uVFS, thisSession.user.getProperty("parent_quota_dir"), new Properties(), null, true));
+                            q = String.valueOf(q) + ":" + SessionCrush.get_quota(the_dir, thisSession.uVFS, thisSession.user.getProperty("parent_quota_dir"), new Properties(), null, false);
                         }
                     }
                     catch (Exception e) {
@@ -1275,7 +1218,7 @@ extends GenericServer {
                         if (thisSession != null && thisSession.uVFS != null) {
                             String root_dir = SessionCrush.getRootDir(null, thisSession.uVFS, null, true);
                             String the_dir = String.valueOf(root_dir) + p2.getProperty("the_dir").substring(1);
-                            q = SessionCrush.get_quota_used(the_dir, thisSession.uVFS, "", null);
+                            q = SessionCrush.get_quota_used(the_dir, thisSession.uVFS, thisSession.user.getProperty("parent_quota_dir"), null);
                         }
                     }
                     catch (Exception e) {
@@ -1336,6 +1279,29 @@ extends GenericServer {
                         String response = ServerSessionAJAX.changePassword(request, (String)p2.remove("site"), thisSession);
                         p2.put("object_response", response);
                     }
+                    DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
+                }
+            });
+        } else if (p.getProperty("type").equalsIgnoreCase("PUT:CHANGE_PHONE")) {
+            final Properties p2 = p;
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    p2.put("object_response", "");
+                    String response = "";
+                    try {
+                        SessionCrush thisSession = (SessionCrush)SharedSession.find("crushftp.sessions").get(p2.getProperty("crushAuth"));
+                        if (thisSession != null && thisSession.uVFS != null && p2.containsKey("request") && p2.get("request") != null && p2.get("request") instanceof Properties) {
+                            Properties request = (Properties)p2.get("request");
+                            response = thisSession.change_phone_number(request.getProperty("phone", ""));
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("DMZ", 1, e);
+                        response = "" + e;
+                    }
+                    p2.put("object_response", response);
                     DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
                 }
             });
@@ -1427,7 +1393,30 @@ extends GenericServer {
                     p2.put("response", "");
                     String response = "Success";
                     try {
-                        UserTools.ut.put_in_user(p2.getProperty("linkedServer"), p2.getProperty("username"), "twofactor_secret", ServerStatus.thisObj.common_code.encode_pass(p2.getProperty("generatedKey"), "DES", ""), true, true);
+                        SessionCrush thisSession = (SessionCrush)SharedSession.find("crushftp.sessions").get(p.getProperty("crushAuth"));
+                        if (thisSession != null && thisSession.uVFS != null) {
+                            String twofactor_secret = ServerStatus.thisObj.common_code.encode_pass(p2.getProperty("generatedKey"), "DES", "");
+                            if (ServerStatus.BG("twofactor_secret_auto_otp_enable")) {
+                                Properties p3 = UserTools.ut.getUser(p2.getProperty("linkedServer"), p2.getProperty("username"), false);
+                                if (!p3.getProperty("otp_auth", "").equals("true")) {
+                                    p3.put("otp_auth", "true");
+                                    p3.put("otp_auth_ftp", "true");
+                                    p3.put("otp_auth_ftps", "true");
+                                    p3.put("otp_auth_http", "true");
+                                    p3.put("otp_auth_https", "true");
+                                    p3.put("otp_auth_sftp", "true");
+                                    p3.put("otp_auth_webdav", "true");
+                                    p3.put("otp_token_timeout", ServerStatus.SG("otp_token_timeout"));
+                                    p3.put("twofactor_secret", twofactor_secret);
+                                    UserTools.writeUser(p2.getProperty("linkedServer"), p2.getProperty("username"), p3, true, true);
+                                }
+                            } else {
+                                UserTools.ut.put_in_user(p2.getProperty("linkedServer"), p2.getProperty("username"), "twofactor_secret", twofactor_secret, true, true);
+                            }
+                            thisSession.user.put("twofactor_secret", twofactor_secret);
+                            Log.log("SERVER", 0, "Saving two factor secret to user profile via DMZ:" + p2.getProperty("username"));
+                            ServerStatus.thisObj.runAlerts("twofactor_secret_change", thisSession);
+                        }
                     }
                     catch (Exception e) {
                         response = "" + e;
@@ -1459,6 +1448,112 @@ extends GenericServer {
                     DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
                 }
             });
+        } else if (p.getProperty("type").equalsIgnoreCase("GET:GET_SUBSCRIBE_REVERSE_NOTIFICATION_EVENTS")) {
+            final Properties p2 = p;
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    p2.put("response", "");
+                    String result = "";
+                    try {
+                        String username = p2.getProperty("username", "");
+                        result = UserTools.getSubscribeReverseNotificationEvents(p2.getProperty("serverGroup", ""), username, p2);
+                        p2.put("response", result);
+                    }
+                    catch (Exception e) {
+                        Log.log("DMZ", 1, e);
+                        p2.put("response", "Subscribe Error: " + e);
+                    }
+                    DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
+                }
+            });
+        } else if (p.getProperty("type").equalsIgnoreCase("PUT:SAVE_SUBSCRIBE_REVERSE_NOTIFICATION_EVENTS")) {
+            final Properties p2 = p;
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    p2.put("response", "");
+                    String result = "";
+                    try {
+                        String username = p2.getProperty("username", "");
+                        result = UserTools.saveSubscribeReverseNotificationEvents(p2.getProperty("serverGroup", ""), username, p2);
+                        p2.put("response", result);
+                    }
+                    catch (Exception e) {
+                        Log.log("DMZ", 1, e);
+                        p2.put("response", "Subscribe Error: " + e);
+                    }
+                    DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
+                }
+            });
+        } else if (p.getProperty("type").equalsIgnoreCase("PUT:AGENT_REGISTER")) {
+            final Properties p2 = p;
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    p2.put("response", "");
+                    String result = "";
+                    try {
+                        if (p2.containsKey("request") && p2.get("request") != null && p2.get("request") instanceof Properties) {
+                            Properties request = (Properties)p2.get("request");
+                            result = AdminControls.registerAgent(request, true);
+                            p2.put("response", result);
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("DMZ", 1, e);
+                        p2.put("response", "Subscribe Error: " + e);
+                    }
+                    DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
+                }
+            });
+        } else if (p.getProperty("type").equalsIgnoreCase("GET:AGENT_QUEUE")) {
+            final Properties p2 = p;
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    p2.put("response", "");
+                    Properties result = new Properties();
+                    try {
+                        if (p2.containsKey("request") && p2.get("request") != null && p2.get("request") instanceof Properties) {
+                            Properties request = (Properties)p2.get("request");
+                            result = AdminControls.getActionFromAgentQueue(request, true);
+                            p2.put("response", result);
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("DMZ", 1, e);
+                        p2.put("response", result);
+                    }
+                    DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
+                }
+            });
+        } else if (p.getProperty("type").equalsIgnoreCase("GET:AGENT_RESPONSE")) {
+            final Properties p2 = p;
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    p2.put("response", "");
+                    Properties result = new Properties();
+                    try {
+                        if (p2.containsKey("request") && p2.get("request") != null && p2.get("request") instanceof Properties) {
+                            Properties request = (Properties)p2.get("request");
+                            result = AdminControls.getAgentResponse(request, true);
+                            p2.put("response", result);
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("DMZ", 1, e);
+                        p2.put("response", result);
+                    }
+                    DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), p2, "RESPONSE", p2.getProperty("id"));
+                }
+            });
         }
     }
 
@@ -1483,6 +1578,8 @@ extends GenericServer {
                             while (pending_data_socks.size() >= ServerStatus.IG("dmz_socket_pool_size")) {
                                 logged_idle = 0;
                                 Thread.sleep(100L);
+                                if (DMZServerCommon.this.logging_socket != null || DMZServerCommon.this.logging_socket_ois != null || System.currentTimeMillis() - DMZServerCommon.this.last_logging_socket_time <= 10000L) continue;
+                                if (!ServerStatus.BG("dmz_log_in_internal_server")) continue;
                             }
                             if (pending_data_socks.size() < 10) {
                                 if (++logged_idle < 5) {
@@ -1521,7 +1618,7 @@ extends GenericServer {
                                 }
                                 tempSock.setTcpNoDelay(true);
                                 com.crushftp.client.Common.sockLog(tempSock, "tempSock create.  pending_data_socks size=" + pending_data_socks.size());
-                                if (DMZServerCommon.this.checkLoggingSockneeded(tempSock)) continue;
+                                if (DMZServerCommon.this.checkLoggingSockNeeded(tempSock)) continue;
                                 DMZServerCommon.this.processDataSocket(tempSock, pending_data_socks);
                             }
                             catch (IOException e) {
@@ -1583,22 +1680,24 @@ extends GenericServer {
                                     Thread.currentThread().setName("DMZSender:responseQueue=" + DMZServerCommon.this.responseQueue.size() + " last write len=" + len + "(" + p.getProperty("type") + ") milliseconds=" + (end - start) + ", total millis=" + (System.currentTimeMillis() - start) + " last_write_info:" + DMZServerCommon.this.last_write_info);
                                     DMZServerCommon.this.responseQueue.addElement(p);
                                     ++DMZServerCommon.this.messages_received;
+                                    DMZServerCommon.this.last_activity = System.currentTimeMillis();
                                 }
                             }
                             catch (SocketTimeoutException start) {
                                 // empty catch block
                             }
-                            if (System.currentTimeMillis() - DMZServerCommon.this.last_ping > 10000L) {
+                            if (System.currentTimeMillis() - DMZServerCommon.this.last_activity > 4000L) {
                                 Properties ping = new Properties();
                                 ping.put("id", Common.makeBoundary());
                                 ping.put("time", String.valueOf(System.currentTimeMillis()));
                                 DMZServerCommon.this.last_ping = System.currentTimeMillis();
+                                DMZServerCommon.this.last_activity += 3000L;
                                 DMZServerCommon.sendCommand(DMZServerCommon.this.server_item.getProperty("server_item_name"), ping, "PUT:PING", ping.getProperty("id"));
                             }
-                            if (System.currentTimeMillis() - DMZServerCommon.this.last_ping <= ServerStatus.LG("dmz_pong_timeout") * 1000L) continue;
-                            Log.log("DMZ", 0, "Socket timeout " + ServerStatus.IG("dmz_pong_timeout") + " seconds, firewall killed socket.  last_ping=" + new Date(DMZServerCommon.this.last_ping));
+                            if (System.currentTimeMillis() - DMZServerCommon.this.last_activity <= ServerStatus.LG("dmz_pong_timeout") * 1000L) continue;
+                            Log.log("DMZ", 0, "Socket timeout " + ServerStatus.IG("dmz_pong_timeout") + " seconds, firewall killed socket.  last_activity=" + new Date(DMZServerCommon.this.last_activity));
                             if (Log.log("DMZ", 1, "")) {
-                                com.crushftp.client.Common.sockLog(DMZServerCommon.this.read_sock, com.crushftp.client.Common.dumpStack("1:Socket timeout, firewall killed socket.  last_ping=" + new Date(DMZServerCommon.this.last_ping)));
+                                com.crushftp.client.Common.sockLog(DMZServerCommon.this.read_sock, com.crushftp.client.Common.dumpStack("1:Socket timeout, firewall killed socket.  last_activity=" + new Date(DMZServerCommon.this.last_activity)));
                             }
                             throw new Exception("Socket timeout, firewall killed socket.");
                         }
@@ -1606,6 +1705,7 @@ extends GenericServer {
                     catch (Throwable e) {
                         com.crushftp.client.Common.sockLog(DMZServerCommon.this.read_sock, "Failure with read_socket:" + e);
                         Log.log("DMZ", 0, e);
+                        DMZServerCommon.this.triggerPortErrorAlert(e);
                         try {
                             DMZServerCommon.closeInOutSockRef(DMZServerCommon.this.socks_in_out, DMZServerCommon.this.sock);
                         }
@@ -1746,7 +1846,7 @@ lbl24:
         return r4;
     }
 
-    public boolean checkLoggingSockneeded(final Socket tempSock2) {
+    public boolean checkLoggingSockNeeded(Socket tempSock2) {
         if (this.logging_socket == null && this.logging_socket_ois == null && System.currentTimeMillis() - this.last_logging_socket_time > 10000L) {
             if (ServerStatus.BG("dmz_log_in_internal_server")) {
                 this.last_logging_socket_time = System.currentTimeMillis();
@@ -1764,17 +1864,20 @@ lbl24:
                                 DMZServerCommon.this.logging_socket_ois = new ObjectInputStream(DMZServerCommon.this.logging_socket.getInputStream());
                             }
                             catch (Exception e) {
-                                com.crushftp.client.Common.sockLog(tempSock2, "tempSock2 IOException:" + e);
+                                com.crushftp.client.Common.sockLog(DMZServerCommon.this.logging_socket, "logging_socket IOException:" + e);
                                 Log.log("DMZ", 2, e);
                                 try {
-                                    if (tempSock2 != null) {
+                                    if (DMZServerCommon.this.logging_socket != null) {
                                         com.crushftp.client.Common.sockLog(DMZServerCommon.this.logging_socket, "logging socket closing.");
-                                        tempSock2.close();
+                                        DMZServerCommon.this.logging_socket.close();
                                     }
                                 }
                                 catch (IOException iOException) {
                                     // empty catch block
                                 }
+                                DMZServerCommon.this.last_logging_socket_time = 0L;
+                                DMZServerCommon.this.logging_socket = null;
+                                DMZServerCommon.this.logging_socket_ois = null;
                             }
                         }
                     });
@@ -1871,12 +1974,12 @@ lbl24:
                             tempSock2.setSoTimeout(0);
                             com.crushftp.client.Common.sockLog(tempSock2, "tempSock2 starting protocol handling");
                             Thread.currentThread().setName("DMZ using data sock:" + new String(pb).trim());
-                            QuickConnect quicky = new QuickConnect(DMZServerCommon.this.thisObj, DMZServerCommon.this.listen_port, tempSock2, DMZServerCommon.this.the_ip, String.valueOf(DMZServerCommon.this.listen_ip) + "_" + DMZServerCommon.this.listen_port, server_item_temp, "");
+                            QuickConnect quicky = new QuickConnect(DMZServerCommon.this.thisObj, DMZServerCommon.this.listen_port, tempSock2, DMZServerCommon.this.the_ip, String.valueOf(DMZServerCommon.this.listen_ip) + "_" + DMZServerCommon.this.listen_port, server_item_temp, null, null, null);
                             if (!Worker.startWorker(quicky, String.valueOf(DMZServerCommon.this.listen_ip) + "_" + DMZServerCommon.this.listen_port + " --> " + DMZServerCommon.this.the_ip)) {
                                 com.crushftp.client.Common.sockLog(tempSock2, "tempSock2 no workers. pending_data_socks size=" + pending_data_socks.size());
                                 tempSock2.close();
                                 quicky = null;
-                                29 var7_11 = this;
+                                36 var7_11 = this;
                                 synchronized (var7_11) {
                                     --DMZServerCommon.this.connected_users;
                                     if (DMZServerCommon.this.connected_users < 0) {
@@ -1925,9 +2028,9 @@ lbl24:
     }
 
     public static void sendFileToMemory(String path, String dmz_instance) throws Exception {
-        if (path != null && !path.equals("") && new File_S(path).exists()) {
+        if (path != null && !path.equals("") && new VRL(path).getProtocol().equalsIgnoreCase("FILE") && new File_S(new VRL(path).getCanonicalPath()).exists()) {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            com.crushftp.client.Common.streamCopier(null, null, new FileInputStream(new File_S(path)), baos, false, true, true);
+            com.crushftp.client.Common.streamCopier(null, null, new FileInputStream(new File_S(new VRL(path).getCanonicalPath())), baos, false, true, true);
             Properties pp = new Properties();
             pp.put("bytes", baos.toByteArray());
             Properties system_prop = new Properties();
@@ -1972,13 +2075,26 @@ lbl24:
         sock.close();
     }
 
-    public static Properties doGetUserv9Fix(Properties server_item_temp, String username, String password, String user_ip, Properties p2) {
+    public void triggerPortErrorAlert(Throwable e) {
+        try {
+            Properties info = new Properties();
+            info.put("alert_type", "server_port_error");
+            info.put("alert_error", "" + e);
+            info.put("alert_msg", this.server_item.getProperty("display"));
+            ServerStatus.thisObj.runAlerts("server_port_error", info, info, null);
+        }
+        catch (Exception ee) {
+            Log.log("DMZ", 1, ee);
+        }
+    }
+
+    public static Properties doGetUser(Properties server_item_temp, String username, String password, String user_ip, Properties p2) {
         try {
             VFS uVFS;
             Properties user;
             Vector public_keys;
-            block26: {
-                block25: {
+            block27: {
+                block26: {
                     public_keys = null;
                     user = UserTools.ut.getUser(server_item_temp.getProperty("linkedServer", ""), username, true);
                     uVFS = null;
@@ -1989,8 +2105,8 @@ lbl24:
                         Log.log("SERVER", 0, e);
                         user = null;
                     }
-                    if (user == null && System.getProperty("crushftp.webapplication.enabled", "false").equals("false")) break block25;
-                    if (!ServerStatus.BG("always_validate_plugins_for_dmz_lookup")) break block26;
+                    if (user == null && System.getProperty("crushftp.webapplication.enabled", "false").equals("false")) break block26;
+                    if (!ServerStatus.BG("always_validate_plugins_for_dmz_lookup")) break block27;
                 }
                 Log.log("SERVER", 2, "GET:SOCKET:Attempting simulated login via plugins...");
                 SessionCrush tempSession = new SessionCrush(null, 1, "127.0.0.1", 0, "0.0.0.0", server_item_temp.getProperty("linkedServer", ""), server_item_temp);
@@ -2057,6 +2173,9 @@ lbl24:
                 Properties internal_server_data = new Properties();
                 if (ServerStatus.BG("user_reveal_hostname")) {
                     internal_server_data.put("internal_app_version", ServerStatus.version_info_str);
+                }
+                if (ServerStatus.BG("user_reveal_hostname")) {
+                    internal_server_data.put("internal_hostname", ServerStatus.hostname);
                 }
                 if (internal_server_data.size() > 0) {
                     p2.put("internal_server_data", internal_server_data);

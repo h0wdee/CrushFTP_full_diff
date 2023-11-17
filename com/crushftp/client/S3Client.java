@@ -3,6 +3,9 @@
  * 
  * Could not load the following classes:
  *  org.jdom.Element
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -2417,7 +2420,7 @@ lbl150:
         }
         Properties p = new Properties();
         try {
-            Object obj = JSONValue.parse(result2);
+            Object obj = JSONValue.parse((String)result2);
             if (obj instanceof JSONArray) {
                 JSONArray ja = (JSONArray)obj;
                 int xxx = 0;
@@ -2429,7 +2432,7 @@ lbl150:
                         int i = 0;
                         while (i < a.length) {
                             String key2 = a[i].toString();
-                            p.put(key2, "" + jo.get(key2));
+                            p.put(key2, "" + jo.get((Object)key2));
                             ++i;
                         }
                     }
@@ -2441,7 +2444,7 @@ lbl150:
                 int i = 0;
                 while (i < a.length) {
                     String key2 = a[i].toString();
-                    p.put(key2, "" + jo.get(key2));
+                    p.put(key2, "" + jo.get((Object)key2));
                     ++i;
                 }
             }

@@ -11,7 +11,6 @@ import com.crushftp.client.Worker;
 import com.maverick.sshd.Connection;
 import com.maverick.sshd.ConnectionManager;
 import crushftp.gui.LOC;
-import crushftp.handlers.Common;
 import crushftp.handlers.Log;
 import crushftp.handlers.SessionCrush;
 import crushftp.server.QuickConnect;
@@ -28,6 +27,7 @@ public class SSHCrushAuthentication8 {
 
     public static SessionCrush getSession(String sessionid) {
         SessionCrush thisSession;
+        Properties p;
         Connection conn = ConnectionManager.getInstance().getConnectionById(sessionid);
         String username = conn.getUsername();
         if (ServerStatus.BG("username_uppercase")) {
@@ -37,8 +37,12 @@ public class SSHCrushAuthentication8 {
             username = username.toLowerCase();
         }
         int loops = 0;
-        Log.log("SSH_SERVER", 0, "SSH PORT CONNECTOR LOOKUP:" + conn.getRemotePort() + " Cipher CS/SC:" + conn.getCipherCS() + "/" + conn.getCipherSC() + "KEX:" + conn.getKeyEchangeInUse() + " Mac CS/SC:" + conn.getMacCS() + "/" + conn.getMacSC() + " Client:" + conn.getRemoteIdentification());
-        while (!ServerSessionSSH.connectionLookup.containsKey(String.valueOf(conn.getRemotePort())) && loops++ < 10000) {
+        String login_info = "SSH PORT CONNECTOR LOOKUP:" + conn.getRemotePort() + " Cipher CS/SC:" + conn.getCipherCS() + "/" + conn.getCipherSC() + "KEX:" + conn.getKeyEchangeInUse() + " Mac CS/SC:" + conn.getMacCS() + "/" + conn.getMacSC() + " Client:" + conn.getRemoteIdentification();
+        Log.log("SSH_SERVER", 0, login_info);
+        int idle_time = ServerStatus.IG("sftp_login_timeout_max") * 1000;
+        while (loops++ < idle_time) {
+            p = (Properties)ServerSessionSSH.connectionLookup.get(String.valueOf(conn.getRemotePort()));
+            if (p != null && System.currentTimeMillis() - Long.parseLong(p.getProperty("connectionTime", "0")) < 10000L) break;
             try {
                 Thread.sleep(1L);
             }
@@ -46,12 +50,16 @@ public class SSHCrushAuthentication8 {
                 // empty catch block
             }
         }
-        Properties p = (Properties)ServerSessionSSH.connectionLookup.get(String.valueOf(conn.getRemotePort()));
+        if (loops >= idle_time) {
+            Log.log("SSH_SERVER", 0, "Timeout waiting for login to be completed reached! " + idle_time + "ms, " + login_info);
+            throw new RuntimeException("Timeout waiting for login to be completed reached! " + idle_time + "ms, " + login_info);
+        }
+        p = (Properties)ServerSessionSSH.connectionLookup.get(String.valueOf(conn.getRemotePort()));
         Log.log("SSH_SERVER", 2, "SSH PORT CONNECTOR LOOKUP:" + conn.getRemotePort() + ":" + p);
         Properties server_item = (Properties)p.get("server_item");
         try {
-            if (!QuickConnect.validate_ip(p.getProperty("user_ip"), server_item)) {
-                Log.log("SERVER", 0, "SFTP Session banned IP:" + p.getProperty("user_ip"));
+            if (!QuickConnect.validate_ip(p.getProperty("user_ip"), server_item).equals("")) {
+                Log.log("SERVER", 0, "SFTP Session banned IP:" + p.getProperty("user_ip") + ":" + QuickConnect.validate_ip(p.getProperty("user_ip"), server_item));
                 Socket sock = (Socket)p.remove("socket");
                 if (sock != null) {
                     sock.close();
@@ -75,14 +83,11 @@ public class SSHCrushAuthentication8 {
             ServerStatus.thisObj.hold_user_pointer(thisSession.user_info);
             thisSession.add_log("[" + server_item.getProperty("serverType", "ftp") + ":" + server_item.getProperty("ip", "0.0.0.0") + ":" + server_item.getProperty("port", "21") + "][" + thisSession.uiSG("user_number") + "] " + LOC.G("Accepting connection from") + ": " + thisSession.uiSG("user_ip") + ":" + conn.getRemotePort() + "\r\n", "SSH_SESSION_ACCEPT");
             if (ServerStatus.BG("block_hack_username_immediately")) {
-                String[] hack_users = ServerStatus.SG("hack_usernames").split(",");
-                int x = 0;
-                while (x < hack_users.length) {
-                    if (!username.trim().equals("") && Common.compare_with_hack_username(username, hack_users[x])) {
-                        ServerStatus.thisObj.ban(thisSession.user_info, ServerStatus.IG("hban_timeout"), "hack username:" + username);
-                        ServerStatus.thisObj.kick(thisSession.user_info);
-                    }
-                    ++x;
+                if (SessionCrush.isHackUsername(username, ServerStatus.SG("hack_usernames"))) {
+                    Log.log("SERVER", 0, "User " + username + " kicked immediately because they are in the hack usernames list. IP: " + thisSession.uiSG("user_ip"));
+                    thisSession.uiPUT("hack_username", "true");
+                    ServerStatus.thisObj.ban(thisSession.user_info, ServerStatus.IG("hban_timeout"), "hack username:" + username);
+                    ServerStatus.thisObj.kick(thisSession.user_info);
                 }
             }
         }
@@ -104,9 +109,15 @@ public class SSHCrushAuthentication8 {
                 thisSession.session_socks.removeAllElements();
                 Worker.startWorker(new Runnable(){
 
+                    /*
+                     * WARNING - Removed try catching itself - possible behaviour change.
+                     */
                     @Override
                     public void run() {
-                        thisSession.do_kill(null);
+                        Object object = thisSession.close_session_sync;
+                        synchronized (object) {
+                            thisSession.do_kill(null);
+                        }
                     }
                 });
             }

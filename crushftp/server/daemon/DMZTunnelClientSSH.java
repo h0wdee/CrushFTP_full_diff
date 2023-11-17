@@ -1,24 +1,11 @@
 /*
  * Decompiled with CFR 0.152.
- * 
- * Could not load the following classes:
- *  com.maverick.ssh.PasswordAuthentication
- *  com.maverick.ssh.SshAuthentication
- *  com.maverick.ssh.SshClient
- *  com.maverick.ssh.SshConnector
- *  com.maverick.ssh.SshTransport
- *  com.maverick.ssh2.Ssh2Client
- *  com.sshtools.net.ForwardingClient
- *  com.sshtools.net.SocketWrapper
  */
 package crushftp.server.daemon;
 
 import com.crushftp.client.SFTPClient;
 import com.maverick.ssh.PasswordAuthentication;
-import com.maverick.ssh.SshAuthentication;
-import com.maverick.ssh.SshClient;
 import com.maverick.ssh.SshConnector;
-import com.maverick.ssh.SshTransport;
 import com.maverick.ssh2.Ssh2Client;
 import com.sshtools.net.ForwardingClient;
 import com.sshtools.net.SocketWrapper;
@@ -64,11 +51,11 @@ extends DMZTunnelClient {
         }
         initialized = true;
         SshConnector con = SshConnector.createInstance();
-        this.ssh = (Ssh2Client)con.connect((SshTransport)new SocketWrapper(new Socket(this.ssh_server_ip, this.ssh_server_port)), this.ssh_username);
+        this.ssh = (Ssh2Client)con.connect(new SocketWrapper(new Socket(this.ssh_server_ip, this.ssh_server_port)), this.ssh_username);
         PasswordAuthentication pass_obj = new PasswordAuthentication();
         pass_obj.setPassword(this.ssh_password);
-        this.ssh.authenticate((SshAuthentication)pass_obj);
-        this.fc = new ForwardingClient((SshClient)this.ssh);
+        this.ssh.authenticate(pass_obj);
+        this.fc = new ForwardingClient(this.ssh);
         this.fc.startLocalForwarding("127.0.0.1", this.dmz_port, "127.0.0.1", this.dmz_dest_port);
     }
 

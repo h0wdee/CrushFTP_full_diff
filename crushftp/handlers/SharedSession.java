@@ -16,6 +16,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.util.Date;
 import java.util.Enumeration;
 import java.util.Properties;
 import java.util.Vector;
@@ -47,6 +48,7 @@ public class SharedSession {
                 }
                 if (new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "sessions.obj").exists()) {
                     SharedSession recent_users;
+                    Object o;
                     ois = new ObjectInputStream(new FileInputStream(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "sessions.obj")));
                     thisObj = (Properties)ois.readObject();
                     thisObj.remove("crushftp.usernames.activity");
@@ -54,7 +56,7 @@ public class SharedSession {
                     Enumeration keys = user_sessions.keys();
                     if (keys.hasMoreElements()) {
                         String key = keys.nextElement().toString();
-                        Object o = user_sessions.get(key);
+                        o = user_sessions.get(key);
                         if (o instanceof Properties) {
                             user_sessions.remove(key);
                         } else if (o instanceof SessionCrush && ((SessionCrush)o).getProperty("last_activity") == null) {
@@ -63,8 +65,8 @@ public class SharedSession {
                     }
                     if ((recent_users = SharedSession.find("recent_user_list")).get("recent_user_list") != null) {
                         ServerStatus.siVG("recent_user_list").addAll((Vector)recent_users.get("recent_user_list"));
-                        Object object2 = QuickConnect.syncUserNumbers;
-                        synchronized (object2) {
+                        o = QuickConnect.syncUserNumbers;
+                        synchronized (o) {
                             int maxNum = 0;
                             int x = 0;
                             while (true) {
@@ -85,6 +87,8 @@ public class SharedSession {
                             }
                         }
                     }
+                    SharedSession reresh_tokens = SharedSession.find("crushftp.refresh_tokens");
+                    com.crushftp.client.Common.initRefreshTokens(SharedSession.getCache("crushftp.refresh_tokens"));
                     ois.close();
                     ois = null;
                 }
@@ -185,7 +189,6 @@ public class SharedSession {
             };
             Worker.startWorker(r);
             SharedSession.find("running_tasks").remove("running_tasks");
-            SharedSession.findBadObjects(thisObj, "/", 0);
             Object object = sessionLock;
             synchronized (object) {
                 Object object2 = sessionFindLock;
@@ -237,8 +240,59 @@ public class SharedSession {
         status.append("done");
     }
 
-    public static boolean findBadObjects(Object o, String path, int depth) {
-        return true;
+    public static void findBadObjects2(Object o) {
+        SharedSession.findBadObjects2(o, "/", 0);
+    }
+
+    /*
+     * Unable to fully structure code
+     */
+    public static void findBadObjects2(Object o, String path, int depth) {
+        block9: {
+            block8: {
+                if (depth > 50) {
+                    return;
+                }
+                try {
+                    baos = new ByteArrayOutputStream();
+                    oos = new ObjectOutputStream(baos);
+                    oos.writeObject(o);
+                    oos.close();
+                    return;
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 0, String.valueOf(path) + ":" + o);
+                    System.out.println(new Date() + ":" + path + ":" + o.getClass().toString());
+                    if (!(o instanceof Properties)) break block8;
+                    p = (Properties)o;
+                    keys = p.keys();
+                    ** while (keys.hasMoreElements())
+                }
+lbl-1000:
+                // 1 sources
+
+                {
+                    key = keys.nextElement();
+                    SharedSession.findBadObjects2(p.get(key), String.valueOf(path) + key + "/", depth + 1);
+                    continue;
+lbl20:
+                    // 1 sources
+
+                    break block9;
+                }
+            }
+            if (o instanceof Vector) {
+                v = (Vector)o;
+                v = (Vector)v.clone();
+                x = 0;
+                while (x < v.size()) {
+                    SharedSession.findBadObjects2(v.elementAt(x), String.valueOf(path) + "[" + x + "]/", depth + 1);
+                    ++x;
+                }
+            } else if (!(o instanceof String)) {
+                o instanceof SessionCrush;
+            }
+        }
     }
 
     private static boolean isShared(String key) {

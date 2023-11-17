@@ -1,5 +1,39 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.apache.http.HttpEntity
+ *  org.apache.http.auth.AuthScope
+ *  org.apache.http.auth.Credentials
+ *  org.apache.http.client.ClientProtocolException
+ *  org.apache.http.client.CredentialsProvider
+ *  org.apache.http.client.methods.CloseableHttpResponse
+ *  org.apache.http.client.methods.HttpDelete
+ *  org.apache.http.client.methods.HttpGet
+ *  org.apache.http.client.methods.HttpPut
+ *  org.apache.http.client.methods.HttpUriRequest
+ *  org.apache.http.config.Lookup
+ *  org.apache.http.config.Registry
+ *  org.apache.http.config.RegistryBuilder
+ *  org.apache.http.conn.socket.LayeredConnectionSocketFactory
+ *  org.apache.http.conn.ssl.NoopHostnameVerifier
+ *  org.apache.http.conn.ssl.SSLConnectionSocketFactory
+ *  org.apache.http.entity.ContentType
+ *  org.apache.http.entity.InputStreamEntity
+ *  org.apache.http.impl.auth.SPNegoSchemeFactory
+ *  org.apache.http.impl.client.BasicCredentialsProvider
+ *  org.apache.http.impl.client.CloseableHttpClient
+ *  org.apache.http.impl.client.HttpClientBuilder
+ *  org.apache.http.impl.client.HttpClients
+ *  org.apache.http.ssl.SSLContextBuilder
+ *  org.apache.http.ssl.SSLContexts
+ *  org.apache.http.ssl.TrustStrategy
+ *  org.apache.log4j.BasicConfigurator
+ *  org.apache.log4j.Level
+ *  org.apache.log4j.Logger
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -33,7 +67,6 @@ import javax.security.auth.callback.PasswordCallback;
 import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.auth.login.LoginContext;
 import org.apache.http.HttpEntity;
-import org.apache.http.HttpResponse;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.Credentials;
 import org.apache.http.client.ClientProtocolException;
@@ -42,8 +75,11 @@ import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpDelete;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPut;
+import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.config.Lookup;
 import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
+import org.apache.http.conn.socket.LayeredConnectionSocketFactory;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.entity.ContentType;
@@ -84,13 +120,13 @@ extends GenericClient {
         this.fields = new String[]{"username", "password", "login_config", "kerberos_config", "acceptAnyCert", "user_realm", "auth_security"};
         this.url = url;
         if (System.getProperty("crushftp.debug", "0").equals("2")) {
-            if (Logger.getLogger("org.apache.http").getLevel() != Level.ALL) {
+            if (Logger.getLogger((String)"org.apache.http").getLevel() != Level.ALL) {
                 BasicConfigurator.configure();
-                Logger.getLogger("org.apache.http").setLevel(Level.ALL);
+                Logger.getLogger((String)"org.apache.http").setLevel(Level.ALL);
             }
-        } else if (Logger.getLogger("org.apache.http") != null && Logger.getLogger("org.apache.http").getLevel() != Level.OFF) {
+        } else if (Logger.getLogger((String)"org.apache.http") != null && Logger.getLogger((String)"org.apache.http").getLevel() != Level.OFF) {
             BasicConfigurator.resetConfiguration();
-            Logger.getLogger("org.apache.http").setLevel(Level.OFF);
+            Logger.getLogger((String)"org.apache.http").setLevel(Level.OFF);
         }
     }
 
@@ -159,17 +195,16 @@ extends GenericClient {
         if (System.getProperties().containsKey("crushftp.enabled_ciphers")) {
             enabled_ciphers = System.getProperty("crushftp.enabled_ciphers").split(",");
         }
-        HttpClientBuilder hcb = HttpClients.custom().setDefaultAuthSchemeRegistry(this.buildSPNEGOAuthSchemeRegistry()).setDefaultCredentialsProvider(this.setupCredentialsProvider());
+        HttpClientBuilder hcb = HttpClients.custom().setDefaultAuthSchemeRegistry((Lookup)this.buildSPNEGOAuthSchemeRegistry()).setDefaultCredentialsProvider(this.setupCredentialsProvider());
         try {
             SSLContext sslc = null;
             sslc = this.config.getProperty("acceptAnyCert", "true").equalsIgnoreCase("true") ? new SSLContextBuilder().loadTrustMaterial(null, new TrustStrategy(){
 
-                @Override
                 public boolean isTrusted(X509Certificate[] chain, String authType) throws CertificateException {
                     return true;
                 }
             }).build() : SSLContexts.createDefault();
-            hcb.setSSLSocketFactory(new SSLConnectionSocketFactory(sslc, System.getProperty("crushftp.tls_version_client", "SSLv2Hello,TLSv1,TLSv1.1,TLSv1.2").split(","), enabled_ciphers, (HostnameVerifier)new NoopHostnameVerifier()));
+            hcb.setSSLSocketFactory((LayeredConnectionSocketFactory)new SSLConnectionSocketFactory(sslc, System.getProperty("crushftp.tls_version_client", "SSLv2Hello,TLSv1,TLSv1.1,TLSv1.2").split(","), enabled_ciphers, (HostnameVerifier)new NoopHostnameVerifier()));
         }
         catch (Exception e) {
             Common.log("SERVER", 0, e);
@@ -179,15 +214,15 @@ extends GenericClient {
 
     @Override
     public String login2(String username, String password, String clientid) throws Exception {
-        if (Logger.getLogger("org.apache.http") != null) {
+        if (Logger.getLogger((String)"org.apache.http") != null) {
             if (System.getProperty("crushftp.debug", "0").equals("2")) {
-                if (Logger.getLogger("org.apache.http").getLevel() != Level.ALL) {
+                if (Logger.getLogger((String)"org.apache.http").getLevel() != Level.ALL) {
                     BasicConfigurator.configure();
-                    Logger.getLogger("org.apache.http").setLevel(Level.ALL);
+                    Logger.getLogger((String)"org.apache.http").setLevel(Level.ALL);
                 }
-            } else if (Logger.getLogger("org.apache.http").getLevel() != Level.OFF) {
+            } else if (Logger.getLogger((String)"org.apache.http").getLevel() != Level.OFF) {
                 BasicConfigurator.resetConfiguration();
-                Logger.getLogger("org.apache.http").setLevel(Level.OFF);
+                Logger.getLogger((String)"org.apache.http").setLevel(Level.OFF);
             }
         }
         password = VRL.vrlDecode(password);
@@ -266,7 +301,7 @@ extends GenericClient {
         String url_path = this.format_path_for_url(path);
         String url_str = String.valueOf(url_path) + "?op=LISTSTATUS" + this.getHadoopAuth();
         this.log("List:" + new VRL(url_str).safe());
-        CloseableHttpResponse response = httpclient.execute(new HttpGet(new URL(url_str).toURI()));
+        CloseableHttpResponse response = httpclient.execute((HttpUriRequest)new HttpGet(new URL(url_str).toURI()));
         if (response.getStatusLine().getStatusCode() == 403) {
             throw new Exception("Hadoop: List - " + response.getStatusLine());
         }
@@ -282,7 +317,7 @@ extends GenericClient {
         }
         httpclient.close();
         try {
-            Object obj = ((JSONObject)((JSONObject)JSONValue.parse(json)).get("FileStatuses")).get("FileStatus");
+            Object obj = ((JSONObject)((JSONObject)JSONValue.parse((String)json)).get((Object)"FileStatuses")).get((Object)"FileStatus");
             if (obj instanceof JSONArray) {
                 JSONArray ja = (JSONArray)obj;
                 int x = 0;
@@ -310,14 +345,14 @@ extends GenericClient {
             Common.log("HADOOP", 2, String.valueOf(jo.toJSONString()) + "\r\n");
         }
         boolean folder = false;
-        if (jo.get("type").equals("DIRECTORY")) {
+        if (jo.get((Object)"type").equals("DIRECTORY")) {
             folder = true;
         }
         Object[] a = jo.entrySet().toArray();
         int i = 0;
         while (i < a.length) {
             String key2 = a[i].toString().split("=")[0];
-            item.put(key2.trim(), ("" + jo.get(key2)).trim());
+            item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
             ++i;
         }
         Date d = new Date(Long.parseLong(item.getProperty("modificationTime", "0")));
@@ -339,7 +374,7 @@ extends GenericClient {
 
     private Properties getFileStatus(String path) throws Exception {
         CloseableHttpClient httpclient = this.createHttpClient();
-        HttpResponse response = null;
+        CloseableHttpResponse response = null;
         boolean inc = false;
         Exception last_e = null;
         int x = 0;
@@ -352,7 +387,7 @@ extends GenericClient {
                 String url_str = String.valueOf(url_path) + "?op=GETFILESTATUS" + this.getHadoopAuth();
                 try {
                     this.log("Stat:" + new VRL(url_str).safe());
-                    response = httpclient.execute(new HttpGet(new URL(url_str).toURI()));
+                    response = httpclient.execute((HttpUriRequest)new HttpGet(new URL(url_str).toURI()));
                     last_e = null;
                     if (response.getStatusLine().getStatusCode() < 400 || response.getStatusLine().getStatusCode() == 404) break;
                     this.log("URL: " + new VRL(this.url).safe() + " STAT: Response message: " + response.getStatusLine());
@@ -378,7 +413,7 @@ extends GenericClient {
             throw new ClientProtocolException("Hadoop: Response contains no content:" + response);
         }
         String json = Common.consumeResponse(entity.getContent());
-        Properties stat = this.parseFileStatus(path, ((JSONObject)JSONValue.parse(json)).get("FileStatus"));
+        Properties stat = this.parseFileStatus(path, ((JSONObject)JSONValue.parse((String)json)).get((Object)"FileStatus"));
         if (stat.getProperty("name").equals("/")) {
             stat.put("name", Common.last(path));
         }
@@ -417,7 +452,7 @@ extends GenericClient {
 
     private OutputStream upload4(String path, long startPos, boolean truncate, boolean binary) throws Exception {
         CloseableHttpClient httpclient = this.createHttpClient();
-        HttpResponse response = null;
+        CloseableHttpResponse response = null;
         boolean inc = false;
         Exception last_e = null;
         int x = 0;
@@ -429,7 +464,7 @@ extends GenericClient {
                 String url_str = String.valueOf(this.format_path_for_url(path)) + "?op=CREATE&permission=777&overwrite=true" + this.getHadoopAuth();
                 try {
                     this.log("Upload:" + new VRL(url_str).safe());
-                    response = httpclient.execute(new HttpPut(new URL(url_str).toURI()));
+                    response = httpclient.execute((HttpUriRequest)new HttpPut(new URL(url_str).toURI()));
                     last_e = null;
                     break;
                 }
@@ -468,7 +503,7 @@ extends GenericClient {
         Socket sock2 = (Socket)socks.remove("sock2");
         InputStreamEntity reqEntity = new InputStreamEntity(sock2.getInputStream(), -1L, ContentType.APPLICATION_OCTET_STREAM);
         reqEntity.setChunked(true);
-        httpPutData.setEntity(reqEntity);
+        httpPutData.setEntity((HttpEntity)reqEntity);
         final Properties status = new Properties();
         Worker.startWorker(new Runnable(){
 
@@ -476,7 +511,7 @@ extends GenericClient {
             public void run() {
                 block2: {
                     try {
-                        httpclient_data.execute(httpPutData);
+                        httpclient_data.execute((HttpUriRequest)httpPutData);
                         status.put("status", "DONE");
                     }
                     catch (Exception e) {
@@ -581,7 +616,7 @@ extends GenericClient {
 
     private InputStream download4(String path, long startPos, long endPos, boolean binary) throws Exception {
         CloseableHttpClient httpclient = this.createHttpClient();
-        HttpResponse response = null;
+        CloseableHttpResponse response = null;
         boolean inc = false;
         Exception last_e = null;
         int x = 0;
@@ -594,7 +629,7 @@ extends GenericClient {
                 String url_str = String.valueOf(url_path) + "?op=OPEN&buffersize=32768" + this.getHadoopAuth();
                 try {
                     this.log("Download:" + new VRL(url_str).safe());
-                    response = httpclient.execute(new HttpGet(new URL(url_str).toURI()));
+                    response = httpclient.execute((HttpUriRequest)new HttpGet(new URL(url_str).toURI()));
                     last_e = null;
                     break;
                 }
@@ -653,7 +688,7 @@ extends GenericClient {
 
     private boolean makedir4(String path) throws Exception {
         CloseableHttpClient httpclient = this.createHttpClient();
-        HttpResponse response = null;
+        CloseableHttpResponse response = null;
         boolean inc = false;
         Exception last_e = null;
         int x = 0;
@@ -666,7 +701,7 @@ extends GenericClient {
                 String url_str = String.valueOf(url_path) + "?op=MKDIRS&permission=777" + this.getHadoopAuth();
                 try {
                     this.log("MakeDir:" + new VRL(url_str).safe());
-                    response = httpclient.execute(new HttpPut(new URL(url_str).toURI()));
+                    response = httpclient.execute((HttpUriRequest)new HttpPut(new URL(url_str).toURI()));
                     last_e = null;
                     break;
                 }
@@ -688,7 +723,7 @@ extends GenericClient {
         }
         String json = Common.consumeResponse(entity.getContent());
         httpclient.close();
-        Boolean result = (Boolean)((JSONObject)JSONValue.parse(json)).get("boolean");
+        Boolean result = (Boolean)((JSONObject)JSONValue.parse((String)json)).get((Object)"boolean");
         return result;
     }
 
@@ -765,7 +800,7 @@ extends GenericClient {
 
     private boolean delete4(String path) throws Exception {
         CloseableHttpClient httpclient = this.createHttpClient();
-        HttpResponse response = null;
+        CloseableHttpResponse response = null;
         boolean inc = false;
         Exception last_e = null;
         int x = 0;
@@ -778,7 +813,7 @@ extends GenericClient {
                 String url_str = String.valueOf(url_path) + "?op=DELETE&recursive=true" + this.getHadoopAuth();
                 try {
                     this.log("Delete:" + new VRL(url_str).safe());
-                    response = httpclient.execute(new HttpDelete(new URL(url_str).toURI()));
+                    response = httpclient.execute((HttpUriRequest)new HttpDelete(new URL(url_str).toURI()));
                     last_e = null;
                     break;
                 }
@@ -800,7 +835,7 @@ extends GenericClient {
         }
         String json = Common.consumeResponse(entity.getContent());
         httpclient.close();
-        Boolean result = (Boolean)((JSONObject)JSONValue.parse(json)).get("boolean");
+        Boolean result = (Boolean)((JSONObject)JSONValue.parse((String)json)).get((Object)"boolean");
         if (result.booleanValue()) {
             if (resourceIdCache.containsKey(path)) {
                 resourceIdCache.remove(path);
@@ -842,7 +877,7 @@ extends GenericClient {
 
     private boolean rename4(String rnfr, String rnto) throws Exception {
         CloseableHttpClient httpclient = this.createHttpClient();
-        HttpResponse response = null;
+        CloseableHttpResponse response = null;
         boolean inc = false;
         Exception last_e = null;
         int x = 0;
@@ -855,7 +890,7 @@ extends GenericClient {
                 String url_str = String.valueOf(url_path) + "?op=RENAME" + this.getHadoopAuth() + "&destination=" + Common.url_encode(rnto);
                 try {
                     this.log("Rename:" + new VRL(url_str).safe());
-                    response = httpclient.execute(new HttpPut(new URL(url_str).toURI()));
+                    response = httpclient.execute((HttpUriRequest)new HttpPut(new URL(url_str).toURI()));
                     last_e = null;
                     break;
                 }
@@ -876,7 +911,7 @@ extends GenericClient {
             throw new ClientProtocolException("Hadoop: Response contains no content");
         }
         String json = Common.consumeResponse(entity.getContent());
-        Boolean result = (Boolean)((JSONObject)JSONValue.parse(json)).get("boolean");
+        Boolean result = (Boolean)((JSONObject)JSONValue.parse((String)json)).get((Object)"boolean");
         if (result == null) {
             throw new Exception("Missing result! Result : " + json);
         }
@@ -921,7 +956,7 @@ extends GenericClient {
 
     private boolean mdtm4(String path, long modified) throws Exception {
         CloseableHttpClient httpclient = this.createHttpClient();
-        HttpResponse response = null;
+        CloseableHttpResponse response = null;
         boolean inc = false;
         Exception last_e = null;
         int x = 0;
@@ -934,7 +969,7 @@ extends GenericClient {
                 String url_str = String.valueOf(url_path) + "?op=SETTIMES" + this.getHadoopAuth() + "&modificationtime=" + modified + "&accesstime=" + modified;
                 try {
                     this.log("MDTM:" + new VRL(url_str).safe());
-                    response = httpclient.execute(new HttpPut(new URL(url_str).toURI()));
+                    response = httpclient.execute((HttpUriRequest)new HttpPut(new URL(url_str).toURI()));
                     last_e = null;
                     break;
                 }
@@ -1050,7 +1085,7 @@ extends GenericClient {
     }
 
     private Registry buildSPNEGOAuthSchemeRegistry() {
-        return RegistryBuilder.create().register("Negotiate", new SPNegoSchemeFactory(true)).build();
+        return RegistryBuilder.create().register("Negotiate", (Object)new SPNegoSchemeFactory(true)).build();
     }
 
     private String getHadoopAuth() {
@@ -1063,12 +1098,10 @@ extends GenericClient {
     private CredentialsProvider setupCredentialsProvider() {
         Credentials use_jaas_creds = new Credentials(){
 
-            @Override
             public String getPassword() {
                 return null;
             }
 
-            @Override
             public Principal getUserPrincipal() {
                 return null;
             }

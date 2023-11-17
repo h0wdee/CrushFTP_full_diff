@@ -3,10 +3,10 @@
  */
 package crushftp.server.daemon;
 
+import com.crushftp.client.Common;
 import com.crushftp.client.GenericClient;
 import com.crushftp.client.VRL;
 import com.crushftp.client.Worker;
-import crushftp.handlers.Common;
 import crushftp.handlers.Log;
 import crushftp.server.QuickConnect;
 import crushftp.server.daemon.GenericServer;
@@ -96,7 +96,7 @@ extends GenericServer {
                                 try {
                                     try {
                                         String ip = clientAddress.getAddress().getHostAddress();
-                                        if (QuickConnect.validate_ip(ip, TFTPServer.this.server_item)) {
+                                        if (QuickConnect.validate_ip(ip, TFTPServer.this.server_item).equals("")) {
                                             DatagramSocket dsock = new DatagramSocket(0);
                                             dsock.connect(clientAddress);
                                             Log.log("SERVER", 0, "TFTP:" + (Integer.parseInt(String.valueOf(options.getProperty("type"))) == 1 ? "Download" : "Upload") + " request for " + options.getProperty("path") + " from " + ip + " using port " + clientAddress.getPort());
@@ -140,7 +140,7 @@ extends GenericServer {
     }
 
     private void process_tftp_packet(DatagramSocket dsock, Properties options) throws Exception {
-        block15: {
+        block16: {
             String path = options.getProperty("path");
             String username = "";
             String password = "";
@@ -150,10 +150,13 @@ extends GenericServer {
                 path = path.split(":")[2].trim();
             } else {
                 username = this.server_item.getProperty("proxy_username", "anonymous");
-                password = this.server_item.getProperty("proxy_password", "user@email.com");
+                password = Common.encryptDecrypt(this.server_item.getProperty("proxy_password", "user@email.com"), false);
             }
-            VRL vrl = new VRL(String.valueOf(this.server_item.getProperty("proxy_protocol", "ftp")) + "://" + username + ":" + password + "@" + this.server_item.getProperty("proxy_host", "127.0.0.1") + ":" + this.server_item.getProperty("proxy_port", "21") + this.server_item.getProperty("proxy_path", "/"));
-            GenericClient c = Common.getClient(vrl.toString(), "TFTP:", null);
+            if (!path.startsWith("/")) {
+                path = "/" + path;
+            }
+            VRL vrl = new VRL(String.valueOf(this.server_item.getProperty("proxy_protocol", "ftp")) + "://" + username + ":" + VRL.vrlEncode(password) + "@" + this.server_item.getProperty("proxy_host", "127.0.0.1") + ":" + this.server_item.getProperty("proxy_port", "21") + this.server_item.getProperty("proxy_path", "/"));
+            GenericClient c = crushftp.handlers.Common.getClient(vrl.toString(), "TFTP:", null);
             c.login(vrl.getUsername(), vrl.getPassword(), null);
             byte[] buf = new byte[512];
             long size = 0L;
@@ -183,7 +186,7 @@ extends GenericServer {
                         Log.log("SERVER", 0, "TFTP:Error:" + e + ", Sending error packet.");
                         this.send_error(dsock, (short)1, "");
                     }
-                    break block15;
+                    break block16;
                 }
                 if (Integer.parseInt(String.valueOf(options.getProperty("type"))) == 2) {
                     DatagramPacket dp;
@@ -198,7 +201,7 @@ extends GenericServer {
                             c.close();
                             c.delete(path);
                             Log.log("SERVER", 0, "TFTP:Deleting incomplete file.");
-                            break block15;
+                            break block16;
                         }
                         try {
                             out.write(dp.getData(), 4, dp.getLength() - 4);
@@ -207,12 +210,12 @@ extends GenericServer {
                         catch (IOException e) {
                             Log.log("SERVER", 0, "TFTP:Error:" + e);
                             this.send_error(dsock, (short)2, "Trouble writing data.");
-                            break block15;
+                            break block16;
                         }
                     } while (dp.getLength() - 4 >= 512);
                     this.ack_and_receive(dsock, new DatagramPacket(ByteBuffer.allocate(516).putShort((short)4).putShort(num).array(), 4), (short)-1, false);
                     Log.log("SERVER", 0, "TFTP:Transfer complete:" + path + " " + size + " bytes.");
-                    break block15;
+                    break block16;
                 }
                 Log.log("SERVER", 0, "TFTP:Ignoring unknown packet type.");
             }

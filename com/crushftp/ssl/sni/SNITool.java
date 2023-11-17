@@ -213,10 +213,8 @@ public class SNITool {
                     ++x2;
                 }
                 enabled_ciphers = enabled_ciphers2;
-                if (sslp != null) {
-                    Method setUseCipherSuitesOrder = SSLParameters.class.getDeclaredMethod("setUseCipherSuitesOrder", Boolean.TYPE);
-                    setUseCipherSuitesOrder.invoke(sslp, new Boolean(true));
-                }
+                Method setUseCipherSuitesOrder = SSLParameters.class.getDeclaredMethod("setUseCipherSuitesOrder", Boolean.TYPE);
+                setUseCipherSuitesOrder.invoke(sslp, new Boolean(true));
             }
             catch (Exception e) {
                 e.printStackTrace();

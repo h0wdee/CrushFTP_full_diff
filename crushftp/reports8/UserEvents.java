@@ -68,7 +68,7 @@ public class UserEvents {
                         }
                         user.put("events", v);
                         int xx2 = 0;
-                        while (x < v.size()) {
+                        while (xx2 < v.size()) {
                             Properties event = (Properties)v.elementAt(xx2);
                             Enumeration<Object> event_keys = event.keys();
                             while (event_keys.hasMoreElements()) {
@@ -76,7 +76,7 @@ public class UserEvents {
                                 if (!(event.get(event_key) instanceof Vector) && !(event.get(event_key) instanceof Properties)) continue;
                                 event.remove(event_key);
                             }
-                            ++x;
+                            ++xx2;
                         }
                         String group_list = "";
                         Enumeration<Object> keys = groups.keys();

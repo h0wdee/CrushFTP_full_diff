@@ -73,7 +73,7 @@ implements Runnable {
             while (x < IGDs.length) {
                 InternetGatewayDevice igd = (InternetGatewayDevice)IGDs[x];
                 try {
-                    if (igd.addPortMapping("CrushFTP", "TCP", ip, port, "TCP", port, secs)) {
+                    if (igd.addPortMapping(System.getProperty("appname", "CrushFTP"), "TCP", ip, port, "TCP", port, secs)) {
                         this.gateways.put(String.valueOf(port), igd);
                         ok = true;
                         Log.log("SERVER", 0, "Mapped external port using UPNP:" + port);

@@ -140,15 +140,16 @@ public class AuditSummary {
                     while (xx < allDownloads.size()) {
                         Properties pp = (Properties)allDownloads.elementAt(xx);
                         pp.put("url", new VRL(pp.getProperty("url", "")).safe());
-                        pp.put("protocol", protocol);
-                        pp.put("server_port", server_port);
                         if (pp.getProperty("protocol", "").contains(":")) {
                             String[] info = pp.getProperty("protocol", "").split(":");
                             if (info.length != 0) {
                                 pp.put("protocol", info[0]);
                             }
                         } else {
-                            pp.put("protocol", "");
+                            pp.put("protocol", protocol);
+                        }
+                        if (pp.getProperty("server_port", "").equals("") && !server_port.equals("")) {
+                            pp.put("server_port", server_port);
                         }
                         if (pp.getProperty("username", "").equals(p.getProperty("username", ""))) {
                             downloads.addElement(pp);
@@ -160,15 +161,16 @@ public class AuditSummary {
                     while (xx2 < allDeletes.size()) {
                         Properties pp = (Properties)allDeletes.elementAt(xx2);
                         pp.put("url", new VRL(pp.getProperty("url", "")).safe());
-                        pp.put("protocol", protocol);
-                        pp.put("server_port", server_port);
                         if (pp.getProperty("protocol", "").contains(":")) {
                             String[] info = pp.getProperty("protocol", "").split(":");
                             if (info.length != 0) {
                                 pp.put("protocol", info[0]);
                             }
                         } else {
-                            pp.put("protocol", "");
+                            pp.put("protocol", protocol);
+                        }
+                        if (pp.getProperty("server_port", "").equals("") && !server_port.equals("")) {
+                            pp.put("server_port", server_port);
                         }
                         if (pp.getProperty("username", "").equals(p.getProperty("username", ""))) {
                             deletes.addElement(pp);
@@ -185,15 +187,16 @@ public class AuditSummary {
                             pp.put("path", String.valueOf(old_path) + old_name + pp.getProperty("path").substring(pp.getProperty("path").indexOf(":"), pp.getProperty("path").length()));
                         }
                         pp.put("url", new VRL(pp.getProperty("url", "")).safe());
-                        pp.put("protocol", protocol);
-                        pp.put("server_port", server_port);
                         if (pp.getProperty("protocol", "").contains(":")) {
                             String[] info = pp.getProperty("protocol", "").split(":");
                             if (info.length != 0) {
                                 pp.put("protocol", info[0]);
                             }
                         } else {
-                            pp.put("protocol", "");
+                            pp.put("protocol", protocol);
+                        }
+                        if (pp.getProperty("server_port", "").equals("") && !server_port.equals("")) {
+                            pp.put("server_port", server_port);
                         }
                         if (pp.getProperty("username", "").equals(p.getProperty("username", ""))) {
                             renames.addElement(pp);
@@ -211,7 +214,10 @@ public class AuditSummary {
                                 pp.put("protocol", info[0]);
                             }
                         } else {
-                            pp.put("protocol", "");
+                            pp.put("protocol", protocol);
+                        }
+                        if (pp.getProperty("server_port", "").equals("") && !server_port.equals("")) {
+                            pp.put("server_port", server_port);
                         }
                         if (pp.getProperty("username", "").equals(p.getProperty("username", ""))) {
                             uploads.addElement(pp);

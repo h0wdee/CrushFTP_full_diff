@@ -5,9 +5,11 @@ package crushftp.handlers;
 
 import com.crushftp.client.Base64;
 import com.crushftp.client.File_S;
+import com.crushftp.client.GenericClient;
 import com.crushftp.client.VRL;
 import com.crushftp.client.Worker;
 import crushftp.gui.LOC;
+import crushftp.handlers.AlertTools;
 import crushftp.handlers.Common;
 import crushftp.handlers.DesEncrypter;
 import crushftp.handlers.Log;
@@ -52,6 +54,7 @@ public class UserTools {
     public static transient Object user_lock = new Object();
     public static Properties users_lock = new Properties();
     public static Properties user_email_cache = new Properties();
+    public static transient Properties pending_put_in = new Properties();
 
     static {
         String token = Common.makeBoundary(20);
@@ -248,19 +251,62 @@ public class UserTools {
             Vector v = (Vector)vp.get("vItems");
             int x = 0;
             while (v != null && x < v.size()) {
-                Properties p = (Properties)v.elementAt(x);
-                if (!p.getProperty("expires_on", "").trim().equals("")) {
-                    try {
-                        long expire = expire_vfs.parse(p.getProperty("expires_on", "0")).getTime();
-                        if (expire < System.currentTimeMillis() && expire > 0L) {
+                block18: {
+                    Properties p = (Properties)v.elementAt(x);
+                    if (!p.getProperty("expires_on", "").trim().equals("")) {
+                        try {
+                            VRL vrl;
+                            GenericClient c;
+                            long expire = expire_vfs.parse(p.getProperty("expires_on", "0")).getTime();
+                            if (expire >= System.currentTimeMillis() || expire <= 0L) break block18;
                             virtual.remove(key);
                             Properties permission = (Properties)((Vector)virtual.get("vfs_permissions_object")).elementAt(0);
                             permission.remove(key.toUpperCase());
                             needWrite = true;
+                            if (!p.getProperty("delete_expired_item", "false").equalsIgnoreCase("true") || (c = com.crushftp.client.Common.getClient(Common.getBaseUrl((vrl = new VRL(p.getProperty("url", ""))).toString()), System.getProperty("appname", "CrushFTP"), new Vector())) == null) break block18;
+                            try {
+                                try {
+                                    boolean result;
+                                    c.login(vrl.getUsername(), vrl.getPassword(), "");
+                                    if (c.stat(vrl.getPath()) != null && !(result = c.delete(vrl.getPath())) && vrl.getProtocol().equalsIgnoreCase("FILE") && p.getProperty("type", "").equalsIgnoreCase("DIR") && (c.getConfig("file_recurse_delete") == null || !c.getConfig("file_recurse_delete").equals("true"))) {
+                                        c.setConfig("file_recurse_delete", "true");
+                                        boolean is_deleted = c.delete(vrl.getPath());
+                                        c.setConfig("file_recurse_delete", "false");
+                                        if (!is_deleted) {
+                                            Log.log("SERVER", 1, "Expired VFS : Could not delete folder : " + vrl.safe());
+                                        }
+                                    }
+                                }
+                                catch (Exception e) {
+                                    Log.log("SERVER", 1, e);
+                                    try {
+                                        c.logout();
+                                    }
+                                    catch (Exception e2) {
+                                        Log.log("SERVER", 1, e2);
+                                    }
+                                    break block18;
+                                }
+                            }
+                            catch (Throwable throwable) {
+                                try {
+                                    c.logout();
+                                }
+                                catch (Exception e) {
+                                    Log.log("SERVER", 1, e);
+                                }
+                                throw throwable;
+                            }
+                            try {
+                                c.logout();
+                            }
+                            catch (Exception e) {
+                                Log.log("SERVER", 1, e);
+                            }
                         }
-                    }
-                    catch (ParseException e) {
-                        Log.log("SERVER", 1, e);
+                        catch (ParseException e) {
+                            Log.log("SERVER", 1, e);
+                        }
                     }
                 }
                 ++x;
@@ -290,13 +336,13 @@ public class UserTools {
             break;
         }
         if (ichain != null) {
-            Properties user = (Properties)com.crushftp.client.Common.CLONE(up.loadUser(serverGroup, username, inheritance, false));
+            Properties user = (Properties)com.crushftp.client.Common.CLONE(up.loadUser(serverGroup, username, inheritance, false, false));
             vfs_user = username;
             if (user != null && !user.containsKey("root_dir")) {
                 try {
                     int x = ichain.size() - 1;
                     while (x >= 0) {
-                        Properties p = up.loadUser(serverGroup, ichain.elementAt(x).toString(), inheritance, false);
+                        Properties p = up.loadUser(serverGroup, ichain.elementAt(x).toString(), inheritance, false, false);
                         if (p.containsKey("root_dir") && !user.containsKey("root_dir")) {
                             vfs_user = ichain.elementAt(x).toString();
                             break;
@@ -315,14 +361,22 @@ public class UserTools {
         return vfs_user;
     }
 
+    public Properties getUser(boolean allow_update, String serverGroup, String username, boolean flattenUser, boolean getVfsNotUserVar) {
+        return this.getUser(allow_update, serverGroup, username, flattenUser);
+    }
+
     public Properties getUser(String serverGroup, String username, boolean flattenUser, boolean getVfsNotUserVar) {
-        return this.getUser(serverGroup, username, flattenUser);
+        return this.getUser(false, serverGroup, username, flattenUser);
+    }
+
+    public Properties getUser(String serverGroup, String username, boolean flattenUser) {
+        return this.getUser(false, serverGroup, username, flattenUser);
     }
 
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
-    public Properties getUser(String serverGroup, String username, boolean flattenUser) {
+    public Properties getUser(boolean allow_update, String serverGroup, String username, boolean flattenUser) {
         if (username.equals("")) {
             return null;
         }
@@ -346,7 +400,7 @@ public class UserTools {
                 if (serverGroup.endsWith("_restored_backup")) {
                     default_server_group = serverGroup.substring(0, serverGroup.indexOf("_restored_backup"));
                 }
-                defaults = up.loadUser(default_server_group, "default", inheritance2, true);
+                defaults = up.loadUser(default_server_group, "default", inheritance2, true, false);
                 Log.log("USER_OBJ", 2, "Validating default object:" + (defaults != null ? String.valueOf(defaults.size()) : "no defaults user.XML found!"));
                 if (defaults == null) {
                     Properties p = (Properties)Common.readXMLObject(VFS.class.getResource("/assets/default_user.xml"));
@@ -365,7 +419,7 @@ public class UserTools {
                     defaults = p;
                 }
             }
-            Properties theUser = up.loadUser(serverGroup, username, inheritance2, flattenUser);
+            Properties theUser = up.loadUser(serverGroup, username, inheritance2, flattenUser, allow_update);
             if (theUser == null && !com.crushftp.client.Common.dmz_mode) {
                 if (ServerStatus.BG("xmlUsers")) {
                     String user_path = String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/" + username + "/user.XML";
@@ -376,8 +430,8 @@ public class UserTools {
                     }
                 }
             }
-            if (theUser == null && !username.equals("template")) {
-                theUser = this.getUser(serverGroup, "template", true);
+            if (theUser == null && !username.equals("template") && (theUser = this.getUser(serverGroup, "template", true)) != null) {
+                Log.log("USER_OBJ", 1, " Found template user for : " + serverGroup + "/" + username);
             }
             if (theUser != null && (events = (Vector)theUser.get("events")) != null) {
                 int x = 0;
@@ -418,6 +472,9 @@ public class UserTools {
                     }
                     ++x;
                 }
+            }
+            if (theUser != null && !theUser.containsKey("username") && theUser.containsKey("user_name")) {
+                theUser.put("username", theUser.getProperty("user_name"));
             }
             return theUser;
         }
@@ -470,28 +527,80 @@ public class UserTools {
         }
     }
 
+    public synchronized void put_in_user(String serverGroup, String username, String key, String val, boolean backup, boolean replicate) {
+        this.put_in_user(serverGroup, username, key, val, backup, replicate, false);
+    }
+
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
-    public synchronized void put_in_user(String serverGroup, String username, String key, String val, boolean backup, boolean replicate) {
-        Object object = UserTools.get_user_lock(serverGroup, username);
-        synchronized (object) {
-            try {
-                Properties the_user = this.getUser(serverGroup, username, false);
-                if (the_user.getProperty("username", "").equalsIgnoreCase("template") && !username.equalsIgnoreCase("template")) {
-                    return;
+    public void put_in_user(String serverGroup, String username, String key, String val, boolean backup, boolean replicate, boolean clear_only_user_related_xml_from_cache) {
+        Properties properties = pending_put_in;
+        synchronized (properties) {
+            Properties config = (Properties)pending_put_in.get(String.valueOf(serverGroup) + ":" + username);
+            if (config == null) {
+                config = new Properties();
+                config.put("u", new Properties());
+                config.put("backup", String.valueOf(backup));
+                config.put("replicate", String.valueOf(replicate));
+                config.put("clear_only_user_related_xml_from_cache", String.valueOf(clear_only_user_related_xml_from_cache));
+                config.put("serverGroup", String.valueOf(serverGroup));
+                config.put("username", String.valueOf(username));
+            }
+            Properties u = (Properties)config.get("u");
+            u.put(key, val);
+            pending_put_in.put(String.valueOf(serverGroup) + ":" + username, config);
+        }
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public void put_in_user_flush() {
+        Properties pending_put_in2 = null;
+        Properties properties = pending_put_in;
+        synchronized (properties) {
+            pending_put_in2 = (Properties)pending_put_in.clone();
+            pending_put_in.clear();
+        }
+        Enumeration<Object> keys = pending_put_in2.keys();
+        while (keys.hasMoreElements()) {
+            Properties config = (Properties)pending_put_in2.get("" + keys.nextElement());
+            Properties u = (Properties)config.get("u");
+            boolean backup = config.getProperty("backup", "").equals("true");
+            boolean replicate = config.getProperty("replicate", "").equals("true");
+            boolean clear_only_user_related_xml_from_cache = config.getProperty("clear_only_user_related_xml_from_cache", "").equals("true");
+            String serverGroup = config.getProperty("serverGroup");
+            String username = config.getProperty("username");
+            Object object = UserTools.get_user_lock(serverGroup, username);
+            synchronized (object) {
+                try {
+                    Properties the_user = this.getUser(serverGroup, username, false);
+                    if (the_user.getProperty("username", "").equalsIgnoreCase("template") && !username.equalsIgnoreCase("template")) {
+                        return;
+                    }
+                    the_user.putAll((Map<?, ?>)u);
+                    if (clear_only_user_related_xml_from_cache) {
+                        UserTools.writeUser(serverGroup, username, the_user, replicate, backup, null, clear_only_user_related_xml_from_cache);
+                    } else {
+                        UserTools.writeUser(serverGroup, username, the_user, replicate, backup);
+                    }
                 }
-                the_user.put(key, val);
-                UserTools.writeUser(serverGroup, username, the_user, replicate, backup);
+                catch (Exception exception) {
+                    // empty catch block
+                }
             }
-            catch (Exception exception) {
-                // empty catch block
+            if (clear_only_user_related_xml_from_cache) continue;
+            object = Common.xmlCache;
+            synchronized (object) {
+                Common.xmlCache.clear();
             }
         }
-        object = Common.xmlCache;
-        synchronized (object) {
-            Common.xmlCache.clear();
-        }
+    }
+
+    public void force_put_in_user_flush() {
+        ServerStatus.siPUT("last_put_in_user_flush", String.valueOf(System.currentTimeMillis() + 60000L));
+        this.put_in_user_flush();
     }
 
     public static synchronized void purgeOldBackups(int maxCount) {
@@ -697,6 +806,10 @@ public class UserTools {
     }
 
     public static void changeUsername(String serverGroup, String username1, String username2, String password) {
+        if (!ServerStatus.BG("allow_default_user_updates") && username1 != null && username1.equals("default")) {
+            Log.log("USER_OBJ", 0, "Update not allwoed on user " + username1 + " The allow default user updates :  " + ServerStatus.BG("allow_default_user_updates"));
+            return;
+        }
         up.updateUser(serverGroup, username1, username2, password);
     }
 
@@ -708,14 +821,26 @@ public class UserTools {
         UserTools.writeUser(serverGroup, username, user, replicate, backup, null);
     }
 
+    public static void writeUser(String serverGroup, String username, Properties user, boolean replicate, boolean backup, Properties request) {
+        UserTools.writeUser(serverGroup, username, user, replicate, backup, null, false);
+    }
+
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
-    public static void writeUser(String serverGroup, String username, Properties user, boolean replicate, boolean backup, Properties request) {
+    public static void writeUser(String serverGroup, String username, Properties user, boolean replicate, boolean backup, Properties request, boolean clear_only_user_related_xml_from_cache) {
+        if (!ServerStatus.BG("allow_default_user_updates") && username != null && username.equals("default")) {
+            Log.log("USER_OBJ", 0, "Write action not allwoed on user: " + username + " The allow default user updates:  " + ServerStatus.BG("allow_default_user_updates"));
+            return;
+        }
         Object object = UserTools.get_user_lock(serverGroup, username);
         synchronized (object) {
             user.remove("extra_vfs");
-            up.writeUser(serverGroup, username, user, backup);
+            if (clear_only_user_related_xml_from_cache) {
+                up.writeUser(serverGroup, username, user, backup, clear_only_user_related_xml_from_cache);
+            } else {
+                up.writeUser(serverGroup, username, user, backup);
+            }
         }
         Properties p = new Properties();
         p.put("serverGroup", serverGroup);
@@ -789,6 +914,10 @@ public class UserTools {
     }
 
     public static void deleteUser(String serverGroup, String username, boolean replicate) {
+        if (!ServerStatus.BG("allow_default_user_updates") && username != null && username.equals("default")) {
+            Log.log("USER_OBJ", 0, "Delete not allwoed on user " + username + " The allow default user updates :  " + ServerStatus.BG("allow_default_user_updates"));
+            return;
+        }
         up.deleteUser(serverGroup, username);
         Properties p = new Properties();
         p.put("serverGroup", serverGroup);
@@ -804,7 +933,7 @@ public class UserTools {
     public static String convertUsers(boolean allUsers, Vector users, String serverGroup, String username) {
         Properties inheritance = UserTools.getInheritance(serverGroup);
         Properties groups = UserTools.getGroups(serverGroup);
-        Properties defaults = up.loadUser(serverGroup, "default", inheritance, true);
+        Properties defaults = up.loadUser(serverGroup, "default", inheritance, true, false);
         if (allUsers) {
             int x = 0;
             while (x < users.size()) {
@@ -914,15 +1043,15 @@ public class UserTools {
             up2 = new SQLUsers();
             ((SQLUsers)up2).setSettings((Properties)ServerStatus.server_settings.get("sqlItems"));
         }
-        Vector user_list = up.loadUserList(serverGroup);
+        Vector user_list = up1.loadUserList(serverGroup);
         Properties inheritance = up1.loadInheritance(serverGroup);
-        Properties defaults = up1.loadUser(serverGroup, "default", inheritance, true);
+        Properties defaults = up1.loadUser(serverGroup, "default", inheritance, true, false);
         msg = String.valueOf(msg) + "Converted " + inheritance.size() + " Inheritance rules.\r\n";
         int x = 0;
         while (x < user_list.size()) {
+            Properties user;
             String username = user_list.elementAt(x).toString();
-            Properties user = up1.loadUser(serverGroup, username, inheritance, false);
-            if (user != null) {
+            if ((ServerStatus.BG("allow_default_user_updates") || !username.equals("default") || up2.loadUser(serverGroup, username, up2.loadInheritance(serverGroup), false, false) == null) && (user = up1.loadUser(serverGroup, username, inheritance, false, false)) != null) {
                 VFS uVFS = VFS.getVFS(up1.buildVFS(serverGroup, username));
                 if (!username.equals("default")) {
                     UserTools.stripUser(user, defaults);
@@ -991,7 +1120,7 @@ public class UserTools {
     }
 
     public static void mergeWebCustomizations(Properties newUser, Properties user) {
-        if (newUser.containsKey("web_customizations") && user.containsKey("web_customizations")) {
+        if (newUser != null && newUser.containsKey("web_customizations") && user != null && user.containsKey("web_customizations")) {
             Vector newUser_v = (Vector)newUser.get("web_customizations");
             Vector tempUser_v = (Vector)user.get("web_customizations");
             int xx = 0;
@@ -1018,7 +1147,7 @@ public class UserTools {
     }
 
     public static void mergeLinkedVFS(Properties newUser, Properties user) {
-        if (newUser.containsKey("linked_vfs") && user.containsKey("linked_vfs")) {
+        if (newUser != null && newUser.containsKey("linked_vfs") && user != null && user.containsKey("linked_vfs")) {
             Vector newUser_v = (Vector)newUser.get("linked_vfs");
             Vector tempUser_v = (Vector)user.get("linked_vfs");
             int xx = 0;
@@ -1033,7 +1162,7 @@ public class UserTools {
     }
 
     public static void mergeGroupAdminNames(Properties newUser, Properties user) {
-        if (newUser.containsKey("admin_group_name") && user.containsKey("admin_group_name")) {
+        if (newUser != null && newUser.containsKey("admin_group_name") && user != null && user.containsKey("admin_group_name")) {
             String[] user_admin_group_names = user.getProperty("admin_group_name", "").split(",");
             String[] new_admin_group_names = newUser.getProperty("admin_group_name", "").split(",");
             String admin_goup_names = "";
@@ -1062,7 +1191,7 @@ public class UserTools {
     }
 
     public static void mergeEvents(Properties newUser, Properties user) {
-        if (ServerStatus.BG("merge_events")) {
+        if (ServerStatus.BG("merge_events") && newUser != null && user != null) {
             if (!newUser.containsKey("events") || newUser.get("events") == null) {
                 newUser.put("events", new Vector());
             }
@@ -1095,77 +1224,109 @@ public class UserTools {
     }
 
     public Properties verify_user(ServerStatus server_status_frame, String the_user, String the_password, String listen_ip_port, int user_number, String user_ip, int user_port, Properties server_item, Properties loginReason) {
-        return this.verify_user(server_status_frame, the_user, the_password, listen_ip_port, user_number, user_ip, user_port, server_item, loginReason, false);
+        return this.verify_user(server_status_frame, the_user, the_password, listen_ip_port, null, user_number, user_ip, user_port, server_item, loginReason, false);
     }
 
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
+     * Enabled aggressive block sorting
+     * Enabled unnecessary exception pruning
+     * Enabled aggressive exception aggregation
      */
-    public Properties verify_user(ServerStatus server_status_frame, String the_user, String the_password, String serverGroup, int user_number, String user_ip, int user_port, Properties server_item, Properties loginReason, boolean anyPass) {
-        block38: {
-            Properties user;
-            block39: {
-                block40: {
-                    String salt;
-                    String the_password2;
-                    if (the_user.indexOf("\\") >= 0) {
-                        the_user = the_user.substring(the_user.indexOf("\\") + 1);
-                    }
-                    if ((the_password2 = the_password).startsWith("SHA:") || the_password2.startsWith("SHA512:") || the_password2.startsWith("SHA256:") || the_password2.startsWith("SHA3:") || the_password2.startsWith("MD5:") || the_password2.startsWith("MD5S2:") || the_password2.startsWith("CRYPT3:") || the_password2.startsWith("BCRYPT:") || the_password2.startsWith("MD5CRYPT:") || the_password2.startsWith("PBKDF2SHA256:") || the_password2.startsWith("SHA512CRYPT:") || the_password2.startsWith("ARGOND:")) {
-                        return null;
-                    }
-                    the_password2 = Common.url_decode(the_password);
-                    if (the_password2.startsWith("SHA:") || the_password2.startsWith("SHA512:") || the_password2.startsWith("SHA256:") || the_password2.startsWith("SHA3:") || the_password2.startsWith("MD5:") || the_password2.startsWith("MD5S2:") || the_password2.startsWith("CRYPT3:") || the_password2.startsWith("BCRYPT:") || the_password2.startsWith("MD5CRYPT:") || the_password2.startsWith("PBKDF2SHA256:") || the_password2.startsWith("SHA512CRYPT:") || the_password2.startsWith("ARGOND:")) {
-                        return null;
-                    }
-                    user = null;
-                    Log.log("USER_OBJ", 2, "Validating user " + the_user + " with password " + (the_password != null && !the_password.equals("")) + " ");
-                    if (!ServerStatus.BG("blank_passwords") && the_password.trim().equals("") && !anyPass && !the_user.equalsIgnoreCase("ANONYMOUS")) {
-                        return null;
-                    }
-                    try {
-                        user = ut.getUser(serverGroup, the_user, true);
-                    }
-                    catch (Exception e) {
-                        Log.log("USER_OBJ", 2, e);
-                    }
-                    Log.log("USER_OBJ", 2, "Validating user " + the_user + " with local user file:" + (user != null ? String.valueOf(user.size()) : "no user.XML found!"));
-                    if (user == null) break block38;
-                    loginReason.put("reason", "valid user");
-                    if (ServerStatus.BG("secondary_login_via_email") && the_user.indexOf("@") >= 0 && user.getProperty("username").indexOf("@") < 0) {
-                        the_user = user.getProperty("username");
-                    }
-                    if (anyPass && user.getProperty("username").equalsIgnoreCase(the_user)) {
+    public Properties verify_user(ServerStatus server_status_frame, String the_user, String the_password, String serverGroup, SessionCrush thisSession, int user_number, String user_ip, int user_port, Properties server_item, Properties loginReason, boolean anyPass) {
+        String the_password2;
+        if (the_user.indexOf("\\") >= 0) {
+            the_user = the_user.substring(the_user.indexOf("\\") + 1);
+        }
+        if ((the_password2 = the_password).startsWith("SHA:")) return null;
+        if (the_password2.startsWith("SHA512:")) return null;
+        if (the_password2.startsWith("SHA256:")) return null;
+        if (the_password2.startsWith("SHA3:")) return null;
+        if (the_password2.startsWith("MD5:")) return null;
+        if (the_password2.startsWith("MD5S2:")) return null;
+        if (the_password2.startsWith("CRYPT3:")) return null;
+        if (the_password2.startsWith("BCRYPT:")) return null;
+        if (the_password2.startsWith("MD5CRYPT:")) return null;
+        if (the_password2.startsWith("PBKDF2SHA256:")) return null;
+        if (the_password2.startsWith("SHA512CRYPT:")) return null;
+        if (the_password2.startsWith("ARGOND:")) {
+            return null;
+        }
+        the_password2 = Common.url_decode(the_password);
+        if (the_password2.startsWith("SHA:")) return null;
+        if (the_password2.startsWith("SHA512:")) return null;
+        if (the_password2.startsWith("SHA256:")) return null;
+        if (the_password2.startsWith("SHA3:")) return null;
+        if (the_password2.startsWith("MD5:")) return null;
+        if (the_password2.startsWith("MD5S2:")) return null;
+        if (the_password2.startsWith("CRYPT3:")) return null;
+        if (the_password2.startsWith("BCRYPT:")) return null;
+        if (the_password2.startsWith("MD5CRYPT:")) return null;
+        if (the_password2.startsWith("PBKDF2SHA256:")) return null;
+        if (the_password2.startsWith("SHA512CRYPT:")) return null;
+        if (the_password2.startsWith("ARGOND:")) {
+            return null;
+        }
+        Properties user = null;
+        Log.log("USER_OBJ", 2, "Validating user " + the_user + " with password " + (the_password != null && !the_password.equals("")) + " ");
+        if (!ServerStatus.BG("blank_passwords") && the_password.trim().equals("") && !anyPass && !the_user.equalsIgnoreCase("ANONYMOUS")) {
+            return null;
+        }
+        try {
+            user = ut.getUser(true, serverGroup, the_user, true);
+        }
+        catch (Exception e) {
+            Log.log("USER_OBJ", 2, e);
+        }
+        Log.log("USER_OBJ", 1, "Validating user " + the_user + " with local user file:" + (user != null ? String.valueOf(user.size()) : "no user.XML found!"));
+        if (user != null) {
+            String salt;
+            loginReason.put("reason", "valid user");
+            if (ServerStatus.BG("secondary_login_via_email") && the_user.indexOf("@") >= 0 && user.getProperty("username").indexOf("@") < 0) {
+                the_user = user.getProperty("username");
+            }
+            if (anyPass && user.getProperty("username").equalsIgnoreCase(the_user)) {
+                return user;
+            }
+            if (the_password.startsWith("NTLM:")) {
+                try {
+                    if (this.validateMd4(the_user, the_password, user.getProperty("password"))) {
                         return user;
                     }
-                    if (the_password.startsWith("NTLM:")) {
+                }
+                catch (Exception e) {
+                    Log.log("USER_OBJ", 1, e);
+                }
+                the_password = Common.makeBoundary();
+            }
+            if ((salt = user.getProperty("salt", "")).equals("random")) {
+                salt = "";
+            }
+            if (user.getProperty("username").equalsIgnoreCase(the_user) && UserTools.check_pass_variants(user.getProperty("password"), the_password, salt)) {
+                return user;
+            }
+            if (user.getProperty("username").equalsIgnoreCase(the_user) && (user.getProperty("auto_set_pass", "false").equals("true") || ServerStatus.thisObj.common_code.decode_pass(user.getProperty("password")).equals("-AUTO-SET-ON-LOGIN-") || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "SHA", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "SHA512", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "SHA256", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "SHA3", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "MD5", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", ServerStatus.SG("password_encryption"), salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", ServerStatus.SG("password_encryption"), salt).equals(user.getProperty("password")))) {
+                Log.log("SERVER", 0, String.valueOf(the_user) + " logging in to change expired password...");
+                Properties password_rules = SessionCrush.build_password_rules(user);
+                if (ServerStatus.thisObj.common_code.decode_pass(user.getProperty("password")).equals(the_password) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA512", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA256", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA3", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "MD5", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, ServerStatus.SG("password_encryption"), salt).equals(user.getProperty("password"))) {
+                    Log.log("SERVER", 0, String.valueOf(the_user) + " logging in with expired password...");
+                } else {
+                    String pass_requiremetns = Common.checkPasswordRequirements(the_password, user.getProperty("password_history", ""), password_rules);
+                    if (!pass_requiremetns.equals("")) {
+                        loginReason.put("reason", "Auto set password : Invalid password! Error : " + pass_requiremetns);
+                        Log.log("SERVER", 0, String.valueOf(the_user) + " Auto set password : Invalid password! Error :" + pass_requiremetns);
+                        if (thisSession == null) return null;
+                        thisSession.uiPUT("lastProxyError", "Auto set password : Invalid password! Error : " + pass_requiremetns);
+                        thisSession.uiPUT("lastLog", "<response><message>Auto set password : Invalid password! Error : " + pass_requiremetns + "</message><response>");
+                        return null;
+                    }
+                    Log.log("SERVER", 0, String.valueOf(the_user) + " password is being changed...");
+                    Object object = userExpirePasswordLock;
+                    synchronized (object) {
                         try {
-                            if (this.validateMd4(the_user, the_password, user.getProperty("password"))) {
-                                return user;
-                            }
-                        }
-                        catch (Exception e) {
-                            Log.log("USER_OBJ", 1, e);
-                        }
-                        the_password = Common.makeBoundary();
-                    }
-                    if ((salt = user.getProperty("salt", "")).equals("random")) {
-                        salt = "";
-                    }
-                    if (user.getProperty("username").equalsIgnoreCase(the_user) && (ServerStatus.thisObj.common_code.decode_pass(user.getProperty("password")).equals(the_password) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA512", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA256", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA3", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "MD5", salt).equals(user.getProperty("password")) || user.getProperty("password").startsWith("MD5S2:") && ServerStatus.thisObj.common_code.encode_pass(String.valueOf(user.getProperty("password").substring(6, 8)) + the_password, "MD5", salt).substring(4).equalsIgnoreCase(user.getProperty("password").substring(8)) || ServerStatus.thisObj.common_code.encode_pass(the_password, "MD4", salt).equals(user.getProperty("password")) || !user.getProperty("password", "").equals("") && (ServerStatus.thisObj.common_code.crypt3(the_password, user.getProperty("password")).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.bcrypt(the_password, user.getProperty("password")).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.md5crypt(the_password, user.getProperty("password")).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.pbkdf2sha256(the_password, user.getProperty("password")).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.sha512crypt(the_password, user.getProperty("password")).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, ServerStatus.SG("password_encryption"), salt).equals(user.getProperty("password"))))) {
-                        return user;
-                    }
-                    if (user.getProperty("username").equalsIgnoreCase(the_user) && (user.getProperty("auto_set_pass", "false").equals("true") || ServerStatus.thisObj.common_code.decode_pass(user.getProperty("password")).equals("-AUTO-SET-ON-LOGIN-") || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "SHA", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "SHA512", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "SHA256", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "SHA3", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", "MD5", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", ServerStatus.SG("password_encryption"), salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass("-AUTO-SET-ON-LOGIN-", ServerStatus.SG("password_encryption"), salt).equals(user.getProperty("password")))) {
-                        Log.log("SERVER", 0, String.valueOf(the_user) + " logging in to change expired password...");
-                        Properties password_rules = SessionCrush.build_password_rules(user);
-                        if (ServerStatus.thisObj.common_code.decode_pass(user.getProperty("password")).equals(the_password) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA512", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA256", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "SHA3", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, "MD5", salt).equals(user.getProperty("password")) || ServerStatus.thisObj.common_code.encode_pass(the_password, ServerStatus.SG("password_encryption"), salt).equals(user.getProperty("password"))) {
-                            Log.log("SERVER", 0, String.valueOf(the_user) + " logging in with expired password...");
-                        } else if (Common.checkPasswordRequirements(the_password, user.getProperty("password_history", ""), password_rules).equals("")) {
-                            Log.log("SERVER", 0, String.valueOf(the_user) + " password is being changed...");
-                            Object object = userExpirePasswordLock;
-                            synchronized (object) {
-                                this.put_in_user(serverGroup, the_user, "password", ServerStatus.thisObj.common_code.encode_pass(the_password, ServerStatus.SG("password_encryption"), salt), true, true);
-                                this.put_in_user(serverGroup, the_user, "password_history", Common.getPasswordHistory(the_password, user.getProperty("password_history", ""), password_rules), true, true);
+                            this.put_in_user(serverGroup, the_user, "password", ServerStatus.thisObj.common_code.encode_pass(the_password, ServerStatus.SG("password_encryption"), salt), true, true);
+                            this.put_in_user(serverGroup, the_user, "password_history", Common.getPasswordHistory(the_password, user.getProperty("password_history", ""), password_rules), true, true);
+                            if (!user.getProperty("expire_password_days").equals("")) {
                                 GregorianCalendar gc = new GregorianCalendar();
                                 gc.setTime(new Date());
                                 ((Calendar)gc).add(5, Integer.parseInt(user.getProperty("expire_password_days")));
@@ -1173,38 +1334,46 @@ public class UserTools {
                                 String s = sdf.format(gc.getTime());
                                 Log.log("SERVER", 0, String.valueOf(the_user) + " logging in with new password, changing it..." + user.getProperty("expire_password_when") + " to " + s);
                                 this.put_in_user(serverGroup, the_user, "expire_password_when", s, true, true);
-                                this.put_in_user(serverGroup, the_user, "auto_set_pass", "false", true, true);
                             }
-                            loginReason.put("changePassword", "true");
+                            this.put_in_user(serverGroup, the_user, "auto_set_pass", "false", true, true);
                         }
-                        try {
-                            user = ut.getUser(serverGroup, the_user, true);
+                        catch (Exception e) {
+                            Log.log("SERVER", 1, e);
+                            loginReason.put("reason", "Auto set password : Could not set password!");
+                            return null;
                         }
-                        catch (Exception exception) {
-                            // empty catch block
-                        }
-                        return user;
                     }
-                    if (user.getProperty("username").equalsIgnoreCase(the_user) && the_user.equalsIgnoreCase("ANONYMOUS")) {
-                        return user;
-                    }
-                    if (!user.getProperty("username").equalsIgnoreCase(the_user)) break block39;
-                    Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
-                    if (ServerStatus.thisObj.common_code.decode_pass(user.getProperty("password")).equals(Common.url_decode(the_password))) break block40;
-                    Common cfr_ignored_1 = ServerStatus.thisObj.common_code;
-                    if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "SHA", salt).equals(user.getProperty("password"))) break block40;
-                    Common cfr_ignored_2 = ServerStatus.thisObj.common_code;
-                    if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "SHA512", salt).equals(user.getProperty("password"))) break block40;
-                    Common cfr_ignored_3 = ServerStatus.thisObj.common_code;
-                    if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "SHA256", salt).equals(user.getProperty("password"))) break block40;
-                    Common cfr_ignored_4 = ServerStatus.thisObj.common_code;
-                    if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "SHA3", salt).equals(user.getProperty("password"))) break block40;
-                    Common cfr_ignored_5 = ServerStatus.thisObj.common_code;
-                    if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "MD5", salt).equals(user.getProperty("password"))) break block40;
-                    Common cfr_ignored_6 = ServerStatus.thisObj.common_code;
-                    if (!ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), ServerStatus.SG("password_encryption"), salt).equals(user.getProperty("password")) && (!user.getProperty("password").startsWith("MD5S2:") || !ServerStatus.thisObj.common_code.encode_pass(String.valueOf(user.getProperty("password").substring(6, 8)) + the_password, "MD5", salt).substring(4).equalsIgnoreCase(user.getProperty("password").substring(8)))) break block39;
+                    loginReason.put("changePassword", "true");
+                }
+                try {
+                    return ut.getUser(serverGroup, the_user, true);
+                }
+                catch (Exception exception) {
+                    // empty catch block
                 }
                 return user;
+            }
+            if (user.getProperty("username").equalsIgnoreCase(the_user) && the_user.equalsIgnoreCase("ANONYMOUS")) {
+                return user;
+            }
+            if (user.getProperty("username").equalsIgnoreCase(the_user)) {
+                Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
+                if (ServerStatus.thisObj.common_code.decode_pass(user.getProperty("password")).equals(Common.url_decode(the_password))) return user;
+                Common cfr_ignored_1 = ServerStatus.thisObj.common_code;
+                if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "SHA", salt).equals(user.getProperty("password"))) return user;
+                Common cfr_ignored_2 = ServerStatus.thisObj.common_code;
+                if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "SHA512", salt).equals(user.getProperty("password"))) return user;
+                Common cfr_ignored_3 = ServerStatus.thisObj.common_code;
+                if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "SHA256", salt).equals(user.getProperty("password"))) return user;
+                Common cfr_ignored_4 = ServerStatus.thisObj.common_code;
+                if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "SHA3", salt).equals(user.getProperty("password"))) return user;
+                Common cfr_ignored_5 = ServerStatus.thisObj.common_code;
+                if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), "MD5", salt).equals(user.getProperty("password"))) return user;
+                Common cfr_ignored_6 = ServerStatus.thisObj.common_code;
+                if (ServerStatus.thisObj.common_code.encode_pass(Common.url_decode(the_password), ServerStatus.SG("password_encryption"), salt).equals(user.getProperty("password"))) return user;
+                if (user.getProperty("password").startsWith("MD5S2:") && ServerStatus.thisObj.common_code.encode_pass(String.valueOf(user.getProperty("password").substring(6, 8)) + the_password, "MD5", salt).substring(4).equalsIgnoreCase(user.getProperty("password").substring(8))) {
+                    return user;
+                }
             }
             if (user.getProperty("username").equalsIgnoreCase("TEMPLATE")) {
                 return user;
@@ -1212,7 +1381,110 @@ public class UserTools {
             if (user.getProperty("username").equalsIgnoreCase("ANONYMOUS") && loginReason.getProperty("no_log_invalid_password", "false").equals("false")) {
                 Log.log("SERVER", 0, String.valueOf(the_user) + " password invalid.");
             }
-            if (!user.getProperty("failure_count_max", "0").equals("0") && !user.getProperty("failure_count_max", "0").equals("")) {
+        }
+        if (com.crushftp.client.Common.dmz_mode) return null;
+        if (user == null) return null;
+        if (user.getProperty("failure_count", "0").equals("0")) return null;
+        if (user.getProperty("failure_count", "0").equals("")) return null;
+        if (user.getProperty("failure_count_max", "0").equals("0")) return null;
+        if (user.getProperty("failure_count_max", "0").equals("")) return null;
+        Properties info = new Properties();
+        info.put("count", String.valueOf(user.getProperty("failure_count", "0")));
+        info.put("attempts", String.valueOf(user.getProperty("failure_count_max", "0")));
+        info.put("user_name", thisSession.uiSG("user_name"));
+        this.doLoginFailureAlert(thisSession, the_user, serverGroup, user, info, "repeated_login_failure");
+        return null;
+    }
+
+    public static boolean check_pass_variants(String stored_pass, String check_pass, String salt) {
+        boolean ok = false;
+        if (!ok && ServerStatus.thisObj.common_code.decode_pass(stored_pass).equals(check_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("SHA:") && ServerStatus.thisObj.common_code.encode_pass(check_pass, "SHA", salt).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("SHA512:") && ServerStatus.thisObj.common_code.encode_pass(check_pass, "SHA512", salt).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("SHA256:") && ServerStatus.thisObj.common_code.encode_pass(check_pass, "SHA256", salt).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("SHA3:") && ServerStatus.thisObj.common_code.encode_pass(check_pass, "SHA3", salt).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("MD5:") && ServerStatus.thisObj.common_code.encode_pass(check_pass, "MD5", salt).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("MD5S2:") && ServerStatus.thisObj.common_code.encode_pass(String.valueOf(stored_pass.substring(6, 8)) + check_pass, "MD5", salt).substring(4).equalsIgnoreCase(stored_pass.substring(8))) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("MD4:") && ServerStatus.thisObj.common_code.encode_pass(check_pass, "MD4", salt).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && !stored_pass.equals("") && ServerStatus.thisObj.common_code.crypt3(check_pass, stored_pass).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("BCRYPT:") && ServerStatus.thisObj.common_code.bcrypt(check_pass, stored_pass).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("MD5CRYPT:") && ServerStatus.thisObj.common_code.md5crypt(check_pass, stored_pass).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("PBKDF2SHA256:") && ServerStatus.thisObj.common_code.pbkdf2sha256(check_pass, stored_pass).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("SHA512CRYPT:") && ServerStatus.thisObj.common_code.sha512crypt(check_pass, stored_pass, 0).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && stored_pass.startsWith("SHA512CRYPT:") && ServerStatus.thisObj.common_code.sha512crypt(check_pass, stored_pass, 5000).equals(stored_pass)) {
+            ok = true;
+        }
+        if (!ok && ServerStatus.thisObj.common_code.encode_pass(check_pass, ServerStatus.SG("password_encryption"), salt).equals(stored_pass)) {
+            ok = true;
+        }
+        return ok;
+    }
+
+    public void doLoginFailureAlert(SessionCrush thisSession, String the_user, String serverGroup, Properties user, Properties info, String alert_ype) {
+        Properties alert_user_info = null;
+        boolean is_hack_username = false;
+        if (thisSession != null && thisSession.user_info != null) {
+            alert_user_info = (Properties)thisSession.user_info.clone();
+            if (thisSession.checkHackUsernames(the_user)) {
+                is_hack_username = true;
+            }
+        }
+        if (user == null && (user = ut.getUser(serverGroup, the_user, true)) == null) {
+            Log.log("SERVER", 0, "Skipping alert trigger due to invalid user profile attempted:" + the_user);
+        }
+        if (!is_hack_username && user != null) {
+            String msg = "ALERT:Repeated login failure : User :" + serverGroup + "/" + the_user;
+            Log.log("SERVER", 0, String.valueOf(msg) + " Max failures:" + user.getProperty("failure_count_max", "0") + " Current count:" + user.getProperty("failure_count", "0"));
+            if (!info.containsKey("alert_msg")) {
+                info.put("alert_msg", msg);
+            }
+            if (!info.containsKey("alert_msg2")) {
+                info.put("alert_msg2", "login failures and username is now disabled");
+            }
+            user.put("username", the_user);
+            user.put("user_name", the_user);
+            info.put("username", the_user);
+            info.put("user_name", the_user);
+            if (alert_user_info != null) {
+                alert_user_info.put("username", the_user);
+                alert_user_info.put("user_name", the_user);
+            }
+            AlertTools.runAlerts(alert_ype, info, alert_user_info, user, null, null, com.crushftp.client.Common.dmz_mode);
+        } else {
+            Log.log("SERVER", 0, "Skipping alert trigger due to hack username for repeated login failure alert:" + the_user);
+        }
+    }
+
+    public void check_login_count_max(Properties user, String serverGroup, String the_user, String user_ip, String user_port) {
+        block7: {
+            if (user != null && !user.getProperty("failure_count_max", "0").equals("0") && !user.getProperty("failure_count_max", "0").equals("")) {
+                Log.log("USER_OBJ", 1, "Login failed, check for disabling the account.");
                 int failure_count = 0;
                 if (!user.getProperty("failure_count", "0").equals("")) {
                     failure_count = Integer.parseInt(user.getProperty("failure_count", "0"));
@@ -1223,42 +1495,45 @@ public class UserTools {
                     this.put_in_user(serverGroup, the_user, "failure_count_max", String.valueOf(max *= -1), true, true);
                 }
                 this.put_in_user(serverGroup, the_user, "failure_count", String.valueOf(failure_count), true, true);
-                if (failure_count >= max) {
+                try {
+                    throw new RuntimeException(String.valueOf(serverGroup) + "/" + the_user + " failure count incremented:" + failure_count);
+                }
+                catch (Exception e) {
+                    Log.log("USER_OBJ", 1, e);
+                    if (failure_count < max) break block7;
                     this.put_in_user(serverGroup, the_user, "max_logins", "-1", true, true);
-                    if (!user.getProperty("disabled_account_task", "").equals("")) {
-                        final Properties user_f = user;
-                        Properties user_info = new Properties();
-                        user_info.put("user_ip", user_ip);
-                        user_info.put("user_port", String.valueOf(user_port));
-                        final Properties user_info_f = user_info;
-                        final int failure_count_f = failure_count;
-                        final String the_user_f = the_user;
-                        try {
-                            Worker.startWorker(new Runnable(){
+                    if (user.getProperty("disabled_account_task", "").equals("")) break block7;
+                    final Properties user_f = user;
+                    Properties user_info = new Properties();
+                    user_info.put("user_ip", user_ip);
+                    user_info.put("user_port", String.valueOf(user_port));
+                    final Properties user_info_f = user_info;
+                    final int failure_count_f = failure_count;
+                    final String the_user_f = the_user;
+                    try {
+                        Worker.startWorker(new Runnable(){
 
-                                @Override
-                                public void run() {
-                                    Properties event = new Properties();
-                                    event.put("event_plugin_list", user_f.getProperty("disabled_account_task", ""));
-                                    event.put("name", "DisabledUser:" + the_user_f + ":" + failure_count_f);
-                                    Vector<Properties> items = new Vector<Properties>();
-                                    items.addElement(user_f);
-                                    user_f.put("url", "virtual://user/" + the_user_f);
-                                    Properties info = new Properties();
-                                    info.put("user", user_f);
-                                    info.put("user_info", user_info_f);
-                                    ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
-                                }
-                            });
-                        }
-                        catch (Exception e) {
-                            Log.log("SERVER", 0, e);
-                        }
+                            @Override
+                            public void run() {
+                                Properties event = new Properties();
+                                event.put("event_plugin_list", user_f.getProperty("disabled_account_task", ""));
+                                event.put("name", "DisabledUser:" + the_user_f + ":" + failure_count_f);
+                                Vector<Properties> items = new Vector<Properties>();
+                                items.addElement(user_f);
+                                user_f.put("url", "virtual://user/" + the_user_f);
+                                Properties info = new Properties();
+                                info.put("user", user_f);
+                                info.put("user_info", user_info_f);
+                                ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
+                            }
+                        });
+                    }
+                    catch (Exception e2) {
+                        Log.log("SERVER", 0, e2);
                     }
                 }
             }
         }
-        return null;
     }
 
     /*
@@ -1752,7 +2027,7 @@ public class UserTools {
      * Unable to fully structure code
      */
     public static Vector buildPublicKeys(String username, Properties user, String serverGroup) throws IOException {
-        block61: {
+        block63: {
             keyStr = user.getProperty("ssh_public_keys", "");
             if (keyStr.indexOf("://") < 0) {
                 Log.log("SSH_SERVER", 2, keyStr);
@@ -1831,7 +2106,7 @@ public class UserTools {
                 simpleUsername = simpleUsername.substring("$ASCII$".length());
             }
             Log.log("SSH_SERVER", 2, "publicKey_username:" + simpleUsername);
-            if (keyStr.toUpperCase().indexOf("SSH2 PUBLIC KEY") < 0 && keyStr.indexOf(";;;") < 0) ** GOTO lbl154
+            if (keyStr.toUpperCase().indexOf("SSH2 PUBLIC KEY") < 0 && keyStr.indexOf(";;;") < 0) ** GOTO lbl156
             keys = keyStr.split(";;;");
             x = 0;
             while (x < keys.length) {
@@ -1840,7 +2115,7 @@ public class UserTools {
                 }
                 ++x;
             }
-            break block61;
+            break block63;
 lbl-1000:
             // 1 sources
 
@@ -1857,6 +2132,9 @@ lbl-1000:
                     catch (Exception e) {
                         Log.log("SERVER", 1, e);
                     }
+                    if (s.toLowerCase().startsWith("file:/")) {
+                        s = new VRL(s).getCanonicalPath();
+                    }
                     if (new File_S(s).exists()) {
                         files = (File_S[])new File_S(s).listFiles();
                         if (files == null) continue;
@@ -1872,7 +2150,7 @@ lbl-1000:
                     }
                     key_vrl = new VRL(s);
                     if (key_vrl.getProtocol().equalsIgnoreCase("FILE")) continue;
-                    c_key = com.crushftp.client.Common.getClient(Common.getBaseUrl(key_vrl.toString()), "CrushFTP", new Vector<E>());
+                    c_key = com.crushftp.client.Common.getClient(Common.getBaseUrl(key_vrl.toString()), System.getProperty("appname", "CrushFTP"), new Vector<E>());
                     try {
                         try {
                             c_key.login(key_vrl.getUsername(), key_vrl.getPassword(), "");
@@ -1913,7 +2191,7 @@ lbl-1000:
                     continue;
                 }
                 keysVec.addElement(s);
-lbl154:
+lbl156:
                 // 9 sources
 
                 ** while ((s = br.readLine()) != null)
@@ -1921,10 +2199,12 @@ lbl154:
         }
         x = 0;
         while (x < keysVec.size()) {
-            block60: {
+            block62: {
                 data = ServerStatus.change_vars_to_values_static(keysVec.elementAt(x).toString(), user, user, null);
                 data = Common.replace_str(data, "{username}", simpleUsername);
-                data = Common.replace_str(data, "{user_name}", simpleUsername);
+                if ((data = Common.replace_str(data, "{user_name}", simpleUsername)).toLowerCase().startsWith("file:/")) {
+                    data = new VRL(data).getCanonicalPath();
+                }
                 try {
                     data = com.crushftp.client.Common.textFunctions(data, "{", "}");
                 }
@@ -1945,10 +2225,9 @@ lbl154:
                         in.close();
                     }
                 }
-                key_vrl = new VRL(data);
-                if (!key_vrl.getProtocol().equalsIgnoreCase("FILE")) {
+                if (data.indexOf("BEGIN SSH2") < 0 && !(key_vrl = new VRL(data)).getProtocol().equalsIgnoreCase("FILE")) {
                     baos_key = new ByteArrayOutputStream();
-                    c_key = com.crushftp.client.Common.getClient(Common.getBaseUrl(key_vrl.toString()), "CrushFTP", new Vector<E>());
+                    c_key = com.crushftp.client.Common.getClient(Common.getBaseUrl(key_vrl.toString()), System.getProperty("appname", "CrushFTP"), new Vector<E>());
                     try {
                         try {
                             c_key.login(key_vrl.getUsername(), key_vrl.getPassword(), "");
@@ -1965,7 +2244,7 @@ lbl154:
                             catch (Exception e) {
                                 Log.log("SERVER", 1, e);
                             }
-                            break block60;
+                            break block62;
                         }
                     }
                     catch (Throwable var14_42) {
@@ -2122,6 +2401,9 @@ lbl154:
             p0 = (Properties)template_vfs.get("/Internal");
         }
         if (p0 == null) {
+            p0 = (Properties)template_vfs.get("/Internal1");
+        }
+        if (p0 == null) {
             p0 = (Properties)template_vfs.get("/INTERNAL");
         }
         if (p0 == null) {
@@ -2147,6 +2429,220 @@ lbl154:
             user_lock = users_lock.get(String.valueOf(serverGroup) + "~" + username);
         }
         return user_lock;
+    }
+
+    public static String getSubscribeReverseNotificationEvents(String serverGroup, String username, Properties settings) throws Exception {
+        if (com.crushftp.client.Common.dmz_mode) {
+            return "";
+        }
+        Properties user = ut.getUser(serverGroup, username, true);
+        if (user == null) {
+            throw new Exception("User does not exists! This feature only available for real users (not plugin based users)!");
+        }
+        if (settings.getProperty("path", "").equals("") || settings.getProperty("path", "").equals("") || !settings.getProperty("path", "").endsWith("/")) {
+            throw new Exception("Error : The given path is wrong!");
+        }
+        String privs = "";
+        Vector events = (Vector)user.get("events");
+        if (events != null) {
+            String event_name = "subscribe" + Common.replace_str(settings.getProperty("path", ""), "/", "_");
+            int x = 0;
+            while (x < events.size()) {
+                Properties event = (Properties)events.elementAt(x);
+                if (event.getProperty("name", "").equals(event_name)) {
+                    privs = event.getProperty("event_user_action_list", "").trim();
+                    privs = Common.replace_str(privs, "r_", "");
+                    return privs;
+                }
+                ++x;
+            }
+        }
+        return "";
+    }
+
+    public static String saveSubscribeReverseNotificationEvents(String serverGroup, String username, Properties settings) throws Exception {
+        if (com.crushftp.client.Common.dmz_mode) {
+            return "";
+        }
+        Properties user_tmp = ut.getUser(serverGroup, username, true);
+        if (user_tmp == null) {
+            throw new Exception("User does not exists! This feature only available for real users (not plugin based users)!");
+        }
+        String permissions = settings.getProperty("privs", "").trim();
+        if (!(permissions.equals("") || permissions.startsWith("(") && permissions.endsWith(")"))) {
+            throw new Exception("Error : Wrong event permissions format!");
+        }
+        if (settings.getProperty("path", "").equals("") || settings.getProperty("path", "").equals("") || !settings.getProperty("path", "").endsWith("/")) {
+            throw new Exception("Error : The given path is wrong!");
+        }
+        if (!user_tmp.getProperty("subscribe_reverse_notification_event", "").equals("true")) {
+            throw new Exception("Error : Subscribe not supported!");
+        }
+        boolean save = false;
+        Vector<Properties> events = (Vector<Properties>)com.crushftp.client.Common.CLONE(user_tmp.get("events"));
+        if (events == null) {
+            events = new Vector<Properties>();
+            user_tmp.put("events", events);
+            save = true;
+        }
+        permissions = Common.replace_str(permissions, "(", "(r_");
+        String event_name = "subscribe" + Common.replace_str(settings.getProperty("path", ""), "/", "_");
+        boolean event_exists = false;
+        int x = 0;
+        while (x < events.size()) {
+            Properties event = (Properties)events.elementAt(x);
+            if (event.getProperty("name", "").equals(event_name)) {
+                event_exists = true;
+                if (permissions.equals("")) {
+                    events.remove(event);
+                    save = true;
+                    break;
+                }
+                String event_if_list = Common.replace_str(permissions, "r_", "");
+                event_if_list = Common.replace_str(event_if_list, "makedir", "make");
+                event_if_list = Common.replace_str(event_if_list, ")", "_dir)");
+                if (event.getProperty("event_user_action_list", "").trim().length() != permissions.length() || event.getProperty("event_if_list", "").trim().length() != event_if_list.length()) {
+                    event.put("event_user_action_list", permissions);
+                    event.put("event_if_list", event_if_list);
+                    if (event.getProperty("event_always_cb", "").equals("true")) {
+                        event.put("event_always_cb", "false");
+                    }
+                    save = true;
+                    break;
+                }
+                String[] event_privs = permissions.split("\\(r_");
+                int xx = 0;
+                while (xx < event_privs.length) {
+                    String priv = event_privs[xx].trim();
+                    if (!priv.equals("")) {
+                        String if_list_priv = Common.replace_str(priv, "makedir", "make");
+                        if_list_priv = Common.replace_str(priv, ")", "_dir)");
+                        if (event.getProperty("event_user_action_list", "").trim().indexOf("(r_" + priv) < 0 || event.getProperty("event_if_list", "").trim().indexOf(if_list_priv) < 0) {
+                            event.put("event_user_action_list", permissions);
+                            event.put("event_if_list", event_if_list);
+                            if (event.getProperty("event_always_cb", "").equals("true")) {
+                                event.put("event_always_cb", "false");
+                            }
+                            save = true;
+                            break;
+                        }
+                    }
+                    ++xx;
+                }
+            }
+            ++x;
+        }
+        if (!event_exists) {
+            if (permissions.equals("")) {
+                throw new Exception("Error : Select at least one user action!");
+            }
+            Properties event = null;
+            int x2 = 0;
+            while (x2 < events.size()) {
+                Properties temp_event = (Properties)events.elementAt(x2);
+                if (temp_event.getProperty("event_action_list", "").equals("(subscribe_reverse_notification_event_template)")) {
+                    event = (Properties)com.crushftp.client.Common.CLONE(temp_event);
+                }
+                ++x2;
+            }
+            if (event == null) {
+                throw new Exception("Could not found subscribe reverse notification event template !");
+            }
+            event.put("id", Common.makeBoundary(10));
+            event.put("name", "subscribe" + Common.replace_str(settings.getProperty("path", ""), "/", "_"));
+            event.put("event_action_list", "(run_plugin)");
+            event.put("event_user_action_list", permissions);
+            String event_if_list = Common.replace_str(permissions, "r_", "");
+            event_if_list = Common.replace_str(event_if_list, "makedir", "make");
+            event_if_list = Common.replace_str(event_if_list, ")", "_dir)");
+            event.put("event_if_list", event_if_list);
+            event.put("event_dir_data", settings.getProperty("path", ""));
+            event.put("event_always_cb", "false");
+            events.add(event);
+            save = true;
+        }
+        if (save) {
+            Properties user = ut.getUser(serverGroup, username, false);
+            user.put("events", events);
+            UserTools.writeUser(serverGroup, user_tmp.getProperty("user_name", user.getProperty("username", "")), user);
+        }
+        return "";
+    }
+
+    public static void addTemplateUserForDMZ(String serverGroup, String username) throws Exception {
+        Properties p = new Properties();
+        long current_date = System.currentTimeMillis();
+        p.put("created_time", String.valueOf(current_date));
+        p.put("updated_time", String.valueOf(current_date));
+        p.put("root_dir", "/");
+        p.put("max_logins", "0");
+        p.put("version", "1.0");
+        p.put("userVersion", "6");
+        p.put("username", "template");
+        p.put("ssh_public_keys", "DMZ");
+        p.put("password", "");
+        UserTools.writeUser(serverGroup, username, p);
+        VFS vfs = ut.getVFS(serverGroup, username);
+        UserTools.addPriv(serverGroup, username, "/INTERNAL/", "(read)(write)(view)(delete)(deletedir)(makedir)(rename)(resume)(share)", 0, vfs);
+        Properties settings = new Properties();
+        settings.put("use_dmz", "false");
+        settings.put("multi", "false");
+        settings.put("multi_segmented_download", "false");
+        settings.put("haDownload", "false");
+        settings.put("haUpload", "false");
+        settings.put("read_timeout", "20000");
+        settings.put("write_timeout", "20000");
+        settings.put("timeout", "20000");
+        UserTools.addItem(serverGroup, username, "/", "Internal", "HTTP://{username}:{password}@127.0.0.1:8080/", "DIR", new Properties(), false, "");
+        ut.forceMemoryReload("template");
+    }
+
+    public static void disable_OTP(Properties user) {
+        user.put("otp_auth", "false");
+        user.put("twofactor_secret", "");
+        Vector<Properties> v = (Vector<Properties>)user.get("web_customizations");
+        if (v == null) {
+            v = new Vector<Properties>();
+            user.put("web_customizations", v);
+        }
+        boolean found = false;
+        int x = 0;
+        while (x < v.size()) {
+            Properties settings = (Properties)v.get(x);
+            if (settings.getProperty("key").equalsIgnoreCase("twofactor_force_google_enrollment")) {
+                settings.put("value", "false");
+                found = true;
+            }
+            ++x;
+        }
+        if (!found) {
+            Properties settings = new Properties();
+            settings.put("key", "twofactor_force_google_enrollment");
+            settings.put("value", "false");
+            v.add(settings);
+        }
+    }
+
+    public VFS get_full_VFS(String serverGroup, String username, Properties user) {
+        VFS vfs = this.getVFS(serverGroup, username);
+        Vector linked_vfs = (Vector)user.get("linked_vfs");
+        if (linked_vfs == null) {
+            linked_vfs = new Vector();
+        }
+        int xx = 0;
+        while (xx < linked_vfs.size()) {
+            if (!linked_vfs.elementAt(xx).toString().trim().equals("")) {
+                try {
+                    VFS tempVFS = ut.getVFS(serverGroup, linked_vfs.elementAt(xx).toString());
+                    vfs.addLinkedVFS(tempVFS);
+                }
+                catch (Exception e) {
+                    Log.log("REPORT", 1, e);
+                }
+            }
+            ++xx;
+        }
+        return vfs;
     }
 }
 

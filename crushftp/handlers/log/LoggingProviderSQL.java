@@ -4,6 +4,7 @@
 package crushftp.handlers.log;
 
 import com.crushftp.client.File_S;
+import com.crushftp.client.Worker;
 import crushftp.handlers.LoggingProvider;
 import crushftp.server.ServerStatus;
 import java.io.ByteArrayOutputStream;
@@ -20,13 +21,15 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.Date;
 import java.util.Properties;
+import java.util.Vector;
 
 public class LoggingProviderSQL
 extends LoggingProvider {
     Driver driver = null;
     Connection conn = null;
-    PreparedStatement ps = null;
     long row_num = 0L;
+    Vector ps_pool = new Vector();
+    int runnign_sql_inserts = 0;
 
     @Override
     public void checkForLogRoll() {
@@ -156,56 +159,120 @@ extends LoggingProvider {
 
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
+     * Unable to fully structure code
      */
-    private void logDB(String line, String tag) {
-        Object object = log_lock;
-        synchronized (object) {
-            try {
-                if (this.conn == null) {
-                    if (this.ps != null) {
-                        this.ps.close();
+    private void logDB(final String line, final String tag) {
+        this_row_num_temp = 0L;
+        var5_4 = LoggingProviderSQL.log_lock;
+        synchronized (var5_4) {
+            if (this.conn == null) {
+                try {
+                    while (this.ps_pool.size() > 0) {
+                        ((PreparedStatement)this.ps_pool.remove(0)).close();
                     }
-                    this.ps = null;
                     this.conn = this.getConnection();
-                    Statement st = this.conn.createStatement();
-                    ResultSet rs = st.executeQuery(ServerStatus.SG("logging_db_query_count"));
+                    st = this.conn.createStatement();
+                    rs = st.executeQuery(ServerStatus.SG("logging_db_query_count"));
                     rs.next();
                     this.row_num = rs.getLong(1);
                     rs.close();
                     st.close();
                 }
-                if (this.ps == null) {
-                    this.ps = this.conn.prepareStatement(ServerStatus.SG("logging_db_insert"));
+                catch (Exception e) {
+                    System.out.println(new Date());
+                    e.printStackTrace();
                 }
-                this.ps.setLong(1, System.currentTimeMillis());
-                this.ps.setString(2, tag);
-                this.ps.setString(3, line);
-                this.ps.setLong(4, this.row_num + 1L);
-                this.ps.executeUpdate();
-                ++this.row_num;
             }
-            catch (Exception e) {
-                System.out.println(new Date());
-                e.printStackTrace();
-                try {
-                    if (this.ps != null) {
-                        this.ps.close();
+            this_row_num_temp = this.row_num++;
+            // MONITOREXIT @DISABLED, blocks:[0, 4] lbl24 : MonitorExitStatement: MONITOREXIT : var5_4
+            if (true) ** GOTO lbl30
+        }
+        {
+            do {
+                Thread.sleep(100L);
+lbl30:
+                // 2 sources
+
+            } while (this.runnign_sql_inserts > 10);
+        }
+        this_row_num = this_row_num_temp;
+        try {
+            Worker.startWorker(new Runnable(){
+
+                /*
+                 * WARNING - Removed try catching itself - possible behaviour change.
+                 */
+                @Override
+                public void run() {
+                    PreparedStatement ps = null;
+                    Object object = log_lock;
+                    synchronized (object) {
+                        ++LoggingProviderSQL.this.runnign_sql_inserts;
+                        try {
+                            ps = LoggingProviderSQL.this.ps_pool.size() == 0 ? LoggingProviderSQL.this.conn.prepareStatement(ServerStatus.SG("logging_db_insert")) : (PreparedStatement)LoggingProviderSQL.this.ps_pool.remove(0);
+                        }
+                        catch (Exception e) {
+                            System.out.println(new Date());
+                            e.printStackTrace();
+                            try {
+                                if (ps != null) {
+                                    ps.close();
+                                }
+                            }
+                            catch (Exception exception) {
+                                // empty catch block
+                            }
+                            try {
+                                if (LoggingProviderSQL.this.conn != null) {
+                                    LoggingProviderSQL.this.conn.close();
+                                }
+                            }
+                            catch (Exception exception) {
+                                // empty catch block
+                            }
+                            ps = null;
+                            LoggingProviderSQL.this.conn = null;
+                        }
+                    }
+                    try {
+                        ps.setLong(1, System.currentTimeMillis());
+                        ps.setString(2, tag);
+                        ps.setString(3, line);
+                        ps.setLong(4, this_row_num + 1L);
+                        ps.executeUpdate();
+                        LoggingProviderSQL.this.ps_pool.addElement(ps);
+                    }
+                    catch (Exception e) {
+                        System.out.println(new Date());
+                        e.printStackTrace();
+                        try {
+                            if (ps != null) {
+                                ps.close();
+                            }
+                        }
+                        catch (Exception exception) {
+                            // empty catch block
+                        }
+                        try {
+                            if (LoggingProviderSQL.this.conn != null) {
+                                LoggingProviderSQL.this.conn.close();
+                            }
+                        }
+                        catch (Exception exception) {
+                            // empty catch block
+                        }
+                        ps = null;
+                        LoggingProviderSQL.this.conn = null;
+                    }
+                    object = log_lock;
+                    synchronized (object) {
+                        --LoggingProviderSQL.this.runnign_sql_inserts;
                     }
                 }
-                catch (Exception exception) {
-                    // empty catch block
-                }
-                try {
-                    if (this.conn != null) {
-                        this.conn.close();
-                    }
-                }
-                catch (Exception exception) {
-                    // empty catch block
-                }
-                this.ps = null;
-                this.conn = null;
-            }
+            }, "LoggingProviderSQL insert thread:" + new Date());
+        }
+        catch (IOException var7_9) {
+            // empty catch block
         }
     }
 
@@ -218,7 +285,7 @@ extends LoggingProvider {
         String db_url = ServerStatus.SG("logging_db_url");
         try {
             String pass = ServerStatus.thisObj.common_code.decode_pass(ServerStatus.SG("logging_db_pass"));
-            if (!ServerStatus.SG("logging_db_driver_file").equals("")) {
+            if (!ServerStatus.SG("logging_db_driver_file").equals("") && System.getProperty("crushftp.security.classloader", "false").equals("true")) {
                 String[] db_drv_files = ServerStatus.SG("logging_db_driver_file").split(";");
                 final URL[] urls = new URL[db_drv_files.length];
                 int x = 0;

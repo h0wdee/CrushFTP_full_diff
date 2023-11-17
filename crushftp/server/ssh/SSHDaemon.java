@@ -2,29 +2,12 @@
  * Decompiled with CFR 0.152.
  * 
  * Could not load the following classes:
- *  com.maverick.events.Event
- *  com.maverick.events.EventListener
+ *  com.maverick.logging.Log
+ *  com.maverick.logging.Log$Level
+ *  com.maverick.logging.RootLoggerContext
  *  com.maverick.nio.Daemon
  *  com.maverick.nio.DaemonContext
  *  com.maverick.nio.ProtocolContext
- *  com.maverick.ssh.SshException
- *  com.maverick.ssh.components.jce.AES128Cbc
- *  com.maverick.ssh.components.jce.AES128Ctr
- *  com.maverick.ssh.components.jce.AES128Gcm
- *  com.maverick.ssh.components.jce.AES192Cbc
- *  com.maverick.ssh.components.jce.AES192Ctr
- *  com.maverick.ssh.components.jce.AES256Cbc
- *  com.maverick.ssh.components.jce.AES256Ctr
- *  com.maverick.ssh.components.jce.AES256Gcm
- *  com.maverick.ssh.components.jce.ArcFour
- *  com.maverick.ssh.components.jce.ArcFour128
- *  com.maverick.ssh.components.jce.ArcFour256
- *  com.maverick.ssh.components.jce.BlowfishCbc
- *  com.maverick.ssh.components.jce.HmacRipeMd160
- *  com.maverick.ssh.components.jce.HmacRipeMd160ETM
- *  com.maverick.ssh.components.jce.JCEProvider
- *  com.maverick.ssh.components.jce.TripleDesCbc
- *  com.maverick.ssh.components.jce.TripleDesCtr
  *  com.maverick.sshd.AuthenticationMechanismFactory
  *  com.maverick.sshd.Authenticator
  *  com.maverick.sshd.Connection
@@ -32,19 +15,18 @@
  *  com.maverick.sshd.KeyboardInteractiveAuthenticationProvider
  *  com.maverick.sshd.PasswordAuthenticationProvider
  *  com.maverick.sshd.PasswordKeyboardInteractiveProvider
+ *  com.maverick.sshd.RequiredAuthenticationStrategy
  *  com.maverick.sshd.SshContext
- *  com.maverick.sshd.events.EventServiceImplementation
+ *  com.maverick.sshd.platform.DisplayAwareKeyboardInteractiveProvider
  *  com.maverick.sshd.platform.FileSystemFactory
- *  com.maverick.sshd.platform.KeyboardInteractiveProvider
  */
 package crushftp.server.ssh;
 
 import com.crushftp.client.File_S;
 import com.crushftp.client.GenericClient;
 import com.crushftp.client.VRL;
-import com.maverick.events.Event;
-import com.maverick.events.EventListener;
 import com.maverick.logging.Log;
+import com.maverick.logging.RootLoggerContext;
 import com.maverick.nio.Daemon;
 import com.maverick.nio.DaemonContext;
 import com.maverick.nio.ProtocolContext;
@@ -61,6 +43,7 @@ import com.maverick.ssh.components.jce.ArcFour;
 import com.maverick.ssh.components.jce.ArcFour128;
 import com.maverick.ssh.components.jce.ArcFour256;
 import com.maverick.ssh.components.jce.BlowfishCbc;
+import com.maverick.ssh.components.jce.ChaCha20Poly1305;
 import com.maverick.ssh.components.jce.HmacRipeMd160;
 import com.maverick.ssh.components.jce.HmacRipeMd160ETM;
 import com.maverick.ssh.components.jce.JCEProvider;
@@ -73,10 +56,10 @@ import com.maverick.sshd.ForwardingPolicy;
 import com.maverick.sshd.KeyboardInteractiveAuthenticationProvider;
 import com.maverick.sshd.PasswordAuthenticationProvider;
 import com.maverick.sshd.PasswordKeyboardInteractiveProvider;
+import com.maverick.sshd.RequiredAuthenticationStrategy;
 import com.maverick.sshd.SshContext;
-import com.maverick.sshd.events.EventServiceImplementation;
+import com.maverick.sshd.platform.DisplayAwareKeyboardInteractiveProvider;
 import com.maverick.sshd.platform.FileSystemFactory;
-import com.maverick.sshd.platform.KeyboardInteractiveProvider;
 import crushftp.handlers.Common;
 import crushftp.handlers.Log;
 import crushftp.server.ServerStatus;
@@ -94,7 +77,6 @@ import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.net.InetAddress;
 import java.net.ServerSocket;
-import java.util.Date;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.Vector;
@@ -125,46 +107,54 @@ extends Daemon {
                 server_item.put("ssh_local_port", String.valueOf(this.localSSHPort));
                 if (!sshLoaded) {
                     sshLoaded = true;
-                    EventServiceImplementation.getInstance().addListener(new EventListener(){
+                    com.maverick.logging.Log.setDefaultContext((RootLoggerContext)new RootLoggerContext(){
 
-                        public void processEvent(Event evt) {
-                            try {
-                                if (evt == null) {
-                                    return;
-                                }
-                                Throwable t = null;
-                                String s = "";
-                                if (evt.getAttribute("LOG_MESSAGE") != null) {
-                                    s = evt.getAttribute("LOG_MESSAGE").toString();
-                                }
-                                if (evt.getAttribute("IP") != null) {
-                                    s = String.valueOf(s) + ":" + evt.getAttribute("IP").toString();
-                                }
-                                if (evt.getAttribute("THROWABLE") != null) {
-                                    t = (Throwable)evt.getAttribute("THROWABLE");
-                                }
-                                if (t != null) {
-                                    String tt = "" + t;
-                                    if (tt.indexOf("DELE-error") >= 0) {
-                                        Log.log("SSH_SERVER", 0, tt);
-                                    } else if (tt.indexOf("RMD-bad") >= 0) {
-                                        Log.log("SSH_SERVER", 0, tt);
-                                    } else {
-                                        Log.log("SSH_SERVER", 2, t);
-                                    }
-                                }
-                                if (s.equals("")) {
-                                    return;
-                                }
-                                if (s.toUpperCase().indexOf("Failed to create".toUpperCase()) >= 0) {
-                                    s = String.valueOf(s) + "#######Do you have the Java Strong cryptography policy files installed?";
-                                }
-                                s = String.valueOf(ServerStatus.thisObj.logDateFormat.format(new Date())) + "|" + s;
-                                ServerStatus.thisObj.append_log(s, "ACCEPT");
+                        public void raw(Log.Level level, String msg) {
+                        }
+
+                        public void newline() {
+                        }
+
+                        public void log(Log.Level level, String msg, Throwable e, Object ... args) {
+                            if (msg != null && msg.indexOf("SSH_MSG_IGNORE") >= 0) {
+                                return;
                             }
-                            catch (Exception e) {
-                                e.printStackTrace();
+                            if (msg != null && msg.indexOf("There are now ") >= 0) {
+                                return;
                             }
+                            if (e != null) {
+                                Log.log("SSH_SERVER", 2, e);
+                            }
+                            String log_tag = "SSH_SERVER";
+                            if (msg != null && msg.indexOf(" - ") >= 0) {
+                                log_tag = "SSH_CLIENT";
+                            }
+                            if (level == Log.Level.TRACE) {
+                                Log.log(log_tag, 3, msg);
+                            } else if (level == Log.Level.DEBUG) {
+                                Log.log(log_tag, 2, msg);
+                            } else if (level == Log.Level.WARN) {
+                                Log.log(log_tag, 1, msg);
+                            } else if (level == Log.Level.INFO || level == Log.Level.NONE) {
+                                Log.log(log_tag, 0, msg);
+                            }
+                        }
+
+                        public boolean isLogging(Log.Level level) {
+                            return true;
+                        }
+
+                        public void close() {
+                        }
+
+                        public void shutdown() {
+                        }
+
+                        public String getProperty(String key, String defaultValue) {
+                            return "";
+                        }
+
+                        public void enableConsole(Log.Level level) {
                         }
                     });
                 }
@@ -189,7 +179,7 @@ extends Daemon {
             }
             Log.log("SSH_SERVER", 0, "Configuring SSHD (" + Daemon.getVersion() + ")");
             try {
-                JCEProvider.enableBouncyCastle((boolean)ServerStatus.BG("ssh_bouncycastle"));
+                JCEProvider.enableBouncyCastle(ServerStatus.BG("ssh_bouncycastle"));
             }
             catch (Exception e) {
                 Log.log("SERVER", 0, e);
@@ -226,10 +216,11 @@ extends Daemon {
                 max_channels = 1;
             }
             this.sshContext.setChannelLimit(max_channels);
+            this.sshContext.setSHA1SignaturesSupported(this.server_item.getProperty("rsa_sha1_signatures", "true").equals("true"));
             try {
                 String welcome_msg;
                 if (!ServerStatus.BG("fips140_sftp_server")) {
-                    String[] ciphers = this.server_item.getProperty("ssh_cipher_list", "aes128-ctr,aes192-ctr,aes256-ctr,3des-ctr,3des-cbc,blowfish-cbc,arcfour,arcfour128,arcfour256,aes128-gcm@openssh.com,aes256-gcm@openssh.com").split(",");
+                    String[] ciphers = this.server_item.getProperty("ssh_cipher_list", "aes128-ctr,aes192-ctr,aes256-ctr,3des-ctr,3des-cbc,blowfish-cbc,arcfour,arcfour128,arcfour256,aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com").split(",");
                     this.sshContext.supportedCiphersCS().clear();
                     this.sshContext.supportedCiphersSC().clear();
                     int x = 0;
@@ -263,6 +254,10 @@ extends Daemon {
                             this.sshContext.supportedCiphersCS().add("aes128-gcm@openssh.com", AES128Gcm.class);
                         } else if (c.equalsIgnoreCase("aes256-gcm@openssh.com")) {
                             this.sshContext.supportedCiphersCS().add("aes256-gcm@openssh.com", AES256Gcm.class);
+                        } else if (c.equalsIgnoreCase("chacha20poly1305@openssh.com")) {
+                            this.sshContext.supportedCiphersCS().add("chacha20poly1305@openssh.com", ChaCha20Poly1305.class);
+                        } else if (c.equalsIgnoreCase("chacha20-poly1305@openssh.com")) {
+                            this.sshContext.supportedCiphersCS().add("chacha20-poly1305@openssh.com", ChaCha20Poly1305.class);
                         }
                         if (c.equalsIgnoreCase("blowfish-cbc")) {
                             this.sshContext.supportedCiphersSC().add("blowfish-cbc", BlowfishCbc.class);
@@ -292,10 +287,14 @@ extends Daemon {
                             this.sshContext.supportedCiphersSC().add("aes128-gcm@openssh.com", AES128Gcm.class);
                         } else if (c.equalsIgnoreCase("aes256-gcm@openssh.com")) {
                             this.sshContext.supportedCiphersSC().add("aes256-gcm@openssh.com", AES256Gcm.class);
+                        } else if (c.equalsIgnoreCase("chacha20poly1305@openssh.com")) {
+                            this.sshContext.supportedCiphersSC().add("chacha20poly1305@openssh.com", ChaCha20Poly1305.class);
+                        } else if (c.equalsIgnoreCase("chacha20-poly1305@openssh.com")) {
+                            this.sshContext.supportedCiphersSC().add("chacha20-poly1305@openssh.com", ChaCha20Poly1305.class);
                         }
                         ++x;
                     }
-                    String kex = this.server_item.getProperty("key_exchanges", "curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256,diffie-hellman-group18-sha512,diffie-hellman-group17-sha512,diffie-hellman-group16-sha512,diffie-hellman-group15-sha512,diffie-hellman-group14-sha256,diffie-hellman-group14-sha1,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha1");
+                    String kex = this.server_item.getProperty("key_exchanges", "curve25519-sha2@libssh.org,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256,diffie-hellman-group18-sha512,diffie-hellman-group17-sha512,diffie-hellman-group16-sha512,diffie-hellman-group15-sha512,diffie-hellman-group14-sha256,diffie-hellman-group14-sha1,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha1");
                     String[] supported_key = this.sshContext.supportedKeyExchanges().toArray();
                     int x2 = 0;
                     while (x2 < supported_key.length) {
@@ -350,13 +349,15 @@ extends Daemon {
                     }
                     ++x;
                 }
-                if (macs_list.toLowerCase().indexOf("hmac-ripemd160") >= 0 || macs_list.toLowerCase().indexOf("hmac-ripemd160@openssh.com") >= 0) {
-                    this.sshContext.supportedMacsSC().add("hmac-ripemd160", HmacRipeMd160.class);
-                    this.sshContext.supportedMacsCS().add("hmac-ripemd160", HmacRipeMd160.class);
-                }
-                if (macs_list.toLowerCase().indexOf("ripemd160-etm@openssh.com") >= 0) {
-                    this.sshContext.supportedMacsSC().add("hmac-ripemd160-etm@openssh.com", HmacRipeMd160ETM.class);
-                    this.sshContext.supportedMacsCS().add("hmac-ripemd160-etm@openssh.com", HmacRipeMd160ETM.class);
+                if (!ServerStatus.BG("fips140_sftp_server")) {
+                    if (macs_list.toLowerCase().indexOf("hmac-ripemd160") >= 0 || macs_list.toLowerCase().indexOf("hmac-ripemd160@openssh.com") >= 0) {
+                        this.sshContext.supportedMacsSC().add("hmac-ripemd160", HmacRipeMd160.class);
+                        this.sshContext.supportedMacsCS().add("hmac-ripemd160", HmacRipeMd160.class);
+                    }
+                    if (macs_list.toLowerCase().indexOf("ripemd160-etm@openssh.com") >= 0) {
+                        this.sshContext.supportedMacsSC().add("hmac-ripemd160-etm@openssh.com", HmacRipeMd160ETM.class);
+                        this.sshContext.supportedMacsCS().add("hmac-ripemd160-etm@openssh.com", HmacRipeMd160ETM.class);
+                    }
                 }
                 if (!(welcome_msg = this.server_item.getProperty("ftp_welcome_message", "").trim()).equals("")) {
                     welcome_msg = String.valueOf(welcome_msg) + "\r\n";
@@ -370,51 +371,39 @@ extends Daemon {
                     if (com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + rsa_key.toString().toUpperCase().replace('\\', '/')) && !rsa_key.toString().equals("")) {
                         Properties p = (Properties)com.crushftp.client.Common.System2.get("crushftp.keystores." + rsa_key.toString().toUpperCase().replace('\\', '/'));
                         try {
-                            this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream((byte[])p.get("bytes")), "RSA", 1024);
-                        }
-                        catch (Exception e) {
-                            try {
-                                this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream((byte[])p.get("bytes")), "RSA", 2048);
-                            }
-                            catch (Exception e1) {
-                                this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream((byte[])p.get("bytes")), "RSA", 4096);
-                            }
-                        }
-                    } else if (ServerStatus.BG("v10_beta") && !rsa_key.toString().equals("") && (rsa_key.toUpperCase().startsWith("FILE://") || !new VRL(rsa_key).getProtocol().equalsIgnoreCase("FILE"))) {
-                        try {
-                            VRL vrl = new VRL(rsa_key);
-                            GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SSHDaemmon", new Vector());
-                            if (vrl.getConfig() != null && vrl.getConfig().size() > 0) {
-                                c.setConfigObj(vrl.getConfig());
-                            }
-                            c.login(vrl.getUsername(), vrl.getPassword(), null);
-                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                            com.crushftp.client.Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true), baos, false, true, true);
-                            try {
-                                this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream(baos.toByteArray()), "RSA", 1024);
-                            }
-                            catch (Exception e) {
-                                try {
-                                    this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream(baos.toByteArray()), "RSA", 2048);
-                                }
-                                catch (Exception e1) {
-                                    this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream(baos.toByteArray()), "RSA", 4096);
-                                }
-                            }
+                            this.loadKey(new ByteArrayInputStream((byte[])p.get("bytes")), "ssh-rsa", "4096,2048,1024");
                         }
                         catch (Exception e) {
                             Log.log("SERVER", 0, e);
                         }
                     } else if (!rsa_key.toString().equals("")) {
-                        try {
-                            this.sshContext.loadOrGenerateHostKey((File)new File_S(rsa_key.toString()), "ssh-rsa", 4096);
-                        }
-                        catch (Exception e) {
+                        String rsa_key_url = rsa_key;
+                        if (new VRL(rsa_key_url).getProtocol().equalsIgnoreCase("FILE")) {
                             try {
-                                this.sshContext.loadOrGenerateHostKey((File)new File_S(rsa_key.toString()), "ssh-rsa", 2048);
+                                this.loadOrGenerateKey(new VRL(rsa_key_url).getCanonicalPath().replace('\\', '/'), "ssh-rsa", "4096,2048,1024");
                             }
-                            catch (Exception e1) {
-                                this.sshContext.loadOrGenerateHostKey((File)new File_S(rsa_key.toString()), "ssh-rsa", 1024);
+                            catch (Exception e) {
+                                Log.log("SERVER", 0, e);
+                            }
+                        } else {
+                            try {
+                                VRL vrl = new VRL(rsa_key_url);
+                                GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SSHDaemmon", new Vector());
+                                if (vrl.getConfig() != null && vrl.getConfig().size() > 0) {
+                                    c.setConfigObj(vrl.getConfig());
+                                }
+                                c.login(vrl.getUsername(), vrl.getPassword(), null);
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                com.crushftp.client.Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true, true), baos, false, true, true);
+                                try {
+                                    this.loadKey(new ByteArrayInputStream(baos.toByteArray()), "ssh-rsa", "4096,2048,1024");
+                                }
+                                catch (Exception e) {
+                                    Log.log("SERVER", 0, e);
+                                }
+                            }
+                            catch (Exception e) {
+                                Log.log("SERVER", 0, e);
                             }
                         }
                     }
@@ -423,78 +412,158 @@ extends Daemon {
                 if (this.server_item.get("ssh_dsa_key") != null) {
                     dsa_key = this.server_item.getProperty("ssh_dsa_key", "");
                 }
-                if (this.server_item.getProperty("ssh_dsa_enabled", "true").equals("true")) {
+                if (this.server_item.getProperty("ssh_dsa_enabled", "false").equals("true")) {
                     if (com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + dsa_key.toString().toUpperCase().replace('\\', '/'))) {
                         Properties p = (Properties)com.crushftp.client.Common.System2.get("crushftp.keystores." + dsa_key.toString().toUpperCase().replace('\\', '/'));
                         try {
-                            this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream((byte[])p.get("bytes")), "DSA", 1024);
+                            this.loadKey(new ByteArrayInputStream((byte[])p.get("bytes")), "ssh-dss", "4096,2048,1024");
                         }
                         catch (Exception e) {
                             Log.log("SERVER", 0, e);
-                            try {
-                                this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream((byte[])p.get("bytes")), "DSA", 2048);
-                            }
-                            catch (Exception e1) {
-                                Log.log("SERVER", 0, e1);
-                                this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream((byte[])p.get("bytes")), "DSA", 4096);
-                            }
                         }
-                    } else if (ServerStatus.BG("v10_beta") && !dsa_key.toString().equals("") && (dsa_key.toUpperCase().startsWith("FILE://") || !new VRL(dsa_key).getProtocol().equalsIgnoreCase("FILE"))) {
-                        try {
-                            VRL vrl = new VRL(dsa_key);
-                            GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SSHDaemmon", new Vector());
-                            if (vrl.getConfig() != null && vrl.getConfig().size() > 0) {
-                                c.setConfigObj(vrl.getConfig());
-                            }
-                            c.login(vrl.getUsername(), vrl.getPassword(), null);
-                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                            com.crushftp.client.Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true), baos, false, true, true);
+                    } else if (!dsa_key.toString().equals("")) {
+                        String dsa_key_url = dsa_key;
+                        if (new VRL(dsa_key_url).getProtocol().equalsIgnoreCase("FILE")) {
                             try {
-                                this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream(baos.toByteArray()), "DSA", 1024);
+                                this.loadOrGenerateKey(new VRL(dsa_key_url).getCanonicalPath().replace('\\', '/'), "ssh-dss", "4096,2048,1024");
                             }
                             catch (Exception e) {
                                 Log.log("SERVER", 0, e);
-                                try {
-                                    this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream(baos.toByteArray()), "DSA", 2048);
-                                }
-                                catch (Exception e1) {
-                                    Log.log("SERVER", 0, e1);
-                                    this.sshContext.loadHostKey((InputStream)new ByteArrayInputStream(baos.toByteArray()), "DSA", 4096);
-                                }
                             }
-                        }
-                        catch (Exception e) {
-                            Log.log("SERVER", 0, e);
-                        }
-                    } else if (dsa_key instanceof String && !dsa_key.toString().equals("")) {
-                        try {
-                            this.sshContext.loadOrGenerateHostKey((File)new File_S(dsa_key.toString()), "ssh-dss", 4096);
-                        }
-                        catch (Exception e) {
-                            Log.log("SERVER", 0, e);
+                        } else {
                             try {
-                                this.sshContext.loadOrGenerateHostKey((File)new File_S(dsa_key.toString()), "ssh-dss", 2048);
+                                VRL vrl = new VRL(dsa_key_url);
+                                GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SSHDaemmon", new Vector());
+                                if (vrl.getConfig() != null && vrl.getConfig().size() > 0) {
+                                    c.setConfigObj(vrl.getConfig());
+                                }
+                                c.login(vrl.getUsername(), vrl.getPassword(), null);
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                com.crushftp.client.Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true, true), baos, false, true, true);
+                                this.loadKey(new ByteArrayInputStream(baos.toByteArray()), "ssh-dss", "4096,2048,1024");
                             }
-                            catch (Exception e1) {
-                                Log.log("SERVER", 0, e1);
-                                this.sshContext.loadOrGenerateHostKey((File)new File_S(dsa_key.toString()), "ssh-dss", 1024);
+                            catch (Exception e) {
+                                Log.log("SERVER", 0, e);
+                            }
+                        }
+                    }
+                }
+                String ed25519_key = String.valueOf(System.getProperty("crushftp.prefs")) + "ssh_host_ed25519_key";
+                if (this.server_item.get("ssh_ed25519_key") != null) {
+                    ed25519_key = this.server_item.getProperty("ssh_ed25519_key", "");
+                }
+                this.server_item.put("ssh_ed25519_enabled", this.server_item.getProperty("ssh_ed25519_enabled", "false"));
+                if (this.server_item.getProperty("ssh_ed25519_enabled", "false").equals("true")) {
+                    if (com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + ed25519_key.toString().toUpperCase().replace('\\', '/'))) {
+                        Properties p = (Properties)com.crushftp.client.Common.System2.get("crushftp.keystores." + ed25519_key.toString().toUpperCase().replace('\\', '/'));
+                        try {
+                            this.loadKey(new ByteArrayInputStream((byte[])p.get("bytes")), "ed25519", "65535");
+                        }
+                        catch (Exception e) {
+                            Log.log("SERVER", 0, e);
+                        }
+                    } else if (!ed25519_key.toString().equals("")) {
+                        String ed25519_key_url = ed25519_key;
+                        if (new VRL(ed25519_key_url).getProtocol().equalsIgnoreCase("FILE")) {
+                            try {
+                                this.loadOrGenerateKey(new VRL(ed25519_key_url).getCanonicalPath().replace('\\', '/'), "ed25519", "65535");
+                            }
+                            catch (Exception e) {
+                                Log.log("SERVER", 0, e);
+                            }
+                        } else {
+                            try {
+                                VRL vrl = new VRL(ed25519_key_url);
+                                GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SSHDaemmon", new Vector());
+                                if (vrl.getConfig() != null && vrl.getConfig().size() > 0) {
+                                    c.setConfigObj(vrl.getConfig());
+                                }
+                                c.login(vrl.getUsername(), vrl.getPassword(), null);
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                com.crushftp.client.Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true, true), baos, false, true, true);
+                                this.loadKey(new ByteArrayInputStream(baos.toByteArray()), "ed25519", "65535");
+                            }
+                            catch (Exception e) {
+                                Log.log("SERVER", 0, e);
+                            }
+                        }
+                    }
+                }
+                String ecdsa_key = String.valueOf(System.getProperty("crushftp.prefs")) + "ssh_host_ecdsa_key";
+                if (this.server_item.get("ssh_ecdsa_key") != null) {
+                    ecdsa_key = this.server_item.getProperty("ssh_ecdsa_key", "");
+                }
+                this.server_item.put("ssh_ecdsa_enabled", this.server_item.getProperty("ssh_ecdsa_enabled", "false"));
+                if (this.server_item.getProperty("ssh_ecdsa_enabled", "false").equals("true")) {
+                    if (com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + ecdsa_key.toString().toUpperCase().replace('\\', '/'))) {
+                        Properties p = (Properties)com.crushftp.client.Common.System2.get("crushftp.keystores." + ecdsa_key.toString().toUpperCase().replace('\\', '/'));
+                        try {
+                            this.loadKey(new ByteArrayInputStream((byte[])p.get("bytes")), "ecdsa", "521,384,256");
+                        }
+                        catch (Exception e) {
+                            Log.log("SERVER", 0, e);
+                        }
+                    } else if (!ecdsa_key.toString().equals("")) {
+                        String ecdsa_key_url = ecdsa_key;
+                        if (new VRL(ecdsa_key_url).getProtocol().equalsIgnoreCase("FILE")) {
+                            try {
+                                this.loadOrGenerateKey(new VRL(ecdsa_key_url).getCanonicalPath().replace('\\', '/'), "ecdsa", "521,384,256");
+                            }
+                            catch (Exception e) {
+                                Log.log("SERVER", 0, e);
+                            }
+                        } else {
+                            try {
+                                VRL vrl = new VRL(ecdsa_key_url);
+                                GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SSHDaemmon", new Vector());
+                                if (vrl.getConfig() != null && vrl.getConfig().size() > 0) {
+                                    c.setConfigObj(vrl.getConfig());
+                                }
+                                c.login(vrl.getUsername(), vrl.getPassword(), null);
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                com.crushftp.client.Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true, true), baos, false, true, true);
+                                this.loadKey(new ByteArrayInputStream(baos.toByteArray()), "ecdsa", "521,384,256");
+                            }
+                            catch (Exception e) {
+                                Log.log("SERVER", 0, e);
                             }
                         }
                     }
                 }
                 this.server_item.put("ssh_rsa_key", rsa_key);
                 this.server_item.put("ssh_dsa_key", dsa_key);
+                this.server_item.put("ssh_ecdsa_key", ecdsa_key);
+                this.server_item.put("ssh_ed25519_key", ed25519_key);
                 LimitedAuthProvider authFactory = new LimitedAuthProvider();
-                authFactory.addProvider((Authenticator)new PasswordAuthenticationProviderImpl());
                 authFactory.addProvider((Authenticator)new PublicKeyVerifier());
+                authFactory.addProvider((Authenticator)new PasswordAuthenticationProviderImpl());
                 if (this.server_item.getProperty("ssh_require_password", "false").equals("false")) {
                     authFactory.addProvider((Authenticator)new KeyboardInteractiveAuthenticationProvider(){
 
-                        public KeyboardInteractiveProvider createInstance(Connection con) {
-                            return new PasswordKeyboardInteractiveProvider(new PasswordAuthenticationProvider[]{new PasswordAuthenticationProviderImpl()}, con);
+                        public DisplayAwareKeyboardInteractiveProvider createInstance(Connection con) {
+                            class PasswordKeyboardInteractiveProviderCrush
+                            extends PasswordKeyboardInteractiveProvider {
+                                public PasswordKeyboardInteractiveProviderCrush(PasswordAuthenticationProvider[] providers, Connection con) {
+                                    super(providers, con);
+                                }
+
+                                public String getInstructions(String username) {
+                                    return "";
+                                }
+
+                                public String getDisplayName() {
+                                    return "";
+                                }
+
+                                public String getName() {
+                                    return "password";
+                                }
+                            }
+                            return new PasswordKeyboardInteractiveProviderCrush(new PasswordAuthenticationProvider[]{new PasswordAuthenticationProviderImpl()}, con);
                         }
                     });
                 }
+                this.sshContext.setRequiredAuthenticationStrategy(RequiredAuthenticationStrategy.ONCE_PER_AUTHENTICATION_ATTEMPT);
                 this.sshContext.setAuthenicationMechanismFactory((AuthenticationMechanismFactory)authFactory);
                 this.sshContext.setFileSystemProvider((FileSystemFactory)new SSHServerSessionFactory());
                 this.sshContext.addCommand("scp", SSH_ScpCommand.class);
@@ -522,6 +591,7 @@ extends Daemon {
             this.sshContext.setSocketOptionReuseAddress(true);
             this.sshContext.setSFTPCharsetEncoding(this.server_item.getProperty("ssh_text_encoding", "UTF8"));
             this.sshContext.setAllowDeniedKEX(true);
+            this.sshContext.setDisableSFTPDirChecks(ServerStatus.BG("sftp_mkdir_exist_silent"));
             this.sshContext.setSessionTimeout(Integer.parseInt(this.server_item.getProperty("ssh_session_timeout", "300")));
             if (!this.server_item.getProperty("ssh_keep_alive_interval", "").equals("")) {
                 this.sshContext.setKeepAliveInterval(Integer.parseInt(this.server_item.getProperty("ssh_keep_alive_interval", "30")));
@@ -530,6 +600,44 @@ extends Daemon {
                 this.sshContext.setIdleAuthenticationTimeoutSeconds(Integer.parseInt(this.server_item.getProperty("ssh_auth_timeout", "30")));
             }
             Log.log("SSH_SERVER", 0, "SSHD Configuration complete.");
+        }
+    }
+
+    public void loadKey(InputStream in, String type, String bits) throws Exception {
+        Exception last_e = null;
+        int x = 0;
+        while (x < bits.split(",").length) {
+            try {
+                this.sshContext.loadHostKey(in, type, Integer.parseInt(bits.split(",")[x]));
+                last_e = null;
+                break;
+            }
+            catch (Exception e) {
+                last_e = e;
+                ++x;
+            }
+        }
+        if (last_e != null) {
+            throw last_e;
+        }
+    }
+
+    public void loadOrGenerateKey(String path, String type, String bits) throws Exception {
+        Exception last_e = null;
+        int x = 0;
+        while (x < bits.split(",").length) {
+            try {
+                this.sshContext.loadOrGenerateHostKey((File)new File_S(path), type, Integer.parseInt(bits.split(",")[x]));
+                last_e = null;
+                break;
+            }
+            catch (Exception e) {
+                last_e = e;
+                ++x;
+            }
+        }
+        if (last_e != null) {
+            throw last_e;
         }
     }
 

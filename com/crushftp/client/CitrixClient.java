@@ -1,5 +1,10 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -85,7 +90,7 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.bearer);
         int code = urlc.getResponseCode();
         String json = Common.consumeResponse(urlc.getInputStream());
-        JSONArray ja = (JSONArray)((JSONObject)JSONValue.parse(json)).get("value");
+        JSONArray ja = (JSONArray)((JSONObject)JSONValue.parse((String)json)).get((Object)"value");
         int x = 0;
         while (x < ja.size()) {
             Object obj = ja.get(x);
@@ -100,12 +105,12 @@ extends GenericClient {
     private Properties createItem(String path, Object obj) throws ParseException, Exception {
         Properties item = new Properties();
         JSONObject jo = (JSONObject)obj;
-        boolean folder = !jo.get("odata.type").equals("ShareFile.Api.Models.File");
+        boolean folder = !jo.get((Object)"odata.type").equals("ShareFile.Api.Models.File");
         Object[] a = jo.entrySet().toArray();
         int i = 0;
         while (i < a.length) {
             String key2 = a[i].toString().split("=")[0];
-            item.put(key2.trim(), ("" + jo.get(key2)).trim());
+            item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
             ++i;
         }
         Date d = this.sdf_rfc1123_2.parse(item.getProperty("CreationDate"));
@@ -133,7 +138,7 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.bearer);
         int code = urlc.getResponseCode();
         String json = Common.consumeResponse(urlc.getInputStream());
-        String chunk_url = (String)((JSONObject)JSONValue.parse(json)).get("ChunkUri");
+        String chunk_url = (String)((JSONObject)JSONValue.parse((String)json)).get((Object)"ChunkUri");
         URL url = new URL(chunk_url);
         HttpURLConnection urlc2 = (HttpURLConnection)url.openConnection();
         urlc2.setDoOutput(true);
@@ -211,7 +216,7 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.bearer);
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject fileMetaInfo = new JSONObject();
-        fileMetaInfo.put("CreationDate", this.sdf_rfc1123_2.format(new Date(modified)));
+        fileMetaInfo.put((Object)"CreationDate", (Object)this.sdf_rfc1123_2.format(new Date(modified)));
         OutputStream out = urlc.getOutputStream();
         out.write(fileMetaInfo.toString().getBytes("UTF8"));
         out.close();
@@ -254,7 +259,7 @@ extends GenericClient {
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject fileMetaInfo = new JSONObject();
         String[] folders = path.split("/");
-        fileMetaInfo.put("name", folders[folders.length - 1]);
+        fileMetaInfo.put((Object)"name", (Object)folders[folders.length - 1]);
         OutputStream out = urlc.getOutputStream();
         out.write(fileMetaInfo.toString().getBytes("UTF8"));
         out.close();
@@ -320,7 +325,7 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.bearer);
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject fileMetaInfo = new JSONObject();
-        fileMetaInfo.put("name", Common.last(rnto));
+        fileMetaInfo.put((Object)"name", (Object)Common.last(rnto));
         OutputStream out = urlc.getOutputStream();
         out.write(fileMetaInfo.toString().getBytes("UTF8"));
         out.close();
@@ -351,10 +356,10 @@ extends GenericClient {
             out.close();
             urlc.getResponseCode();
             String result = Common.consumeResponse(urlc.getInputStream());
-            JSONObject obj = (JSONObject)JSONValue.parse(result);
+            JSONObject obj = (JSONObject)JSONValue.parse((String)result);
             Properties p = new Properties();
-            p.put("access_token", obj.get("access_token"));
-            p.put("refresh_token", obj.get("refresh_token"));
+            p.put("access_token", obj.get((Object)"access_token"));
+            p.put("refresh_token", obj.get((Object)"refresh_token"));
             p.put("subdomain", subdomain);
             p.put("apicp", apicp);
             return p;
@@ -383,8 +388,8 @@ extends GenericClient {
             throw new IOException(result);
         }
         Properties p = new Properties();
-        p.put("access_token", ((JSONObject)JSONValue.parse(result)).get("access_token"));
-        p.put("refresh_token", ((JSONObject)JSONValue.parse(result)).get("refresh_token"));
+        p.put("access_token", ((JSONObject)JSONValue.parse((String)result)).get((Object)"access_token"));
+        p.put("refresh_token", ((JSONObject)JSONValue.parse((String)result)).get((Object)"refresh_token"));
         return p;
     }
 

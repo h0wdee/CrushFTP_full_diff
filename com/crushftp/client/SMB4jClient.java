@@ -1,5 +1,28 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  com.hierynomus.msdtyp.AccessMask
+ *  com.hierynomus.msdtyp.FileTime
+ *  com.hierynomus.msfscc.FileAttributes
+ *  com.hierynomus.msfscc.fileinformation.FileAllInformation
+ *  com.hierynomus.msfscc.fileinformation.FileBasicInformation
+ *  com.hierynomus.msfscc.fileinformation.FileIdBothDirectoryInformation
+ *  com.hierynomus.msfscc.fileinformation.FileSettableInformation
+ *  com.hierynomus.mssmb2.SMB2CreateDisposition
+ *  com.hierynomus.mssmb2.SMB2ShareAccess
+ *  com.hierynomus.protocol.commons.EnumWithValue
+ *  com.hierynomus.protocol.commons.EnumWithValue$EnumUtils
+ *  com.hierynomus.protocol.transport.TransportException
+ *  com.hierynomus.smbj.SMBClient
+ *  com.hierynomus.smbj.SmbConfig
+ *  com.hierynomus.smbj.SmbConfig$Builder
+ *  com.hierynomus.smbj.auth.AuthenticationContext
+ *  com.hierynomus.smbj.connection.Connection
+ *  com.hierynomus.smbj.session.Session
+ *  com.hierynomus.smbj.share.Directory
+ *  com.hierynomus.smbj.share.DiskShare
+ *  com.hierynomus.smbj.share.File
  */
 package com.crushftp.client;
 
@@ -13,6 +36,7 @@ import com.hierynomus.msfscc.FileAttributes;
 import com.hierynomus.msfscc.fileinformation.FileAllInformation;
 import com.hierynomus.msfscc.fileinformation.FileBasicInformation;
 import com.hierynomus.msfscc.fileinformation.FileIdBothDirectoryInformation;
+import com.hierynomus.msfscc.fileinformation.FileSettableInformation;
 import com.hierynomus.mssmb2.SMB2CreateDisposition;
 import com.hierynomus.mssmb2.SMB2ShareAccess;
 import com.hierynomus.protocol.commons.EnumWithValue;
@@ -25,7 +49,6 @@ import com.hierynomus.smbj.session.Session;
 import com.hierynomus.smbj.share.Directory;
 import com.hierynomus.smbj.share.DiskShare;
 import com.hierynomus.smbj.share.File;
-import com.hierynomus.smbj.share.Share;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -304,7 +327,7 @@ extends GenericClient {
                                     list2 = share.list("");
                                     x = 0;
                                     while (list2 != null && x < list2.size()) {
-                                        fibdi = list2.get(x);
+                                        fibdi = (FileIdBothDirectoryInformation)list2.get(x);
                                         if (!fibdi.getFileName().startsWith(".")) {
                                             ++i;
                                         }
@@ -330,7 +353,7 @@ extends GenericClient {
                         if (!share.folderExists(path2.substring(path_offset).replace('/', '\\'))) break block25;
                         this.log("SMB_CLIENT", 2, "Stat: Found. Folder: " + path);
                         test = share.getFileInformation(path2.substring(path_offset).replace('/', '\\'));
-                        var16_22 = this.stat(test, path2, (DiskShare)share);
+                        var16_22 = this.stat(test, path2, share);
                         if (share == null) break block26;
                         share.close();
                     }
@@ -339,7 +362,7 @@ extends GenericClient {
                 if (!share.fileExists(path2.substring(path_offset).replace('/', '\\'))) break block27;
                 this.log("SMB_CLIENT", 2, "Stat: Found. File: " + path);
                 test = share.getFileInformation(path2.substring(path_offset).replace('/', '\\'));
-                var16_23 = this.stat(test, path2, (DiskShare)share);
+                var16_23 = this.stat(test, path2, share);
                 if (share == null) break block28;
                 share.close();
             }
@@ -403,10 +426,10 @@ lbl115:
             this.log("SMB_CLIENT", 2, "Got stat name:path:" + name + ":" + path + ":Dir=true");
             if (this.config.getProperty("count_dir_items", "false").equals("true")) {
                 int i = 0;
-                List<FileIdBothDirectoryInformation> list2 = share.list(path.substring(path_offset, path.length() - 1).replace('/', '\\'));
+                List list2 = share.list(path.substring(path_offset, path.length() - 1).replace('/', '\\'));
                 int x = 0;
                 while (list2 != null && x < list2.size()) {
-                    FileIdBothDirectoryInformation fibdi = list2.get(x);
+                    FileIdBothDirectoryInformation fibdi = (FileIdBothDirectoryInformation)list2.get(x);
                     if (!fibdi.getFileName().startsWith(".")) {
                         ++i;
                     }
@@ -454,7 +477,7 @@ lbl115:
         if (!this.session.getConnection().isConnected()) {
             this.reconnect();
         }
-        Share share = null;
+        DiskShare share = null;
         int x = 0;
         while (x < 5) {
             try {
@@ -484,23 +507,23 @@ lbl115:
                 path2 = path2.substring(0, path2.length() - 1);
             }
             this.log("SMB_CLIENT", 2, "Getting list for path2:" + path2);
-            List<FileIdBothDirectoryInformation> list2 = ((DiskShare)share).list(path2.replace('/', '\\'));
+            List list2 = share.list(path2.replace('/', '\\'));
             int x2 = 0;
             while (x2 < list2.size()) {
-                FileIdBothDirectoryInformation item = list2.get(x2);
+                FileIdBothDirectoryInformation item = (FileIdBothDirectoryInformation)list2.get(x2);
                 try {
                     String tempName = item.getFileName();
                     this.log("SMB_CLIENT", 2, "Got list item:" + x2 + ":" + tempName);
-                    if (!(EnumWithValue.EnumUtils.isSet(item.getFileAttributes(), FileAttributes.FILE_ATTRIBUTE_HIDDEN) || tempName.equals(".") || tempName.equals(".."))) {
+                    if (!(EnumWithValue.EnumUtils.isSet((long)item.getFileAttributes(), (EnumWithValue)FileAttributes.FILE_ATTRIBUTE_HIDDEN) || tempName.equals(".") || tempName.equals(".."))) {
                         String tempPath = String.valueOf(path.substring(path_offset).replace('/', '\\')) + tempName;
                         this.log("SMB_CLIENT", 2, "Getting info for path item:" + x2 + ":" + tempPath);
-                        FileAllInformation fai = ((DiskShare)share).getFileInformation(tempPath);
+                        FileAllInformation fai = share.getFileInformation(tempPath);
                         if (fai.getStandardInformation().isDirectory() && tempName.endsWith("/")) {
                             tempName = tempName.substring(0, tempName.length() - 1);
                         }
                         tempPath = String.valueOf(path) + tempName;
                         this.log("SMB_CLIENT", 2, "Got list tempPath:" + x2 + ":" + tempPath);
-                        list.add(this.stat(fai, tempPath, (DiskShare)share));
+                        list.add(this.stat(fai, tempPath, share));
                     }
                 }
                 catch (Exception e) {
@@ -652,7 +675,7 @@ lbl115:
         if (!this.session.getConnection().isConnected()) {
             this.reconnect();
         }
-        Share share = null;
+        DiskShare share = null;
         int x = 0;
         while (x < 5) {
             try {
@@ -673,9 +696,9 @@ lbl115:
         }
         try {
             try {
-                FileAllInformation current = ((DiskShare)share).getFileInformation(path.substring(path_offset).replace('/', '\\'));
-                FileBasicInformation update = new FileBasicInformation(FileTime.fromDate(new Date()), FileTime.fromDate(new Date()), FileTime.fromDate(new Date(modified)), FileTime.fromDate(new Date(modified)), current.getBasicInformation().getFileAttributes());
-                ((DiskShare)share).setFileInformation(path.substring(path_offset).replace('/', '\\'), update);
+                FileAllInformation current = share.getFileInformation(path.substring(path_offset).replace('/', '\\'));
+                FileBasicInformation update = new FileBasicInformation(FileTime.fromDate((Date)new Date()), FileTime.fromDate((Date)new Date()), FileTime.fromDate((Date)new Date(modified)), FileTime.fromDate((Date)new Date(modified)), current.getBasicInformation().getFileAttributes());
+                share.setFileInformation(path.substring(path_offset).replace('/', '\\'), (FileSettableInformation)update);
             }
             catch (Exception e) {
                 this.log(e);
@@ -716,7 +739,7 @@ lbl115:
         VRL vrl1 = new VRL(String.valueOf(this.url) + rnfr.substring(1));
         String share_part = Common.first(vrl1.getPath());
         int path_offset = share_part.length() + 1;
-        Share share = null;
+        DiskShare share = null;
         try {
             if (!this.session.getConnection().isConnected()) {
                 this.reconnect();
@@ -740,17 +763,17 @@ lbl115:
                 }
             }
             this.log("SMB_CLIENT", 1, "Checking if dest item exists:" + rnto.substring(path_offset).replace('/', '\\'));
-            if (!((DiskShare)share).fileExists(rnto.substring(path_offset).replace('/', '\\'))) {
+            if (!share.fileExists(rnto.substring(path_offset).replace('/', '\\'))) {
                 if (p.getProperty("type").equalsIgnoreCase("DIR")) {
                     this.log("SMB_CLIENT", 1, "Renaming from dir:" + rnfr.substring(path_offset).replace('/', '\\'));
                     this.log("SMB_CLIENT", 1, "Renaming to dir:" + rnto.substring(path_offset).replace('/', '\\'));
-                    Directory f = ((DiskShare)share).openDirectory(rnfr.substring(path_offset).replace('/', '\\'), new HashSet<Object>(Arrays.asList(AccessMask.DELETE, AccessMask.GENERIC_WRITE)), null, SMB2ShareAccess.ALL, SMB2CreateDisposition.FILE_OPEN, null);
+                    Directory f = share.openDirectory(rnfr.substring(path_offset).replace('/', '\\'), new HashSet<Object>(Arrays.asList(AccessMask.DELETE, AccessMask.GENERIC_WRITE)), null, SMB2ShareAccess.ALL, SMB2CreateDisposition.FILE_OPEN, null);
                     f.rename(rnto.substring(path_offset).replace('/', '\\'), false);
                     f.close();
                 } else {
                     this.log("SMB_CLIENT", 1, "Renaming from file:" + rnfr.substring(path_offset).replace('/', '\\'));
                     this.log("SMB_CLIENT", 1, "Renaming to file:" + rnto.substring(path_offset).replace('/', '\\'));
-                    File f = ((DiskShare)share).openFile(rnfr.substring(path_offset).replace('/', '\\'), new HashSet<Object>(Arrays.asList(AccessMask.DELETE, AccessMask.GENERIC_WRITE)), null, SMB2ShareAccess.ALL, SMB2CreateDisposition.FILE_OPEN, null);
+                    File f = share.openFile(rnfr.substring(path_offset).replace('/', '\\'), new HashSet<Object>(Arrays.asList(AccessMask.DELETE, AccessMask.GENERIC_WRITE)), null, SMB2ShareAccess.ALL, SMB2CreateDisposition.FILE_OPEN, null);
                     f.rename(rnto.substring(path_offset).replace('/', '\\'), false);
                     f.close();
                 }
@@ -872,7 +895,7 @@ lbl115:
         VRL vrl1 = new VRL(String.valueOf(this.url) + path.substring(1));
         String share_part = Common.first(vrl1.getPath());
         int path_offset = share_part.length() + 1;
-        Share share = null;
+        DiskShare share = null;
         try {
             try {
                 if (!this.session.getConnection().isConnected()) {
@@ -897,9 +920,9 @@ lbl115:
                     }
                 }
                 if (p.getProperty("type").equalsIgnoreCase("DIR")) {
-                    ((DiskShare)share).rmdir(path.substring(path_offset).replace('/', '\\'), this.config.getProperty("recurse_delete", "false").equals("true"));
+                    share.rmdir(path.substring(path_offset).replace('/', '\\'), this.config.getProperty("recurse_delete", "false").equals("true"));
                 } else {
-                    ((DiskShare)share).rm(path.substring(path_offset).replace('/', '\\'));
+                    share.rm(path.substring(path_offset).replace('/', '\\'));
                 }
             }
             catch (Exception e) {
@@ -932,7 +955,7 @@ lbl115:
         VRL vrl1 = new VRL(String.valueOf(this.url) + path.substring(1));
         String share_part = Common.first(vrl1.getPath());
         int path_offset = share_part.length() + 1;
-        Share share = null;
+        DiskShare share = null;
         try {
             try {
                 if (!this.session.getConnection().isConnected()) {
@@ -959,7 +982,7 @@ lbl115:
                 if (path.endsWith("/")) {
                     path = path.substring(0, path.length() - 1);
                 }
-                ((DiskShare)share).mkdir(path.substring(path_offset).replace('/', '\\'));
+                share.mkdir(path.substring(path_offset).replace('/', '\\'));
             }
             catch (Exception e) {
                 this.log(e);

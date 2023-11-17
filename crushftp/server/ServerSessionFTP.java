@@ -5,6 +5,7 @@ package crushftp.server;
 
 import com.crushftp.client.GenericClient;
 import com.crushftp.client.VRL;
+import com.crushftp.client.WRunnable;
 import com.crushftp.client.Worker;
 import com.crushftp.ssl.sni.SNIReady;
 import crushftp.gui.LOC;
@@ -19,6 +20,7 @@ import crushftp.server.QuickConnect;
 import crushftp.server.RETR_handler;
 import crushftp.server.STOR_handler;
 import crushftp.server.ServerStatus;
+import crushftp.server.daemon.SocketProxiedIP;
 import crushftp.server.daemon.TCPServer;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -43,7 +45,7 @@ import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 
 public class ServerSessionFTP
-implements Runnable {
+extends WRunnable {
     public Socket sock = null;
     public Socket sockOriginal = null;
     SessionCrush thisSession = null;
@@ -58,16 +60,15 @@ implements Runnable {
     SSLSocketFactory factory = null;
     SSLContext ssl_context = null;
 
-    public ServerSessionFTP(Socket sock, int user_number, String user_ip, int listen_port, String listen_ip, String listen_ip_port, Properties server_item) {
+    public ServerSessionFTP(Socket sock, int user_number, String user_ip, int listen_port, String listen_ip, String listen_ip_port, Properties server_item, SSLContext ssl_context, SSLSocketFactory factory) {
         this.sock = sock;
         this.thisSession = new SessionCrush(sock, user_number, user_ip, listen_port, listen_ip, listen_ip_port, server_item);
+        this.put("session", this.thisSession);
         this.thisSession.retr_files_pool_free.addElement(new RETR_handler());
         this.thisSession.stor_files_pool_free.addElement(new STOR_handler());
         this.thisSession.setFtp(this);
-    }
-
-    public void give_thread_pointer(Thread this_thread) {
-        this.this_thread = this_thread;
+        this.ssl_context = ssl_context;
+        this.factory = factory;
     }
 
     @Override
@@ -138,8 +139,8 @@ implements Runnable {
                         this.thisSession.not_done = this.write_command("503", LOC.G("%already_logged_in%"));
                         this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                         this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
-                    } else if (!QuickConnect.validate_ip(this.thisSession.uiSG("user_ip"), this.thisSession.server_item)) {
-                        this.thisSession.not_done = this.write_command("550", LOC.G("IP banned."));
+                    } else if (!QuickConnect.validate_ip(this.thisSession.uiSG("user_ip"), this.thisSession.server_item).equals("")) {
+                        this.thisSession.not_done = this.write_command("550", LOC.G("IP banned.") + ":" + QuickConnect.validate_ip(this.thisSession.uiSG("user_ip"), this.thisSession.server_item));
                         this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                         this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
                         this.thisSession.not_done = false;
@@ -286,13 +287,24 @@ implements Runnable {
                         }
                         boolean needClientAuth = ServerStatus.BG("needClientAuth") || this.thisSession.server_item.getProperty("needClientAuth", "").equals("true") || this.thisSession.user != null && this.thisSession.user.getProperty("needClientAuth", "false").equals("true");
                         this.thisSession.not_done = this.write_command("234", LOC.G("Changing to secure mode..."));
-                        this.ssl_context = ServerStatus.thisObj.common_code.getSSLContext(keystore, String.valueOf(keystore) + "_trust", keystorePass, certPass, this.thisSession.uiSG("secureType"), needClientAuth, true);
-                        this.factory = this.ssl_context.getSocketFactory();
                         this.sockOriginal = this.sock;
                         this.sni_keystore_used.setLength(0);
-                        ss = this.thisSession.server_item.getProperty("sni_enabled", "false").equals("true") ? (SSLSocket)TCPServer.doSni(this.sock, keystore, keystorePass, certPass, needClientAuth, this.sni_keystore_used) : (SSLSocket)this.factory.createSocket(this.sock, this.thisSession.uiSG("port_remote_ip"), this.thisSession.uiIG("port_remote_port"), false);
-                        if (this.sni_keystore_used.length() > 0) {
-                            Log.log("FTP_SERVER", 0, "Reusing SSL keystore:" + this.sni_keystore_used);
+                        if (this.thisSession.server_item.getProperty("sni_enabled", "false").equals("true")) {
+                            Properties ssl_info = new Properties();
+                            ss = (SSLSocket)TCPServer.doSni(this.sock, keystore, keystorePass, certPass, needClientAuth, this.sni_keystore_used, ssl_info);
+                            if (this.sni_keystore_used.length() > 0) {
+                                keystore = this.sni_keystore_used.toString();
+                                Log.log("FTP_SERVER", 0, "Reusing SSL keystore:" + this.sni_keystore_used);
+                                this.ssl_context = (SSLContext)ssl_info.get("SSLContext");
+                                this.factory = (SSLSocketFactory)ssl_info.get("SSLSocketFactory");
+                            } else {
+                                this.ssl_context = ServerStatus.thisObj.common_code.getSSLContext(keystore, String.valueOf(keystore) + "_trust", keystorePass, certPass, this.thisSession.uiSG("secureType"), needClientAuth, true);
+                                this.factory = this.ssl_context.getSocketFactory();
+                            }
+                        } else {
+                            this.ssl_context = ServerStatus.thisObj.common_code.getSSLContext(keystore, String.valueOf(keystore) + "_trust", keystorePass, certPass, this.thisSession.uiSG("secureType"), needClientAuth, true);
+                            this.factory = this.ssl_context.getSocketFactory();
+                            ss = (SSLSocket)this.factory.createSocket(this.sock, this.thisSession.uiSG("port_remote_ip"), this.thisSession.uiIG("port_remote_port"), false);
                         }
                         this.sock = ss;
                         Common.configureSSLTLSSocket(this.sock);
@@ -309,7 +321,7 @@ implements Runnable {
                     }
                     catch (Exception e) {
                         this.thisSession.add_log("SSL/TLS : " + LOC.G("Negotiation Failed."), "ACCEPT");
-                        this.thisSession.add_log("SSL/TLS : " + LOC.G("Have you setup a certificate in the CrushFTP advanced prefs under the SSL tab?"), "ACCEPT");
+                        this.thisSession.add_log("SSL/TLS : " + LOC.G("Have you setup a certificate in the " + System.getProperty("appname", "CrushFTP") + " advanced prefs under the SSL tab?"), "ACCEPT");
                         this.thisSession.add_log("SSL/TLS : " + e.toString(), "ACCEPT");
                         Log.log("FTP_SERVER", 1, e);
                         this.thisSession.not_done = this.write_command("550", LOC.G("Server not configured for encryption."));
@@ -426,7 +438,7 @@ implements Runnable {
                 } else if (this.thisSession.uiBG("user_logged_in") && this.thisSession.uiSG("the_command").equals("OPTS")) {
                     this.thisSession.stop_idle_timer();
                     if (this.thisSession.uiSG("the_command_data").toUpperCase().indexOf("LEVEL ") >= 0) {
-                        this.thisSession.uiPUT("zlibLevel", String.valueOf(Integer.parseInt(this.thisSession.uiSG("the_command_data").substring(this.thisSession.uiSG("the_command_data").lastIndexOf(" ")).trim())));
+                        this.thisSession.uiPUT("zlibLevel", Integer.parseInt(this.thisSession.uiSG("the_command_data").substring(this.thisSession.uiSG("the_command_data").lastIndexOf(" ")).trim()));
                         this.thisSession.not_done = this.write_command("200 " + LOC.G("Level set to $0", this.thisSession.uiSG("zlibLevel")) + ".");
                     } else if (this.thisSession.uiSG("the_command_data").toUpperCase().indexOf("UTF8 ON") >= 0 || this.thisSession.uiSG("the_command_data").toUpperCase().indexOf("UTF-8 ON") >= 0) {
                         this.thisSession.user.put("char_encoding", "UTF8");
@@ -578,16 +590,28 @@ implements Runnable {
                         this.thisSession.not_done = this.write_command("550", LOC.G("%RETR-wrong%"));
                         this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                     } else {
+                        boolean allowed;
                         RETR_handler retr_files = null;
                         String parentPath = this.thisSession.uVFS.getRootVFS(the_dir, -1);
                         Properties dir_item = this.thisSession.uVFS.get_item(parentPath, -1);
                         Properties item = this.thisSession.uVFS.get_fake_item(the_dir, "FILE");
-                        boolean allowed = this.thisSession.check_access_privs(the_dir, this.thisSession.uiSG("the_command"), item);
+                        if (item == null && this.thisSession.check_access_privs(the_dir, this.thisSession.uiSG("the_command"), dir_item)) {
+                            item = this.thisSession.uVFS.get_item_parent(the_dir);
+                            if (item != null) {
+                                item.put("type", "FILE");
+                            }
+                            if (the_dir.toLowerCase().endsWith(".zip")) {
+                                encode_on_fly = "ZIP";
+                            }
+                        }
+                        if ((allowed = this.thisSession.check_access_privs(the_dir, this.thisSession.uiSG("the_command"), item)) && item != null && new VRL(item.getProperty("url")).getProtocol().equalsIgnoreCase("VIRTUAL")) {
+                            allowed = false;
+                        }
                         if ((allowed || this.thisSession.check_access_privs(other_the_dir, this.thisSession.uiSG("the_command"))) && Common.filter_check("D", Common.last(the_dir), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && Common.filter_check("F", Common.last(the_dir), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter"))) {
                             if (ServerStatus.BG("binary_mode")) {
                                 this.thisSession.uiPUT("file_transfer_mode", "BINARY");
                             }
-                            if (!allowed) {
+                            if (!allowed || !encode_on_fly.equals("")) {
                                 encode_on_fly = "BIN";
                                 item = this.thisSession.uVFS.get_item(other_the_dir);
                                 if (item != null) {
@@ -782,7 +806,7 @@ implements Runnable {
                             ((Socket)this.thisSession.data_socks.remove(0)).close();
                         }
                         if (item != null && item.getProperty("type").equalsIgnoreCase("DIR")) {
-                            this.thisSession.not_done = this.write_command("553", LOC.G("$0 is a directory.", this.thisSession.uiSG("the_command_data")));
+                            this.thisSession.not_done = this.write_command("553", LOC.G("$0 is a directory.", item.getProperty("name")));
                             Log.log("FTP_SERVER", 2, LOC.G("STOR Failure item:$0", item.toString()));
                         } else {
                             this.thisSession.not_done = this.write_command("550", LOC.G("%STOR-bad%"));
@@ -987,7 +1011,7 @@ implements Runnable {
                     this.thisSession.do_CWD();
                     this.thisSession.start_idle_timer();
                 } else if (this.thisSession.uiBG("user_logged_in") && (this.thisSession.uiSG("the_command").equals("PASV") || this.thisSession.uiSG("the_command").equals("EPSV") && ServerStatus.BG("epsveprt"))) {
-                    block343: {
+                    block350: {
                         this.thisSession.stop_idle_timer();
                         try {
                             Properties pasv_stuff = this.do_pasv_command();
@@ -1008,6 +1032,14 @@ implements Runnable {
                                             Socket tempSock = pasv_sock2.accept();
                                             tempSock.setTcpNoDelay(System.getProperty("crushftp.ftp.tcp_no_delay", "false").equals("true"));
                                             pasv_sock2.close();
+                                            if (ServerStatus.BG("proxy_protocol_ftp_pasv")) {
+                                                if (ServerSessionFTP.this.thisSession.server_item.getProperty("proxy_header", "false").equals("true")) {
+                                                    tempSock = new SocketProxiedIP(tempSock, 1);
+                                                }
+                                                if (ServerSessionFTP.this.thisSession.server_item.getProperty("proxy_header_v2", "false").equals("true")) {
+                                                    tempSock = new SocketProxiedIP(tempSock, 2);
+                                                }
+                                            }
                                             if (ServerSessionFTP.this.thisSession.uiBG("dataSecure") && ServerSessionFTP.this.thisSession.uiBG("sni_enabled") && ServerSessionFTP.this.sni_keystore_used.length() == 0) {
                                                 String keystore = SSLKeyManager.loadKeyStoreToMemory(ServerStatus.SG("cert_path"));
                                                 String certPass = ServerStatus.SG("globalKeystoreCertPass");
@@ -1018,7 +1050,7 @@ implements Runnable {
                                                     keystorePass = ServerSessionFTP.this.thisSession.server_item.getProperty("customKeystorePass", "");
                                                 }
                                                 boolean needClientAuth = ServerStatus.BG("needClientAuth") || ServerSessionFTP.this.thisSession.server_item.getProperty("needClientAuth", "").equals("true") || ServerSessionFTP.this.thisSession.user != null && ServerSessionFTP.this.thisSession.user.getProperty("needClientAuth", "false").equals("true");
-                                                tempSock = TCPServer.doSni(tempSock, keystore, keystorePass, certPass, needClientAuth, null);
+                                                tempSock = TCPServer.doSni(tempSock, keystore, keystorePass, certPass, needClientAuth, null, new Properties());
                                             }
                                             if (!ServerSessionFTP.this.thisSession.uiBG("adminAllowed") && ServerSessionFTP.this.thisSession.uiSG("user_ip").equals("127.0.0.1")) {
                                                 ServerSessionFTP.this.thisSession.uiPUT("user_ip", tempSock.getInetAddress().getHostAddress());
@@ -1068,13 +1100,13 @@ implements Runnable {
                         }
                         catch (Exception e) {
                             Log.log("FTP_SERVER", 1, e);
-                            if (("" + e).indexOf("Interrupted") < 0) break block343;
+                            if (("" + e).indexOf("Interrupted") < 0) break block350;
                             throw e;
                         }
                     }
                     this.thisSession.start_idle_timer();
                 } else if (this.thisSession.uiBG("user_logged_in") && (this.thisSession.uiSG("the_command").equals("PORT") || this.thisSession.uiSG("the_command").equals("EPRT") && ServerStatus.BG("epsveprt")) && this.thisSession.uiSG("the_command_data").length() > 0) {
-                    block344: {
+                    block351: {
                         this.thisSession.stop_idle_timer();
                         try {
                             if (this.thisSession.uiSG("the_command").equals("EPRT")) {
@@ -1150,7 +1182,7 @@ implements Runnable {
                             }
                         }
                         catch (Exception e) {
-                            if (("" + e).indexOf("Interrupted") < 0) break block344;
+                            if (("" + e).indexOf("Interrupted") < 0) break block351;
                             throw e;
                         }
                     }
@@ -1721,7 +1753,7 @@ implements Runnable {
         int the_port = create_it.getLocalPort();
         return_item.put("port", String.valueOf(the_port));
         String return_address = null;
-        return_address = this.thisSession.uiSG("user_ip").startsWith("127.0") ? this.thisSession.uiSG("user_ip") : (this.thisSession.uiSG("listen_ip").indexOf(",") >= 0 ? this.thisSession.uiSG("listen_ip") : (this.thisSession.uiSG("listen_ip").trim().charAt(0) > '9' && !this.thisSession.uiSG("listen_ip").trim().equalsIgnoreCase("auto") ? InetAddress.getByName(this.thisSession.uiSG("listen_ip").trim()).getHostAddress() : (this.thisSession.uiSG("user_ip").split("\\.")[0].equals(this.sock.getLocalAddress().getHostAddress().split("\\.")[0]) && this.thisSession.uiSG("user_ip").split("\\.")[1].equals(this.sock.getLocalAddress().getHostAddress().split("\\.")[1]) ? this.sock.getLocalAddress().getHostAddress() : (ServerStatus.BG("allow_local_ip_pasv") && this.thisSession.uiSG("user_ip").split("\\.")[0].equals(com.crushftp.client.Common.getLocalIP().split("\\.")[0]) && this.thisSession.uiSG("user_ip").split("\\.")[1].equals(com.crushftp.client.Common.getLocalIP().split("\\.")[1]) ? com.crushftp.client.Common.getLocalIP() : (ServerStatus.BG("allow_local_ip_pasv_any") && Common.check_local_ip(this.thisSession.uiSG("user_ip")) ? this.sock.getLocalAddress().getHostAddress() : (this.thisSession.uiBG("secure") || this.thisSession.server_item.getProperty("ftp_aware_router").equals("false") ? this.thisSession.uiSG("listen_ip") : (create_it.getInetAddress().getHostAddress().equals("0.0.0.0") ? this.sock.getLocalAddress().getHostAddress() : this.sock.getLocalAddress().getHostAddress())))))));
+        return_address = this.thisSession.uiSG("user_ip").startsWith("127.0") ? this.thisSession.uiSG("user_ip") : (this.thisSession.uiSG("listen_ip").indexOf(",") >= 0 ? this.thisSession.uiSG("listen_ip") : (this.thisSession.uiSG("listen_ip").trim().charAt(0) > '9' && !this.thisSession.uiSG("listen_ip").trim().equalsIgnoreCase("auto") ? InetAddress.getByName(this.thisSession.uiSG("listen_ip").trim()).getHostAddress() : (this.thisSession.uiSG("user_ip").split("\\.")[0].equals(this.sock.getLocalAddress().getHostAddress().split("\\.")[0]) && this.thisSession.uiSG("user_ip").split("\\.")[1].equals(this.sock.getLocalAddress().getHostAddress().split("\\.")[1]) ? this.sock.getLocalAddress().getHostAddress() : (ServerStatus.BG("pasv_simple_logic") && !this.thisSession.uiSG("listen_ip").trim().equals("auto") ? this.thisSession.uiSG("listen_ip") : (ServerStatus.BG("allow_local_ip_pasv") && this.thisSession.uiSG("user_ip").split("\\.")[0].equals(com.crushftp.client.Common.getLocalIP().split("\\.")[0]) && this.thisSession.uiSG("user_ip").split("\\.")[1].equals(com.crushftp.client.Common.getLocalIP().split("\\.")[1]) ? com.crushftp.client.Common.getLocalIP() : (ServerStatus.BG("allow_local_ip_pasv_any") && Common.check_local_ip(this.thisSession.uiSG("user_ip")) ? this.sock.getLocalAddress().getHostAddress() : (this.thisSession.uiBG("secure") || this.thisSession.server_item.getProperty("ftp_aware_router").equals("false") ? this.thisSession.uiSG("listen_ip") : (create_it.getInetAddress().getHostAddress().equals("0.0.0.0") ? this.sock.getLocalAddress().getHostAddress() : this.sock.getLocalAddress().getHostAddress()))))))));
         Log.log("FTP_SERVER", 3, "return_address:" + return_address);
         Log.log("FTP_SERVER", 3, "listen_ip:" + this.thisSession.uiSG("listen_ip"));
         Log.log("FTP_SERVER", 3, "create_it:" + create_it.getInetAddress().getHostAddress());
@@ -2136,7 +2168,7 @@ implements Runnable {
                     c = this.thisSession.uVFS.releaseClient(c);
                 }
             }
-            catch (NullPointerException e) {
+            catch (Exception e) {
                 this.thisSession.not_done = this.write_command("502", LOC.G("%unknown_command%"));
             }
         }

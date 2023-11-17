@@ -129,8 +129,20 @@ public class UserFolderPermissions {
                                         }
                                         continue;
                                     }
-                                    if (p == null) continue;
-                                    v.addElement(VRL.safe(p));
+                                    if (p != null) {
+                                        v.addElement(VRL.safe(p));
+                                        continue;
+                                    }
+                                    if (p != null) continue;
+                                    try {
+                                        int homeIndex = Integer.parseInt(uVFS.getPrivPath(key, true, false));
+                                        Properties pp = uVFS.get_item_parent(key, homeIndex);
+                                        if (pp == null) continue;
+                                        v.addElement(VRL.safe(pp));
+                                    }
+                                    catch (Exception e) {
+                                        Log.log("REPORT", 1, "Permission path : " + key + " " + e);
+                                    }
                                 }
                                 sorter cd2 = new sorter();
                                 cd2.setObj(new Properties(), "url");

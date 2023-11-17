@@ -5,6 +5,9 @@ package crushftp.handlers;
 
 import com.crushftp.client.Common;
 import com.crushftp.client.VRL;
+import com.crushftp.client.WRunnable;
+import com.crushftp.client.Worker;
+import crushftp.handlers.SessionCrush;
 import crushftp.server.ServerStatus;
 import java.util.Date;
 import java.util.Properties;
@@ -99,11 +102,18 @@ public class Log {
     public static boolean log(String tag, int level, Throwable e) {
         if (ServerStatus.IG("log_debug_level") >= level) {
             Log.log(tag, level, Thread.currentThread().getName());
-            Log.log(tag, level, e.toString());
+            Log.log(tag, level, "" + e);
             StackTraceElement[] ste = e.getStackTrace();
             int x = 0;
             while (x < ste.length) {
-                Log.log(tag, level, String.valueOf(ste[x].getClassName()) + "." + ste[x].getMethodName() + ":" + ste[x].getLineNumber());
+                String msg = String.valueOf(ste[x].getClassName()) + "." + ste[x].getMethodName() + ":" + ste[x].getLineNumber();
+                Log.log(tag, level, msg);
+                Object wr = Worker.thread_lookup.get(Thread.currentThread());
+                if (wr != null && wr instanceof SessionCrush) {
+                    ((SessionCrush)wr).add_log(msg, tag);
+                } else if (wr != null && wr instanceof WRunnable && ((WRunnable)wr).get("session") != null) {
+                    ((SessionCrush)((WRunnable)wr).get("session")).add_log(msg, tag);
+                }
                 ++x;
             }
             if (level >= 2) {

@@ -97,7 +97,20 @@ public class UserFolderAccess {
                                 Properties vItem = (Properties)virtual.get(key);
                                 Vector vItems = (Vector)vItem.get("vItems");
                                 try {
-                                    if (vItems == null) continue;
+                                    if (vItems == null) {
+                                        if (!new VRL(url_search).getProtocol().equalsIgnoreCase("VIRTUAL") || key.trim().equals("/") || key.trim().equals("")) continue;
+                                        String url = "VIRTUAL:/" + vItem.getProperty("virtualPath", "");
+                                        Log.log("REPORT", 2, "Checking URL:" + new VRL(url).safe() + "   versus search:" + url_search_vrl_safe);
+                                        if (!url.toUpperCase().startsWith(url_search) && !url_search.toUpperCase().startsWith(url.toUpperCase())) continue;
+                                        Log.log("REPORT", 2, "MATCHED URL:" + new VRL(url).safe());
+                                        Properties pp = new Properties();
+                                        pp.put("name", key);
+                                        pp.put("url", url);
+                                        pp.put("privs", uVFS.get_item(key).getProperty("privs", ""));
+                                        v.addElement(pp);
+                                        continue;
+                                    }
+                                    if (vItems.size() == 0) continue;
                                     Properties p = (Properties)vItems.elementAt(0);
                                     vrl = new VRL(p.getProperty("url"));
                                     String url = "";

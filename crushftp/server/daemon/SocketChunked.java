@@ -79,11 +79,12 @@ extends Socket {
         }
     }
 
-    public Properties readChunk() throws IOException {
+    public Properties readChunk(int timeout) throws IOException {
         byte[] b;
         int command;
         long id2;
         while (true) {
+            this.sock.setSoTimeout(timeout);
             id2 = this.in.readLong();
             if (this.id1 == 0L || id2 == 0L) {
                 this.id1 = id2;

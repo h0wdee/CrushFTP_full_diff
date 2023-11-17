@@ -18,9 +18,11 @@ import crushftp.handlers.Common;
 import crushftp.handlers.IdleMonitor;
 import crushftp.handlers.Log;
 import crushftp.handlers.PreviewWorker;
+import crushftp.handlers.QuotaWorker;
 import crushftp.handlers.SharedSession;
 import crushftp.handlers.SharedSessionReplicated;
 import crushftp.handlers.UserTools;
+import crushftp.server.AdminControls;
 import crushftp.server.RETR_handler;
 import crushftp.server.STOR_handler;
 import crushftp.server.ServerSessionFTP;
@@ -87,12 +89,16 @@ implements Serializable {
     public SimpleDateFormat logDateFormat;
     public static Properties session_counts = new Properties();
     public transient IdleMonitor thread_killer_item;
+    public Properties vfs_bad_credentials_email_sent;
+    public transient Object close_session_sync;
     boolean shareVFS;
     static Properties hack_cache = new Properties();
 
     public SessionCrush(Socket sock, int user_number, String user_ip, int listen_port, String listen_ip, String listen_ip_port, Properties server_item) {
         this.logDateFormat = (SimpleDateFormat)ServerStatus.thisObj.logDateFormat.clone();
         this.thread_killer_item = null;
+        this.vfs_bad_credentials_email_sent = new Properties();
+        this.close_session_sync = new Object();
         this.shareVFS = false;
         this.allow_replication = false;
         if (sock != null) {
@@ -586,7 +592,7 @@ implements Serializable {
             String privs;
             String last_dir;
             String additionalAccess;
-            block41: {
+            block48: {
                 Properties item2 = null;
                 additionalAccess = this.check_access_exception(the_dir, command, item);
                 Properties p = new Properties();
@@ -633,7 +639,7 @@ implements Serializable {
                             metaInfo = PreviewWorker.getMetaInfo(PreviewWorker.getDestPath2(String.valueOf(item.getProperty("url")) + "/p1/"));
                             boolean bl = locked = !metaInfo.getProperty("crushftp_locked_user", "").equals("") && !metaInfo.getProperty("crushftp_locked_user", "").equalsIgnoreCase(this.uiSG("user_name"));
                         }
-                        break block41;
+                        break block48;
                     }
                     searchPattern = searchPattern.trim();
                     try {
@@ -661,25 +667,34 @@ implements Serializable {
                 if (this.SG("allow_locked_download").equalsIgnoreCase("true") && locked) {
                     locked = false;
                 }
-                return !locked && privs.indexOf("(resume)") >= 0 && privs.indexOf("(read)") >= 0;
+                if (!locked && privs.indexOf("(resume)") >= 0 && privs.indexOf("(read)") >= 0) {
+                    return this.check_filename_extensions_dir(privs, "read_types", the_dir);
+                }
+                return false;
             }
             if (command.equals("RETR")) {
                 if (this.SG("allow_locked_download").equalsIgnoreCase("true") && locked) {
                     locked = false;
                 }
                 if (!locked && (privs == null || privs.indexOf("(read)") < 0) && item != null && item.getProperty("size", "0").equals("0")) {
-                    return true;
+                    return this.check_filename_extensions_dir(privs, "read_types", the_dir);
                 }
             }
             if (command.equals("RETR")) {
                 if (this.SG("allow_locked_download").equalsIgnoreCase("true") && locked) {
                     locked = false;
                 }
-                return !locked && privs.indexOf("(read)") >= 0;
+                if (!locked && privs.indexOf("(read)") >= 0) {
+                    return this.check_filename_extensions_dir(privs, "read_types", the_dir);
+                }
+                return false;
             }
             if (command.equals("DELE")) {
                 String privs2 = this.getLockedPrivs(privs, the_dir);
-                return !locked && privs.indexOf("(delete)") >= 0 && (privs2.indexOf("(inherited)") >= 0 || privs2.indexOf("(locked)") < 0 || this.uVFS.getCombinedPermissions().getProperty("acl_permissions", "false").equals("true"));
+                if (!locked && privs.indexOf("(delete)") >= 0 && (privs2.indexOf("(inherited)") >= 0 || privs2.indexOf("(locked)") < 0 || this.uVFS.getCombinedPermissions().getProperty("acl_permissions", "false").equals("true"))) {
+                    return this.check_filename_extensions_dir(privs, "delete_types", the_dir);
+                }
+                return false;
             }
             if (command.equals("RNFR") && !locked && privs.indexOf("(rename)") < 0 && item != null && item.getProperty("name").toUpperCase().startsWith("NEW FOLDER")) {
                 return true;
@@ -690,11 +705,17 @@ implements Serializable {
             }
             if (command.equals("STOR") && this.uiLG("start_resume_loc") > 0L && item != null) {
                 String privs2 = this.getLockedPrivs(privs, the_dir);
-                return !locked && privs.indexOf("(resume)") >= 0 && privs.indexOf("(write)") >= 0 && (privs2.indexOf("(inherited)") >= 0 || privs2.indexOf("(locked)") < 0);
+                if (!(locked || privs.indexOf("(resume)") < 0 || privs.indexOf("(write)") < 0 || privs2.indexOf("(inherited)") < 0 && privs2.indexOf("(locked)") >= 0)) {
+                    return this.check_filename_extensions_dir(privs, "write_types", the_dir);
+                }
+                return false;
             }
             if (command.equals("APPE") && item != null) {
                 String privs2 = this.getLockedPrivs(privs, the_dir);
-                return !locked && privs.indexOf("(resume)") >= 0 && privs.indexOf("(write)") >= 0 && (privs2.indexOf("(inherited)") >= 0 || privs2.indexOf("(locked)") < 0);
+                if (!(locked || privs.indexOf("(resume)") < 0 || privs.indexOf("(write)") < 0 || privs2.indexOf("(inherited)") < 0 && privs2.indexOf("(locked)") >= 0)) {
+                    return this.check_filename_extensions_dir(privs, "write_types", the_dir);
+                }
+                return false;
             }
             if (command.equals("SIZE")) {
                 return privs.indexOf("(view)") >= 0 || privs.indexOf("(read)") >= 0;
@@ -718,7 +739,10 @@ implements Serializable {
             String string = privs = item == null ? "" : String.valueOf(item.getProperty("privs", "")) + additionalAccess;
             if (command.equals("STOR") || command.equals("APPE") || command.equals("STOU")) {
                 String privs2 = this.getLockedPrivs(privs, String.valueOf(the_dir) + "check_locked.txt");
-                return !locked && privs.indexOf("(write)") >= 0 && (privs2.indexOf("(inherited)") >= 0 || privs2.indexOf("(locked)") < 0);
+                if (!(locked || privs.indexOf("(write)") < 0 || privs2.indexOf("(inherited)") < 0 && privs2.indexOf("(locked)") >= 0)) {
+                    return this.check_filename_extensions_dir(privs, "write_types", the_dir);
+                }
+                return false;
             }
             if (command.equals("MKD") || command.equals("XMKD")) {
                 String privs2 = this.getLockedPrivs(privs, the_dir);
@@ -729,12 +753,15 @@ implements Serializable {
                 return privs.indexOf("(deletedir)") >= 0 && (privs2.indexOf("(inherited)") >= 0 || privs2.indexOf("(locked)") < 0 || this.uVFS.getCombinedPermissions().getProperty("acl_permissions", "false").equals("true"));
             }
             if (command.equals("RNTO") && privs.indexOf("(rename)") >= 0 && Common.all_but_last(last_dir).equals(Common.all_but_last(the_dir))) {
-                return true;
+                return this.check_filename_extensions_dir(privs, "rename_types", the_dir);
             }
             if (!command.equals("RNTO")) {
                 return false;
             }
-            return privs.indexOf("(write)") >= 0 && (privs.indexOf("(inherited)") >= 0 || privs.indexOf("(locked)") < 0);
+            if (privs.indexOf("(write)") >= 0 && (privs.indexOf("(inherited)") >= 0 || privs.indexOf("(locked)") < 0)) {
+                return this.check_filename_extensions_dir(privs, "rename_types", the_dir);
+            }
+            return false;
         }
         catch (Exception e) {
             if (("" + e).indexOf("Interrupted") >= 0) {
@@ -743,6 +770,25 @@ implements Serializable {
             Log.log("ACCESS", 1, e);
             return false;
         }
+    }
+
+    public boolean check_filename_extensions_dir(String privs, String priv_key, String the_dir) {
+        if (privs.indexOf("(" + priv_key + ":") >= 0) {
+            String write_types = privs.substring(privs.indexOf("(" + priv_key + ":"));
+            write_types = write_types.substring(write_types.indexOf(":") + 1, write_types.indexOf(")")).trim().toUpperCase();
+            String ext = "";
+            ext = the_dir.indexOf(".") < 0 ? "NONE" : the_dir.substring(the_dir.lastIndexOf(".") + 1).toUpperCase();
+            int x = 0;
+            while (x < write_types.split(",").length) {
+                if (write_types.split(",")[x].equals(ext)) {
+                    return true;
+                }
+                ++x;
+            }
+            Log.log("ACCESS", 1, "File extension blocked for specific directory:" + the_dir + " : " + priv_key + " :" + write_types);
+            return false;
+        }
+        return true;
     }
 
     public String getLockedPrivs(String privs, String the_dir) throws Exception {
@@ -781,7 +827,6 @@ implements Serializable {
             try {
                 Log.log("QUOTA", 3, "get_quota the_dir:" + the_dir + ", parentQuotaDir:" + parentQuotaDir + ", quotaDelta:" + quotaDelta);
                 Properties item = uVFS.get_item(uVFS.getPrivPath(the_dir));
-                Log.log("QUOTA", 3, "get_quota item:" + item);
                 if (item.getProperty("privs", "").indexOf("(quota") >= 0) {
                     long totalQuota = SessionCrush.get_total_quota(the_dir, uVFS, quotaDelta);
                     Log.log("QUOTA", 3, "get_quota totalQuota:" + totalQuota);
@@ -809,92 +854,7 @@ implements Serializable {
     }
 
     public static long get_quota_used(String the_dir, VFS uVFS, String parentQuotaDir, SessionCrush thisSession) throws Exception {
-        block25: {
-            try {
-                Properties item = uVFS.get_item(uVFS.getPrivPath(the_dir));
-                if (item.getProperty("privs", "").indexOf("(quota") < 0) break block25;
-                if (item.getProperty("privs", "").indexOf("(real_quota)") >= 0) {
-                    Properties p;
-                    Log.log("QUOTA", 3, "get_quota_used: checking for cache or disk quota");
-                    String real_path = "";
-                    if (parentQuotaDir.startsWith("FILE:") || parentQuotaDir.startsWith("file:")) {
-                        real_path = new VRL(parentQuotaDir).getPath();
-                    } else {
-                        String parentAddon = parentQuotaDir;
-                        if (parentAddon.equals("parent_quota_dir")) {
-                            parentAddon = "";
-                        }
-                        real_path = !new VRL(item.getProperty("url")).getCanonicalPath().endsWith("/") ? String.valueOf(new VRL(item.getProperty("url")).getCanonicalPath()) + "/" + parentAddon : String.valueOf(new VRL(item.getProperty("url")).getCanonicalPath()) + parentAddon;
-                    }
-                    long size = -12345L;
-                    if (VFS.quotaCache.containsKey(real_path.toUpperCase())) {
-                        p = (Properties)VFS.quotaCache.get(real_path.toUpperCase());
-                        if (Long.parseLong(p.getProperty("time")) < new Date().getTime() - 300000L) {
-                            VFS.quotaCache.remove(real_path.toUpperCase());
-                        } else {
-                            size = Long.parseLong(p.getProperty("size"));
-                        }
-                    }
-                    Log.log("QUOTA", 3, "get_quota_used: checking " + the_dir + " for cache or disk quota:" + size);
-                    if (size == -12345L) {
-                        while (VFS.activeQuotaChecks.size() > Integer.parseInt(System.getProperty("crushftp.quotathreads", "5"))) {
-                            Thread.sleep(100L);
-                        }
-                        while (VFS.activeQuotaChecks.indexOf(real_path) >= 0) {
-                            Thread.sleep(100L);
-                        }
-                        if (VFS.quotaCache.containsKey(real_path.toUpperCase())) {
-                            p = (Properties)VFS.quotaCache.get(real_path.toUpperCase());
-                            if (Long.parseLong(p.getProperty("time")) < new Date().getTime() - 300000L) {
-                                VFS.quotaCache.remove(real_path.toUpperCase());
-                            } else {
-                                size = Long.parseLong(p.getProperty("size"));
-                            }
-                        }
-                        Log.log("QUOTA", 3, "get_quota_used: checking " + the_dir + " for cache:" + size);
-                        if (size == -12345L) {
-                            try {
-                                VFS.activeQuotaChecks.addElement(real_path);
-                                Properties qp = new Properties();
-                                qp.put("realPath", real_path);
-                                if (thisSession != null) {
-                                    thisSession.runPlugin("getUsedQuota", qp);
-                                }
-                                if (!qp.getProperty("usedQuota", "").equals("")) {
-                                    size = Long.parseLong(qp.getProperty("usedQuota", "0"));
-                                }
-                                Log.log("QUOTA", 3, "get_quota_used: checking " + the_dir + " for plugin returned size:" + size);
-                                if (size == -12345L) {
-                                    VRL vrl = new VRL(item.getProperty("url"));
-                                    if (vrl.getProtocol().equalsIgnoreCase("FILE")) {
-                                        size = Common.recurseSize_U(real_path, 0L, thisSession);
-                                    } else if (vrl.getProtocol().equalsIgnoreCase("S3CRUSH")) {
-                                        size = Common.recurseSizeOfS3Crush(new File_S(String.valueOf(System.getProperty("crushftp.s3_root", "./s3/")) + vrl.getPath()), 0L, thisSession);
-                                    }
-                                    Log.log("QUOTA", 3, "get_quota_used: checking " + the_dir + " with protocol:" + vrl.getProtocol() + " for final size:" + size);
-                                }
-                                Log.log("QUOTA", 3, "get_quota_used: caching and returning " + the_dir + " for final size:" + size);
-                                Properties p2 = new Properties();
-                                p2.put("time", String.valueOf(new Date().getTime()));
-                                p2.put("size", String.valueOf(size));
-                                VFS.quotaCache.put(real_path.toUpperCase(), p2);
-                            }
-                            finally {
-                                VFS.activeQuotaChecks.remove(real_path);
-                            }
-                        }
-                    }
-                    return size;
-                }
-                return -12345L;
-            }
-            catch (Exception e) {
-                Log.log("SERVER", 3, e);
-                if (("" + e).indexOf("Interrupted") < 0) break block25;
-                throw e;
-            }
-        }
-        return -12345L;
+        return QuotaWorker.get_quota_used(the_dir, uVFS, parentQuotaDir, thisSession);
     }
 
     public long get_total_quota(String the_dir) throws Exception {
@@ -924,9 +884,12 @@ implements Serializable {
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     public void set_quota(String the_dir, long quota_val) throws Exception {
+        if (ServerStatus.BG("quota_async")) {
+            return;
+        }
         Object object = set_quota_lock;
         synchronized (object) {
-            block12: {
+            block13: {
                 try {
                     UserTools.loadPermissions(this.uVFS);
                     Properties item = this.uVFS.get_item(this.uVFS.getPrivPath(the_dir));
@@ -964,7 +927,7 @@ implements Serializable {
                     }
                 }
                 catch (Exception e) {
-                    if (("" + e).indexOf("Interrupted") < 0) break block12;
+                    if (("" + e).indexOf("Interrupted") < 0) break block13;
                     throw e;
                 }
             }
@@ -1075,6 +1038,21 @@ implements Serializable {
         }
         object = this.uiVG("user_log");
         synchronized (object) {
+            if (!this.uiSG("user_log_path_custom").equals("")) {
+                String new_loc = "" + this.user_info.remove("user_log_path_custom");
+                String old_loc = this.uiSG("user_log_path");
+                this.uiPUT("user_log_path", new_loc);
+                new File_S(Common.all_but_last(String.valueOf(this.uiSG("user_log_path")) + this.uiSG("user_log_file"))).mkdirs();
+                if (new File_S(String.valueOf(old_loc) + this.uiSG("user_log_file")).exists() && !new File_S(String.valueOf(old_loc) + this.uiSG("user_log_file")).renameTo(new File_S(String.valueOf(new_loc) + this.uiSG("user_log_file")))) {
+                    try {
+                        Common.copy(String.valueOf(old_loc) + this.uiSG("user_log_file"), String.valueOf(new_loc) + this.uiSG("user_log_file"), true);
+                    }
+                    catch (Exception exception) {
+                        // empty catch block
+                    }
+                    new File_S(String.valueOf(old_loc) + this.uiSG("user_log_file")).delete();
+                }
+            }
             try {
                 com.crushftp.client.Common.copyStreams(new ByteArrayInputStream(sb.toString().getBytes("UTF8")), new FileOutputStream(new File_S(String.valueOf(this.uiSG("user_log_path")) + this.uiSG("user_log_file")), true), true, true);
             }
@@ -1098,6 +1076,12 @@ implements Serializable {
     }
 
     public Properties do_event5(String type, Properties fileItem1, Properties fileItem2) {
+        if (fileItem1 != null && !fileItem1.getProperty("the_file_error", "").equals("") && !fileItem1.getProperty("mark_error", "").equals("true")) {
+            if (ServerStatus.BG("block_failed_filetransfer_events")) {
+                return null;
+            }
+        }
+        Log.log("EVENT", 2, "Checking fileitem1 type:" + VRL.safe(fileItem1));
         if (fileItem1 != null && fileItem1.containsKey("the_file_type")) {
             fileItem1.put("type", fileItem1.getProperty("the_file_type"));
         }
@@ -1107,9 +1091,11 @@ implements Serializable {
         Properties info = null;
         Properties originalUser = this.user;
         try {
+            Log.log("EVENT", 2, "Checking user object1:" + (this.user == null) + ":username=" + this.uiSG("user_name"));
             if (this.user == null && type.equalsIgnoreCase("ERROR")) {
                 this.user = UserTools.ut.getUser(this.uiSG("listen_ip_port"), this.uiSG("user_name"), true);
             }
+            Log.log("EVENT", 2, "Checking user object2:" + (this.user == null) + ":username=" + this.uiSG("user_name"));
             if (this.user == null) {
                 Properties properties = info;
                 return properties;
@@ -1122,7 +1108,9 @@ implements Serializable {
             if (fileItem2 != null) {
                 fileItem2_2 = (Properties)fileItem2.clone();
             }
+            Log.log("EVENT", 2, "Processing event1:" + type + ":username=" + this.uiSG("user_name"));
             info = ServerStatus.thisObj.events6.process(type, fileItem1_2, fileItem2_2, (Vector)this.user.get("events"), this);
+            Log.log("EVENT", 2, "Processing event2:" + type + ":username=" + this.uiSG("user_name"));
             if (fileItem1_2 != null && fileItem1_2.containsKey("execute_log")) {
                 fileItem1.put("execute_log", fileItem1_2.get("execute_log"));
             }
@@ -1180,172 +1168,176 @@ implements Serializable {
                     }
                 }
                 String tempAccountsPath = ServerStatus.SG("temp_accounts_path");
+                if (!new File_U(String.valueOf(tempAccountsPath) + "accounts/").exists()) break block34;
                 File_U[] accounts = (File_U[])new File_U(String.valueOf(tempAccountsPath) + "accounts/").listFiles();
                 boolean found = false;
                 boolean exausted_usage = false;
                 if (accounts == null) break block34;
                 int x = 0;
                 while (!found && x < accounts.length) {
-                    try {
-                        File_U f = accounts[x];
-                        Log.log("SERVER", 2, "Temp:" + f.getName());
-                        if (f.getName().indexOf(",,") >= 0 && f.isDirectory()) {
-                            Properties info;
-                            String[] tokens = f.getName().split(",,");
-                            Properties pp = new Properties();
-                            int xx = 0;
-                            while (xx < tokens.length) {
-                                boolean skip = false;
-                                String key = tokens[xx].substring(0, tokens[xx].indexOf("="));
-                                String val = tokens[xx].substring(tokens[xx].indexOf("=") + 1);
-                                if (key.equals("C")) {
-                                    key = val.split("=")[0];
-                                    val = val.split("=").length > 1 ? val.split("=")[1] : "";
-                                    Vector<Properties> v = (Vector<Properties>)pp.get("web_customizations");
-                                    if (v == null) {
-                                        v = new Vector<Properties>();
-                                    }
-                                    Properties ppp = new Properties();
-                                    ppp.put("key", key);
-                                    ppp.put("value", val);
-                                    v.addElement(ppp);
-                                    pp.put("web_customizations", v);
-                                    skip = true;
-                                }
-                                if (!skip) {
-                                    pp.put(key.toUpperCase(), val);
-                                }
-                                ++xx;
-                            }
-                            if (!pp.getProperty("I", "").equals("") && pp.getProperty("U").equalsIgnoreCase(p.getProperty("username")) && pp.getProperty("P").equalsIgnoreCase(p.getProperty("password"))) {
-                                File_U f2 = f;
-                                int i = Integer.parseInt(pp.getProperty("I")) - 1;
-                                if (i < 0) {
-                                    exausted_usage = true;
-                                } else {
-                                    f2 = new File_U(f.getPath().replaceAll(",,i=" + (i + 1), ",,i=" + i));
-                                    f.renameTo(f2);
-                                    f = f2;
-                                }
-                            }
-                            if (ServerStatus.thisObj.common_code.check_date_expired_roll(pp.getProperty("EX"))) {
-                                if (!ServerStatus.SG("temp_accounts_account_expire_task").equals("")) {
-                                    Vector<Properties> items = new Vector<Properties>();
-                                    Properties item = new Properties();
-                                    info = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
-                                    item.putAll((Map<?, ?>)info);
-                                    item.putAll((Map<?, ?>)pp);
-                                    item.put("url", f.toURI().toURL().toExternalForm());
-                                    item.put("the_file_name", f.getName());
-                                    item.put("the_file_path", "/");
-                                    item.put("account_path", String.valueOf(f.getCanonicalPath().replace('\\', '/')) + "/");
-                                    item.put("storage_path", String.valueOf(new File_U(String.valueOf(f.getCanonicalPath()) + "/../../storage/" + pp.getProperty("U") + pp.getProperty("P")).getCanonicalPath().replace('\\', '/')) + "/");
-                                    item.put("the_file_size", String.valueOf(f.length()));
-                                    item.put("type", f.isDirectory() ? "DIR" : "FILE");
-                                    items.addElement(item);
-                                    Properties event = new Properties();
-                                    event.put("event_plugin_list", ServerStatus.SG("temp_accounts_account_expire_task"));
-                                    event.put("name", "TempAccountEvent:" + pp.getProperty("U"));
-                                    ServerStatus.thisObj.events6.doEventPlugin(null, event, null, items);
-                                }
-                                Common.recurseDelete_U(String.valueOf(f.getCanonicalPath()) + "/../../storage/" + pp.getProperty("U") + pp.getProperty("P"), false);
-                                Common.recurseDelete_U(f.getCanonicalPath(), false);
-                            } else if (p.getProperty("username").equalsIgnoreCase(pp.getProperty("U")) && (p.getProperty("password").equalsIgnoreCase(pp.getProperty("P")) || p.getProperty("anyPass").equals("true"))) {
-                                Properties tempUser = UserTools.ut.getUser(serverGroup, pp.getProperty("T"), true);
-                                tempUser.put("username", p.getProperty("username"));
-                                tempUser.put("password", p.getProperty("password"));
-                                tempUser.put("account_expire", pp.getProperty("EX"));
-                                Properties u = (Properties)p.get("user");
-                                info = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
-                                info.remove("command");
-                                info.remove("type");
-                                u.putAll((Map<?, ?>)tempUser);
-                                u.putAll((Map<?, ?>)pp);
-                                u.putAll((Map<?, ?>)info);
-                                u.put("email", info.getProperty("emailTo"));
-                                Vector events = (Vector)u.get("events");
-                                if (events != null) {
-                                    int xx2 = 0;
-                                    while (xx2 < events.size()) {
-                                        Properties event = (Properties)events.elementAt(xx2);
-                                        if (event.getProperty("resolveShareEvent", "false").equals("true") && event.getProperty("linkUser") != null) {
-                                            Properties linkUser = UserTools.ut.getUser(serverGroup, event.getProperty("linkUser"), true);
-                                            Vector events2 = null;
-                                            events2 = linkUser == null ? (Vector)com.crushftp.client.Common.CLONE(events) : (Vector)linkUser.get("events");
-                                            int xxx = 0;
-                                            while (events2 != null && xxx < events2.size()) {
-                                                Properties event2 = (Properties)events2.elementAt(xxx);
-                                                if (event2.getProperty("name", "").equals(event.getProperty("linkEvent", ""))) {
-                                                    event.putAll((Map<?, ?>)((Properties)event2.clone()));
-                                                    String event_user_action_list = ")" + event.getProperty("event_user_action_list", "") + "(";
-                                                    String[] parts = event_user_action_list.split("\\)\\(");
-                                                    String new_event_user_action_list = "";
-                                                    int xxxx = 0;
-                                                    while (xxxx < parts.length) {
-                                                        if (parts[xxxx].startsWith("share_")) {
-                                                            new_event_user_action_list = String.valueOf(new_event_user_action_list) + "(" + parts[xxxx].substring("share_".length()) + ")";
-                                                        }
-                                                        ++xxxx;
-                                                    }
-                                                    event.put("event_user_action_list", new_event_user_action_list);
-                                                    break;
-                                                }
-                                                ++xxx;
-                                            }
+                    block35: {
+                        try {
+                            File_U f = accounts[x];
+                            Log.log("SERVER", 2, "Temp:" + f.getName());
+                            if (f.getName().indexOf(",,") >= 0 && f.isDirectory()) {
+                                Properties info;
+                                String[] tokens = f.getName().split(",,");
+                                Properties pp = new Properties();
+                                int xx = 0;
+                                while (xx < tokens.length) {
+                                    boolean skip = false;
+                                    String key = tokens[xx].substring(0, tokens[xx].indexOf("="));
+                                    String val = tokens[xx].substring(tokens[xx].indexOf("=") + 1);
+                                    if (key.equals("C")) {
+                                        key = val.split("=")[0];
+                                        val = val.split("=").length > 1 ? val.split("=")[1] : "";
+                                        Vector<Properties> v = (Vector<Properties>)pp.get("web_customizations");
+                                        if (v == null) {
+                                            v = new Vector<Properties>();
                                         }
-                                        ++xx2;
+                                        Properties ppp = new Properties();
+                                        ppp.put("key", key);
+                                        ppp.put("value", val);
+                                        v.addElement(ppp);
+                                        pp.put("web_customizations", v);
+                                        skip = true;
+                                    }
+                                    if (!skip) {
+                                        pp.put(key.toUpperCase(), val);
+                                    }
+                                    ++xx;
+                                }
+                                if (!pp.getProperty("I", "").equals("") && pp.getProperty("U").equalsIgnoreCase(p.getProperty("username")) && pp.getProperty("P").equalsIgnoreCase(p.getProperty("password"))) {
+                                    File_U f2 = f;
+                                    int i = Integer.parseInt(pp.getProperty("I")) - 1;
+                                    if (i < 0) {
+                                        exausted_usage = true;
+                                    } else {
+                                        f2 = new File_U(f.getPath().replaceAll(",,i=" + (i + 1), ",,i=" + i));
+                                        f.renameTo(f2);
+                                        f = f2;
                                     }
                                 }
-                                UserTools.mergeWebCustomizations(u, pp);
-                                UserTools.mergeWebCustomizations(u, info);
-                                UserTools.mergeWebCustomizations(u, tempUser);
-                                p.remove("permissions");
-                                p.put("virtual", XMLUsers.buildVFSXML(String.valueOf(f.getPath()) + "/"));
-                                p.put("action", "success");
-                                p.put("overwrite_permissions", "false");
-                                if (exausted_usage) {
-                                    String fname = "invalid_link.html";
-                                    String buildPrivs = "(read)(view)";
-                                    Properties permissions = new Properties();
-                                    permissions.put("/", buildPrivs);
-                                    Properties dir_item = new Properties();
-                                    dir_item.put("url", new File_S(String.valueOf(System.getProperty("crushftp.web", "")) + "WebInterface/" + fname).toURI().toURL().toExternalForm());
-                                    dir_item.put("type", "file");
-                                    Vector<Properties> v = new Vector<Properties>();
-                                    v.addElement(dir_item);
-                                    Properties virtual = UserTools.generateEmptyVirtual();
-                                    String path = "/" + fname;
-                                    if (path.endsWith("/")) {
-                                        path = path.substring(0, path.length() - 1);
+                                if (ServerStatus.thisObj.common_code.check_date_expired_roll(pp.getProperty("EX"))) {
+                                    if (!ServerStatus.SG("temp_accounts_account_expire_task").equals("")) {
+                                        Vector<Properties> items = new Vector<Properties>();
+                                        Properties item = new Properties();
+                                        info = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
+                                        item.putAll((Map<?, ?>)info);
+                                        item.putAll((Map<?, ?>)pp);
+                                        item.put("url", f.toURI().toURL().toExternalForm());
+                                        item.put("the_file_name", f.getName());
+                                        item.put("the_file_path", "/");
+                                        item.put("account_path", String.valueOf(f.getCanonicalPath().replace('\\', '/')) + "/");
+                                        item.put("storage_path", String.valueOf(new File_U(String.valueOf(f.getCanonicalPath()) + "/../../storage/" + pp.getProperty("U") + pp.getProperty("P")).getCanonicalPath().replace('\\', '/')) + "/");
+                                        item.put("the_file_size", String.valueOf(f.length()));
+                                        item.put("type", f.isDirectory() ? "DIR" : "FILE");
+                                        items.addElement(item);
+                                        Properties event = new Properties();
+                                        event.put("event_plugin_list", ServerStatus.SG("temp_accounts_account_expire_task"));
+                                        event.put("name", "TempAccountEvent:" + pp.getProperty("U"));
+                                        ServerStatus.thisObj.events6.doEventPlugin(null, event, null, items);
                                     }
-                                    Properties vItem = new Properties();
-                                    vItem.put("virtualPath", path);
-                                    vItem.put("name", fname);
-                                    vItem.put("type", "FILE");
-                                    vItem.put("vItems", v);
-                                    virtual.put(path, vItem);
-                                    vItem = new Properties();
-                                    vItem.put("name", "VFS");
-                                    vItem.put("type", "DIR");
-                                    vItem.put("virtualPath", "/");
-                                    virtual.put("/", vItem);
-                                    p.put("virtual", virtual);
-                                    Vector<Properties> web_customizations = (Vector<Properties>)u.get("web_customizations");
-                                    if (web_customizations == null) {
-                                        web_customizations = new Vector<Properties>();
+                                    Common.recurseDelete_U(String.valueOf(f.getCanonicalPath()) + "/../../storage/" + pp.getProperty("U") + pp.getProperty("P"), false);
+                                    Common.recurseDelete_U(f.getCanonicalPath(), false);
+                                } else if (p.getProperty("username").equalsIgnoreCase(pp.getProperty("U")) && (p.getProperty("password").equalsIgnoreCase(pp.getProperty("P")) || p.getProperty("anyPass").equals("true"))) {
+                                    Properties tempUser = UserTools.ut.getUser(serverGroup, pp.getProperty("T"), true);
+                                    tempUser.put("username", p.getProperty("username"));
+                                    tempUser.put("password", p.getProperty("password"));
+                                    tempUser.put("account_expire", pp.getProperty("EX"));
+                                    Properties u = (Properties)p.get("user");
+                                    info = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
+                                    info.remove("command");
+                                    info.remove("type");
+                                    u.putAll((Map<?, ?>)tempUser);
+                                    u.putAll((Map<?, ?>)pp);
+                                    u.putAll((Map<?, ?>)info);
+                                    u.put("email", info.getProperty("emailTo", ""));
+                                    Vector events = (Vector)u.get("events");
+                                    if (events != null) {
+                                        int xx2 = 0;
+                                        while (xx2 < events.size()) {
+                                            Properties event = (Properties)events.elementAt(xx2);
+                                            if (event.getProperty("resolveShareEvent", "false").equals("true") && event.getProperty("linkUser") != null) {
+                                                Properties linkUser = UserTools.ut.getUser(serverGroup, event.getProperty("linkUser"), true);
+                                                Vector events2 = null;
+                                                events2 = linkUser == null ? (Vector)com.crushftp.client.Common.CLONE(events) : (Vector)linkUser.get("events");
+                                                int xxx = 0;
+                                                while (events2 != null && xxx < events2.size()) {
+                                                    Properties event2 = (Properties)events2.elementAt(xxx);
+                                                    if (event2.getProperty("name", "").equals(event.getProperty("linkEvent", ""))) {
+                                                        event.putAll((Map<?, ?>)((Properties)event2.clone()));
+                                                        String event_user_action_list = ")" + event.getProperty("event_user_action_list", "") + "(";
+                                                        String[] parts = event_user_action_list.split("\\)\\(");
+                                                        String new_event_user_action_list = "";
+                                                        int xxxx = 0;
+                                                        while (xxxx < parts.length) {
+                                                            if (parts[xxxx].startsWith("share_")) {
+                                                                new_event_user_action_list = String.valueOf(new_event_user_action_list) + "(" + parts[xxxx].substring("share_".length()) + ")";
+                                                            }
+                                                            ++xxxx;
+                                                        }
+                                                        event.put("event_user_action_list", new_event_user_action_list);
+                                                        break;
+                                                    }
+                                                    ++xxx;
+                                                }
+                                            }
+                                            ++xx2;
+                                        }
                                     }
-                                    Properties replaceListingWithPage = new Properties();
-                                    replaceListingWithPage.put("key", "replaceListingWithPage");
-                                    replaceListingWithPage.put("value", "invalid_link.html");
-                                    web_customizations.addElement(replaceListingWithPage);
-                                    u.put("web_customizations", web_customizations);
+                                    UserTools.mergeWebCustomizations(u, pp);
+                                    UserTools.mergeWebCustomizations(u, info);
+                                    UserTools.mergeWebCustomizations(u, tempUser);
+                                    p.remove("permissions");
+                                    p.put("virtual", XMLUsers.buildVFSXML(String.valueOf(f.getPath()) + "/"));
+                                    p.put("action", "success");
+                                    p.put("overwrite_permissions", "false");
+                                    if (exausted_usage) {
+                                        String fname = "invalid_link.html";
+                                        String buildPrivs = "(read)(view)";
+                                        Properties permissions = new Properties();
+                                        permissions.put("/", buildPrivs);
+                                        Properties dir_item = new Properties();
+                                        dir_item.put("url", new File_S(String.valueOf(System.getProperty("crushftp.web", "")) + "WebInterface/" + fname).toURI().toURL().toExternalForm());
+                                        dir_item.put("type", "file");
+                                        Vector<Properties> v = new Vector<Properties>();
+                                        v.addElement(dir_item);
+                                        Properties virtual = UserTools.generateEmptyVirtual();
+                                        String path = "/" + fname;
+                                        if (path.endsWith("/")) {
+                                            path = path.substring(0, path.length() - 1);
+                                        }
+                                        Properties vItem = new Properties();
+                                        vItem.put("virtualPath", path);
+                                        vItem.put("name", fname);
+                                        vItem.put("type", "FILE");
+                                        vItem.put("vItems", v);
+                                        virtual.put(path, vItem);
+                                        vItem = new Properties();
+                                        vItem.put("name", "VFS");
+                                        vItem.put("type", "DIR");
+                                        vItem.put("virtualPath", "/");
+                                        virtual.put("/", vItem);
+                                        p.put("virtual", virtual);
+                                        Vector<Properties> web_customizations = (Vector<Properties>)u.get("web_customizations");
+                                        if (web_customizations == null) {
+                                            web_customizations = new Vector<Properties>();
+                                        }
+                                        Properties replaceListingWithPage = new Properties();
+                                        replaceListingWithPage.put("key", "replaceListingWithPage");
+                                        replaceListingWithPage.put("value", "invalid_link.html");
+                                        web_customizations.addElement(replaceListingWithPage);
+                                        u.put("web_customizations", web_customizations);
+                                    }
+                                    found = true;
                                 }
-                                found = true;
                             }
                         }
-                    }
-                    catch (Exception e) {
-                        Log.log("SERVER", 1, e);
+                        catch (Exception e) {
+                            if (("" + e).indexOf("java.nio.file.NoSuchFileException") >= 0 || ("" + e).replace('\\', '/').indexOf("./TempAccounts/accounts") >= 0) break block35;
+                            Log.log("SERVER", 1, e);
+                        }
                     }
                     ++x;
                 }
@@ -1399,13 +1391,12 @@ implements Serializable {
         int invalid_username_attempts;
         long invalid_username_time;
         Properties loginReason;
-        block167: {
+        block184: {
             Properties p;
             String SAMLResponse;
             String templateUser;
-            block169: {
+            block186: {
                 Object tempUser;
-                boolean hack;
                 if (!ServerStatus.siBG("allow_logins")) {
                     return false;
                 }
@@ -1414,7 +1405,7 @@ implements Serializable {
                     theUser = theUser.substring(1);
                     this.uiPUT("user_name", theUser);
                 }
-                if (theUser.toUpperCase().startsWith("$ASCII$")) {
+                if ((theUser = VRL.vrlDecode(theUser)).toUpperCase().startsWith("$ASCII$")) {
                     theUser = theUser.substring(7);
                     this.uiPUT("user_name", theUser);
                     this.uiPUT("proxy_ascii_binary", "ascii");
@@ -1427,13 +1418,12 @@ implements Serializable {
                     theUser = theUser.substring(theUser.indexOf("/") + 1);
                     this.uiPUT("user_name", theUser);
                 }
-                if (ServerStatus.BG("block_hack_username_immediately") && !theUser.trim().equals("") && !theUser.trim().equalsIgnoreCase("anonymous") && (hack = this.checkHackUsernames(theUser))) {
-                    return false;
-                }
                 if (ServerStatus.BG("secondary_login_via_email") && theUser.indexOf("@") >= 0 && UserTools.user_email_cache.containsKey(String.valueOf(this.uiSG("listen_ip_port")) + ":" + theUser.toUpperCase())) {
                     String username2 = UserTools.user_email_cache.getProperty(String.valueOf(this.uiSG("listen_ip_port")) + ":" + theUser.toUpperCase());
                     Log.log("SERVER", 0, "Using XF table for email " + theUser + " to convert to:" + username2);
                     theUser = username2;
+                    this.uiPUT("user_name", theUser);
+                    this.uiPUT("user_name_original", theUser);
                 }
                 if (UserTools.checkPassword(thePass)) {
                     anyPass = true;
@@ -1450,7 +1440,7 @@ implements Serializable {
                 invalid_username_attempts = Integer.parseInt(ServerStatus.siPG("invalid_usernames").getProperty(theUser.toUpperCase(), "0:0").split(":")[1]);
                 if (invalid_username_time > 0L && invalid_username_time > new Date().getTime() - (long)(ServerStatus.IG("invalid_usernames_seconds") * 1000) && invalid_username_attempts > ServerStatus.IG("invalid_usernames_seconds_attempts")) {
                     ServerStatus.siPG("invalid_usernames").put(theUser.toUpperCase(), String.valueOf(invalid_username_time) + ":" + (invalid_username_attempts + 1));
-                    this.add_log("Ignoring user login request and returning failure due to invalid_username_seconds not being long enough for retry:" + new Date(invalid_username_time + (long)(ServerStatus.IG("invalid_usernames_seconds") * 1000)) + " attempts:" + invalid_username_attempts, "USER");
+                    this.add_log("Ignoring user login request and returning failure due to invalid_usernames_seconds not being long enough for retry:" + new Date(invalid_username_time + (long)(ServerStatus.IG("invalid_usernames_seconds") * 1000)) + " attempts:" + invalid_username_attempts, "USER");
                     return false;
                 }
                 this.user = null;
@@ -1464,29 +1454,29 @@ implements Serializable {
                 templateUser = "";
                 SAMLResponse = this.uiSG("SAMLResponse");
                 if (!temp_p.getProperty("action", "").equalsIgnoreCase("success")) {
-                    this.user = UserTools.ut.verify_user(ServerStatus.thisObj, theUser, thePass, this.uiSG("listen_ip_port"), this.uiIG("user_number"), this.uiSG("user_ip"), this.uiIG("user_port"), this.server_item, loginReason, anyPass);
+                    this.user = UserTools.ut.verify_user(ServerStatus.thisObj, theUser, thePass, this.uiSG("listen_ip_port"), this, this.uiIG("user_number"), this.uiSG("user_ip"), this.uiIG("user_port"), this.server_item, loginReason, anyPass);
                 }
                 if (!anyPass && this.user == null && !theUser.toLowerCase().equals("anonymous")) {
                     this.user_info.put("plugin_user_auth_info", "Password incorrect.");
                 }
-                if (this.user != null && !theUser.equals("SSO_UNI") && !theUser.equals("SSO_SAML")) break block169;
+                if (this.user != null && !theUser.equals("SSO_UNI") && !theUser.toUpperCase().startsWith("SSO_SAML")) break block186;
                 p = temp_p;
                 if (!p.getProperty("action", "").equalsIgnoreCase("success")) {
-                    tempUser = UserTools.ut.verify_user(ServerStatus.thisObj, theUser, thePass, this.uiSG("listen_ip_port"), this.uiIG("user_number"), this.uiSG("user_ip"), this.uiIG("user_port"), this.server_item, loginReason, true);
+                    tempUser = UserTools.ut.verify_user(ServerStatus.thisObj, theUser, thePass, this.uiSG("listen_ip_port"), this, this.uiIG("user_number"), this.uiSG("user_ip"), this.uiIG("user_port"), this.server_item, loginReason, true);
                     p.put("authenticationOnlyExists", String.valueOf(tempUser != null));
                     p = this.runPlugin("login", p);
                     templateUser = p.getProperty("templateUser", "");
                 }
                 tempUser = ServerStatus.thisObj;
                 synchronized (tempUser) {
-                    block164: {
-                        if (!p.getProperty("action", "").equalsIgnoreCase("success") && !p.getProperty("dump_xml_user", "false").equals("true")) break block164;
+                    block181: {
+                        if (!p.getProperty("action", "").equalsIgnoreCase("success") && !p.getProperty("dump_xml_user", "false").equals("true")) break block181;
                         theUser = p.getProperty("username", theUser);
                         if (p.getProperty("authenticationOnly", "false").equalsIgnoreCase("true")) {
                             Properties user2;
                             Vector extraLinkedVfs;
                             Log.log("LOGIN", 2, String.valueOf(LOC.G("Plugin authenticated user (not user manager):")) + theUser);
-                            this.user = UserTools.ut.verify_user(ServerStatus.thisObj, theUser, thePass, this.uiSG("listen_ip_port"), this.uiIG("user_number"), this.uiSG("user_ip"), this.uiIG("user_port"), this.server_item, loginReason, true);
+                            this.user = UserTools.ut.verify_user(ServerStatus.thisObj, theUser, thePass, this.uiSG("listen_ip_port"), this, this.uiIG("user_number"), this.uiSG("user_ip"), this.uiIG("user_port"), this.server_item, loginReason, true);
                             if (p.getProperty("create_local_user", "").equals("true") && this.user == null) {
                                 Properties temp_user = UserTools.ut.getUser(this.uiSG("listen_ip_port"), p.getProperty("create_local_user_template", ""), false);
                                 temp_user.put("password", ServerStatus.thisObj.common_code.encode_pass(Common.makeBoundary(), "SHA512"));
@@ -1494,7 +1484,20 @@ implements Serializable {
                                 UserTools.writeUser(this.uiSG("listen_ip_port"), theUser, temp_user);
                                 VFS tempVFS = UserTools.ut.getVFS(this.uiSG("listen_ip_port"), p.getProperty("create_local_user_template", ""));
                                 UserTools.writeVFS(this.uiSG("listen_ip_port"), theUser, tempVFS);
-                                this.user = UserTools.ut.verify_user(ServerStatus.thisObj, theUser, thePass, this.uiSG("listen_ip_port"), this.uiIG("user_number"), this.uiSG("user_ip"), this.uiIG("user_port"), this.server_item, loginReason, true);
+                                this.user = UserTools.ut.verify_user(ServerStatus.thisObj, theUser, thePass, this.uiSG("listen_ip_port"), this, this.uiIG("user_number"), this.uiSG("user_ip"), this.uiIG("user_port"), this.server_item, loginReason, true);
+                                if (!p.getProperty("create_local_user_template_task", "").equals("")) {
+                                    Properties item = (Properties)p.clone();
+                                    item.putAll((Map<?, ?>)p);
+                                    item.put("url", "file://" + this.uiSG("listen_ip_port") + "/" + theUser);
+                                    item.put("the_file_name", theUser);
+                                    item.put("the_file_path", this.uiSG("listen_ip_port"));
+                                    Vector<Properties> items = new Vector<Properties>();
+                                    items.addElement(item);
+                                    Properties event = new Properties();
+                                    event.put("event_plugin_list", p.getProperty("create_local_user_template_task", ""));
+                                    event.put("name", "PluginCreateUserTask:" + theUser);
+                                    ServerStatus.thisObj.events6.doEventPlugin(null, event, this, items);
+                                }
                             }
                             if (p.getProperty("CrushSSO_trusted", "").equals("true")) {
                                 this.user.put("site", Common.replace_str(this.user.getProperty("site").toUpperCase(), "(CONNECT)", ""));
@@ -1523,6 +1526,9 @@ implements Serializable {
                                     this.user.put(key, val);
                                 }
                             }
+                            if (p.containsKey("user_info") && ((Properties)p.get("user_info")).getProperty("skip_otp", "false").equalsIgnoreCase("true")) {
+                                UserTools.disable_OTP(this.user);
+                            }
                         } else {
                             try {
                                 loginReason.put("reason", "valid user");
@@ -1530,6 +1536,9 @@ implements Serializable {
                                 Properties virtual = UserTools.generateEmptyVirtual();
                                 if (!p.getProperty("templateUser", "").equals("")) {
                                     Vector extraLinkedVfs = (Vector)p.get("linked_vfs");
+                                    if (extraLinkedVfs != null && extraLinkedVfs.size() > 0) {
+                                        this.user_info.put("ldap_role_template_users", extraLinkedVfs);
+                                    }
                                     Vector<String> ichain = new Vector<String>();
                                     ichain.addElement("default");
                                     int x = 0;
@@ -1543,6 +1552,7 @@ implements Serializable {
                                         ichain.addAll(extraLinkedVfs);
                                     }
                                     Log.log("LOGIN", 1, "Building list of user configuations in layers for inheritance chain:" + ichain);
+                                    this.user.put("ichain", ichain);
                                     x = 0;
                                     while (x < ichain.size()) {
                                         Properties tempUser2 = UserTools.ut.getUser(this.uiSG("listen_ip_port"), ichain.elementAt(x).toString(), ServerStatus.BG("resolve_inheritance"));
@@ -1617,6 +1627,9 @@ implements Serializable {
                                     this.user.put("root_dir", "/");
                                     Log.log("SERVER", 3, "Dump of user properties from plugin:" + this.user);
                                 }
+                                if (p.containsKey("user_info") && ((Properties)p.get("user_info")).getProperty("skip_otp", "false").equalsIgnoreCase("true")) {
+                                    UserTools.disable_OTP(this.user);
+                                }
                                 if (p.containsKey("virtual")) {
                                     virtual = (Properties)p.get("virtual");
                                 } else {
@@ -1633,6 +1646,13 @@ implements Serializable {
                                         vItem.put("type", pp.getProperty("type", "FILE"));
                                         vItem.put("virtualPath", path2);
                                         if (pp.containsKey("data")) {
+                                            VRL vrl;
+                                            Vector data;
+                                            Properties item;
+                                            if (pp.get("data") != null && pp.get("data") instanceof Vector && ((Vector)pp.get("data")).size() > 0 && ((Vector)pp.get("data")).get(0) instanceof Properties && (item = (Properties)(data = (Vector)pp.get("data")).get(0)) != null && item.containsKey("url") && !item.getProperty("url", "").equals("") && (vrl = new VRL(item.getProperty("url", ""))) != null && vrl.getConfig() != null && vrl.getConfig().size() > 0) {
+                                                item.putAll((Map<?, ?>)vrl.getConfig());
+                                                item.put("url", vrl.toString());
+                                            }
                                             vItem.put("vItems", pp.get("data"));
                                         } else {
                                             vItem.put("vItems", new Vector());
@@ -1678,10 +1698,10 @@ implements Serializable {
                             this.add_log("Dump xml user, return false.", "USER");
                             return false;
                         }
-                        break block169;
+                        break block186;
                     }
                     if (!p.getProperty("redirect_url", "").equals("")) {
-                        if (p.getProperty("redirect_url", "").startsWith(ServerStatus.SG("http_redirect_base"))) {
+                        if (p.getProperty("redirect_url", "").startsWith(ServerStatus.SG("http_redirect_base")) || p.getProperty("redirect_url", "").indexOf(":/") < 0) {
                             this.user_info.put("redirect_url", p.getProperty("redirect_url"));
                         }
                     }
@@ -1693,7 +1713,6 @@ implements Serializable {
                 Log.log("LOGIN", 2, String.valueOf(LOC.G("Got VFS from real user:")) + this.uVFS);
             }
             if (this.user != null) {
-                Cloneable permissions;
                 p = new Properties();
                 p.put("user", this.user);
                 if (!this.user.getProperty("username", "").equals("template")) {
@@ -1722,7 +1741,7 @@ implements Serializable {
                     int x = 0;
                     while (x < homes.size()) {
                         Properties virtual = (Properties)homes.elementAt(x);
-                        permissions = (Vector)virtual.get("vfs_permissions_object");
+                        Vector permissions = (Vector)virtual.get("vfs_permissions_object");
                         Properties vfs_permissions_object = (Properties)permissions.elementAt(0);
                         Enumeration<Object> keys = virtual.keys();
                         while (keys.hasMoreElements()) {
@@ -1761,9 +1780,9 @@ implements Serializable {
                     ServerStatus.thisObj.server_info.put("md4_hashes", md4_hashes);
                     if (!md4_hashes.getProperty(md4_user, "").equals(md4_pass)) {
                         md4_hashes.put(md4_user, md4_pass);
-                        permissions = md4_hashes;
+                        Properties permissions = md4_hashes;
                         synchronized (permissions) {
-                            block166: {
+                            block183: {
                                 ObjectOutputStream oos = null;
                                 try {
                                     try {
@@ -1782,10 +1801,10 @@ implements Serializable {
                                             if (oos != null) {
                                                 oos.close();
                                             }
-                                            break block166;
+                                            break block183;
                                         }
                                         catch (Exception key2) {}
-                                        break block166;
+                                        break block183;
                                     }
                                 }
                                 catch (Throwable key) {
@@ -1823,7 +1842,7 @@ implements Serializable {
                 try {
                     Properties p2;
                     this.uVFS.getListing(listing, "/");
-                    if (listing.size() <= 0 || !(p2 = (Properties)listing.elementAt(0)).getProperty("type").equalsIgnoreCase("DIR")) break block167;
+                    if (listing.size() <= 0 || !(p2 = (Properties)listing.elementAt(0)).getProperty("type").equalsIgnoreCase("DIR")) break block184;
                     p2 = this.uVFS.get_item(String.valueOf(p2.getProperty("root_dir")) + p2.getProperty("name") + "/");
                     GenericClient c = this.uVFS.getClient(p2);
                     try {
@@ -1920,12 +1939,17 @@ implements Serializable {
                             action = UserTools.waitResponse(action, 60);
                         }
                         if (action != null && action.containsKey("user")) {
+                            if (action.containsKey("internal_server_data")) {
+                                this.putAll((Properties)action.get("internal_server_data"));
+                            }
                             this.user = (Properties)action.get("user");
                             Vector homes = (Vector)action.get("vfs");
                             Properties permission = this.uVFS.getPermission0();
                             Properties tempPermission0 = null;
+                            Vector<String> log_user_vfs_items = new Vector<String>();
                             int x = homes.size() - 1;
                             while (x >= 0) {
+                                String key;
                                 Properties tempPermission;
                                 Properties tempVFS = (Properties)homes.elementAt(x);
                                 tempVFS.remove("");
@@ -1933,7 +1957,7 @@ implements Serializable {
                                 tempPermission0 = tempPermission = (Properties)tempPermissionHomes.elementAt(0);
                                 Enumeration<Object> keys = tempPermission.keys();
                                 while (keys.hasMoreElements()) {
-                                    String key = keys.nextElement().toString();
+                                    key = keys.nextElement().toString();
                                     if (key.indexOf("/", 1) > 0) {
                                         permission.put("/" + p2.getProperty("name").toUpperCase() + key, tempPermission.getProperty(key));
                                         continue;
@@ -1941,25 +1965,55 @@ implements Serializable {
                                     if (tempPermission.size() != 1 || !key.equals("/")) continue;
                                     permission.put("/INTERNAL/", tempPermission.getProperty(key));
                                 }
+                                keys = tempVFS.keys();
+                                while (keys.hasMoreElements()) {
+                                    key = keys.nextElement().toString();
+                                    if (key.equalsIgnoreCase("/") || key.equals("vfs_permissions_object")) continue;
+                                    Properties vItem = (Properties)tempVFS.get(key);
+                                    try {
+                                        log_user_vfs_items.addElement(String.valueOf(key) + ":" + VRL.safe((Properties)((Vector)vItem.get("vItems")).elementAt(0)).getProperty("url") + ":" + tempPermission.getProperty(String.valueOf(key.toUpperCase()) + "/"));
+                                    }
+                                    catch (Exception e) {
+                                        Log.log("SERVER", 1, "Error with key:" + key);
+                                        Log.log("SERVER", 1, e);
+                                    }
+                                }
                                 --x;
                             }
                             Vector<String> unique_items = new Vector<String>();
                             Enumeration<Object> perm_keys = permission.keys();
                             while (perm_keys.hasMoreElements()) {
-                                String path;
                                 String unique_item;
+                                String path;
                                 String key = perm_keys.nextElement().toString();
-                                if (!key.startsWith("/INTERNAL/") || key.equals("/INTERNAL/") || unique_items.contains(unique_item = (path = key.substring("/INTERNAL/".length(), key.length())).substring(0, path.indexOf("/")))) continue;
+                                if (key.startsWith("/INTERNAL/") && !key.equals("/INTERNAL/")) {
+                                    path = key.substring("/INTERNAL/".length(), key.length());
+                                    unique_item = path.substring(0, path.indexOf("/"));
+                                    if (unique_items.contains(unique_item)) continue;
+                                    unique_items.add(unique_item);
+                                    continue;
+                                }
+                                if (!key.startsWith("/INTERNAL1/") || key.equals("/INTERNAL1/") || unique_items.contains(unique_item = (path = key.substring("/INTERNAL1/".length(), key.length())).substring(0, path.indexOf("/")))) continue;
                                 unique_items.add(unique_item);
+                            }
+                            this.add_log("[" + this.server_item.getProperty("serverType", "ftp") + ":" + this.uiSG("user_number") + ":" + this.uiSG("user_name") + ":" + this.uiSG("user_ip") + "] " + ":VFS items at login:" + log_user_vfs_items.size(), "USER");
+                            int x3 = 0;
+                            while (x3 < log_user_vfs_items.size()) {
+                                this.add_log("[" + this.server_item.getProperty("serverType", "ftp") + ":" + this.uiSG("user_number") + ":" + this.uiSG("user_name") + ":" + this.uiSG("user_ip") + "] " + ":VFS item " + (x3 + 1) + ":" + log_user_vfs_items.elementAt(x3), "USER");
+                                ++x3;
                             }
                             if (unique_items.size() == 1) {
                                 Enumeration<Object> keys = permission.keys();
                                 Properties perm2 = new Properties();
                                 while (keys.hasMoreElements()) {
                                     String key = (String)keys.nextElement();
-                                    if (key.equals("/INTERNAL/" + unique_items.get(0) + "/")) continue;
+                                    if (key.equals("/INTERNAL/" + unique_items.get(0) + "/") || key.equals("/INTERNAL1/" + unique_items.get(0) + "/")) continue;
                                     if (key.equals("/INTERNAL/")) {
                                         perm2.put("/INTERNAL/", permission.getProperty("/INTERNAL/" + unique_items.get(0) + "/"));
+                                        continue;
+                                    }
+                                    if (key.equals("/INTERNAL1/")) {
+                                        perm2.put("/INTERNAL1/", permission.getProperty("/INTERNAL1/" + unique_items.get(0) + "/"));
                                         continue;
                                     }
                                     if (key.equals("/")) {
@@ -1968,12 +2022,15 @@ implements Serializable {
                                     }
                                     String newKey = "/INTERNAL/" + key.substring(key.indexOf(String.valueOf((String)unique_items.get(0)) + "/") + (String.valueOf((String)unique_items.get(0)) + "/").length(), key.length());
                                     perm2.put(newKey, permission.get(key));
+                                    newKey = "/INTERNAL1/" + key.substring(key.indexOf(String.valueOf((String)unique_items.get(0)) + "/") + (String.valueOf((String)unique_items.get(0)) + "/").length(), key.length());
+                                    perm2.put(newKey, permission.get(key));
                                 }
                                 permission.clear();
                                 permission.putAll((Map<?, ?>)new HashMap<Object, Object>(perm2));
                             }
                             if (unique_items.size() > 1) {
                                 permission.put("/INTERNAL/", permission.getProperty("/"));
+                                permission.put("/INTERNAL1/", permission.getProperty("/"));
                             }
                         }
                     }
@@ -2000,9 +2057,9 @@ implements Serializable {
                             info.put("alert_sub_type", "username");
                             info.put("alert_timeout", "0");
                             info.put("alert_max", "0");
-                            info.put("alert_msg", theUser);
+                            info.put("alert_msg", String.valueOf(theUser) + (loginReason.getProperty("reason", "").equals("valid user") ? " does exist" : " does not exist"));
                             if (loginReason.getProperty("no_log_invalid_password", "false").equals("false")) {
-                                ServerStatus.thisObj.runAlerts("security_alert", info, this.user_info, null);
+                                ServerStatus.thisObj.runAlerts("security_alert", info, this.user_info, this);
                             }
                         }
                         catch (Exception ee) {
@@ -2028,7 +2085,7 @@ implements Serializable {
                 }
                 this.uiPUT("password_expired", "false");
                 if (new Date().getTime() > d.getTime()) {
-                    this.add_log("User password expired, prompting to ahve them udpate password", "USER");
+                    this.add_log("User password expired, prompting to have them udpate password", "USER");
                     this.uiPUT("password_expired", "true");
                     if (!this.uiSG("user_protocol").equalsIgnoreCase("SFTP")) {
                         String fname = "expired.html";
@@ -2058,7 +2115,31 @@ implements Serializable {
                         virtual.put("/", vItem);
                         this.expired_uVFS = this.uVFS;
                         this.setVFS(VFS.getVFS(virtual));
-                        Properties tempUser = UserTools.ut.getUser(this.uiSG("listen_ip_port"), theUser, false);
+                        final Properties tempUser = UserTools.ut.getUser(this.uiSG("listen_ip_port"), theUser, false);
+                        if (this.uiSG("user_protocol").toUpperCase().startsWith("HTTP") || this.uiSG("user_protocol").toUpperCase().startsWith("HTTPS")) {
+                            if (ServerStatus.BG("expire_password_email_token_only")) {
+                                Properties resetTokens = ServerStatus.siPG("resetTokens");
+                                if (resetTokens == null) {
+                                    resetTokens = new Properties();
+                                }
+                                ServerStatus.thisObj.server_info.put("resetTokens", resetTokens);
+                                final String token = Common.makeBoundary();
+                                tempUser.put("generated", String.valueOf(System.currentTimeMillis()));
+                                resetTokens.put(token, tempUser);
+                                Worker.startWorker(new Runnable(){
+
+                                    @Override
+                                    public void run() {
+                                        try {
+                                            Common.sendResetPasswordTokenEmail(tempUser, "en", SessionCrush.this.uiSG("listen_ip"), token);
+                                        }
+                                        catch (Exception e) {
+                                            Log.log("SERVER", 0, e);
+                                        }
+                                    }
+                                }, "Send Reset password email to " + theUser);
+                            }
+                        }
                         if (this.uiSG("user_protocol").toUpperCase().startsWith("FTP")) {
                             tempUser.put("auto_set_pass", "true");
                         }
@@ -2094,14 +2175,17 @@ implements Serializable {
                     info.put("alert_sub_type", "username");
                     info.put("alert_timeout", "0");
                     info.put("alert_max", "0");
-                    info.put("alert_msg", theUser);
+                    info.put("alert_msg", String.valueOf(theUser) + (loginReason.getProperty("reason", "").equals("valid user") ? " does exist" : " does not exist"));
                     if (loginReason.getProperty("no_log_invalid_password", "false").equals("false")) {
-                        ServerStatus.thisObj.runAlerts("security_alert", info, this.user_info, null);
+                        ServerStatus.thisObj.runAlerts("security_alert", info, this.user_info, this);
                     }
                 }
                 catch (Exception ee) {
                     Log.log("BAN", 1, ee);
                 }
+            }
+            if (!hack) {
+                UserTools.ut.check_login_count_max(UserTools.ut.getUser(this.uiSG("listen_ip_port"), theUser, true), this.uiSG("listen_ip_port"), theUser, this.uiSG("user_ip"), this.uiSG("user_port"));
             }
             return false;
         }
@@ -2121,23 +2205,65 @@ implements Serializable {
         catch (Exception exception) {
             // empty catch block
         }
+        if (!this.SG("quota_mb").trim().equals("") && !this.SG("quota_mb").trim().equals("quota_mb")) {
+            QuotaWorker.add_quota_to_all_vfs_entries(Long.parseLong(this.SG("quota_mb").trim()), this.uVFS);
+        }
         Log.log("LOGIN", 3, LOC.G("Login complete."));
+        if (this.SG("user_log_path") != null && !this.SG("user_log_path").equals("") && !this.SG("user_log_path").equals("user_log_path")) {
+            this.uiPUT("user_log_path_custom", Common.dots(ServerStatus.change_vars_to_values_static(this.SG("user_log_path"), this.user, this.user_info, this)));
+        }
         return true;
     }
 
     public boolean checkHackUsernames(String theUser) {
-        String[] hack_users = this.SG("hack_usernames").split(",");
-        if (!hack_cache.containsKey(this.SG("hack_usernames"))) {
+        return this.checkHackUsernames(theUser, true);
+    }
+
+    public boolean checkHackUsernames(String theUser, boolean logit) {
+        if (SessionCrush.isHackUsername(theUser, this.SG("hack_usernames"))) {
+            this.uiPUT("hack_username", "true");
+            boolean banned = ServerStatus.thisObj.ban(this.user_info, ServerStatus.IG("hban_timeout"), "hack username:" + theUser);
+            ServerStatus.thisObj.kick(this.user_info, logit);
+            if (banned) {
+                try {
+                    Properties info = new Properties();
+                    info.put("alert_type", "hack");
+                    info.put("alert_sub_type", "username");
+                    info.put("alert_timeout", String.valueOf(ServerStatus.IG("hban_timeout")));
+                    info.put("alert_max", "0");
+                    info.put("alert_msg", "hack username : " + theUser);
+                    ServerStatus.thisObj.runAlerts("security_alert", info, this.user_info, this);
+                    info.put("alert_msg", "hack username : " + theUser);
+                    ServerStatus.thisObj.runAlerts("ip_banned_logins", info, this.user_info, null);
+                }
+                catch (Exception e) {
+                    Log.log("BAN", 1, e);
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    public static boolean isHackUsername(String theUser, String hack_usernames) {
+        if (theUser == null || theUser.trim().equals("")) {
+            return false;
+        }
+        String[] hack_users = hack_usernames.split(",");
+        if (!hack_cache.containsKey(hack_usernames)) {
             hack_cache.clear();
         }
-        hack_cache.put(this.SG("hack_usernames"), "");
+        if (new File_S("./hack_usernames_reset").exists()) {
+            new File_S("./hack_usernames_reset").delete();
+            hack_cache.clear();
+        }
+        hack_cache.put(hack_usernames, "");
         Vector<String> v = new Vector<String>();
         int x = 0;
         while (x < hack_users.length) {
             v.addElement(hack_users[x]);
             ++x;
         }
-        boolean hack = false;
         Vector v2 = new Vector();
         int x2 = 0;
         while (x2 < v.size()) {
@@ -2159,11 +2285,11 @@ implements Serializable {
                     VRL vrl = new VRL(the_url);
                     c = Common.getClient(Common.getBaseUrl(vrl.toString()), "hack_username:", new Vector());
                     try {
-                        c.login(vrl.getUsername(), vrl.getPassword(), "");
                         if (hack_cache.containsKey(vrl.toString())) {
                             v2.addAll((Vector)hack_cache.get(vrl.toString()));
                             break block22;
                         }
+                        c.login(vrl.getUsername(), vrl.getPassword(), "");
                         Vector<String> v3 = new Vector<String>();
                         hack_cache.put(vrl.toString(), v3);
                         Properties stat = c.stat(vrl.getPath());
@@ -2171,6 +2297,7 @@ implements Serializable {
                         try (BufferedReader br = new BufferedReader(new InputStreamReader(c.download(vrl.getPath(), 0L, -1L, true)));){
                             String data = "";
                             while ((data = br.readLine()) != null) {
+                                if (data.trim().startsWith("#")) continue;
                                 if (data.indexOf(",") >= 0) {
                                     data = data.substring(0, data.indexOf(","));
                                 }
@@ -2200,30 +2327,11 @@ implements Serializable {
         x2 = 0;
         while (x2 < v.size()) {
             if (Common.compare_with_hack_username(theUser, v.elementAt(x2).toString())) {
-                hack = true;
-                this.uiPUT("hack_username", "true");
-                boolean banned = ServerStatus.thisObj.ban(this.user_info, ServerStatus.IG("hban_timeout"), "hack username:" + theUser);
-                ServerStatus.thisObj.kick(this.user_info);
-                if (!banned) break;
-                try {
-                    Properties info = new Properties();
-                    info.put("alert_type", "hack");
-                    info.put("alert_sub_type", "username");
-                    info.put("alert_timeout", String.valueOf(ServerStatus.IG("hban_timeout")));
-                    info.put("alert_max", "0");
-                    info.put("alert_msg", "hack username : " + theUser);
-                    ServerStatus.thisObj.runAlerts("security_alert", info, this.user_info, null);
-                    info.put("alert_msg", "hack username : " + theUser);
-                    ServerStatus.thisObj.runAlerts("ip_banned_logins", info, this.user_info, null);
-                }
-                catch (Exception e) {
-                    Log.log("BAN", 1, e);
-                }
-                break;
+                return true;
             }
             ++x2;
         }
-        return hack;
+        return false;
     }
 
     public void doErrorEvent(Exception e) {
@@ -2249,28 +2357,30 @@ implements Serializable {
                 action.put("type", "PUT:ERROR_EVENT");
                 action.put("id", Common.makeBoundary());
                 action.put("error_info", error_info);
-                action.put("error_user_info", this.user_info);
+                action.put("error_user_info", AdminControls.stripUser(this.user_info));
                 action.put("need_response", "false");
                 Properties root_item = this.uVFS.get_item(this.SG("root_dir"));
-                final GenericClient c = this.uVFS.getClient(root_item);
-                action.put("crushAuth", c.getConfig("crushAuth"));
-                if (ServerStatus.BG("send_dmz_error_events_to_internal")) {
-                    queue.addElement(action);
-                }
-                Worker.startWorker(new Runnable(){
-
-                    @Override
-                    public void run() {
-                        try {
-                            Thread.sleep(5000L);
-                            SessionCrush.this.uVFS.releaseClient(c);
-                        }
-                        catch (Exception exception) {
-                            // empty catch block
-                        }
+                if (!root_item.getProperty("url").startsWith("virtual")) {
+                    final GenericClient c = this.uVFS.getClient(root_item);
+                    action.put("crushAuth", c.getConfig("crushAuth"));
+                    if (ServerStatus.BG("send_dmz_error_events_to_internal")) {
+                        queue.addElement(action);
                     }
-                });
-                Thread.sleep(5000L);
+                    Worker.startWorker(new Runnable(){
+
+                        @Override
+                        public void run() {
+                            try {
+                                Thread.sleep(5000L);
+                                SessionCrush.this.uVFS.releaseClient(c);
+                            }
+                            catch (Exception exception) {
+                                // empty catch block
+                            }
+                        }
+                    });
+                    Thread.sleep(5000L);
+                }
             }
             catch (Exception ee) {
                 Log.log("SERVER", 0, ee);
@@ -2288,7 +2398,7 @@ implements Serializable {
     }
 
     public String getId() {
-        if ((this.uiSG("user_protocol").startsWith("HTTP") || this.uiSG("user_protocol_proxy").startsWith("HTTP")) && this.uiSG("CrushAuth").length() > 30) {
+        if ((this.uiSG("user_protocol").startsWith("HTTP") || this.uiSG("user_protocol_actual").startsWith("HTTP")) && this.uiSG("CrushAuth").length() > 30) {
             return this.uiSG("CrushAuth");
         }
         if (ServerStatus.BG("relaxed_event_grouping")) {
@@ -2314,14 +2424,19 @@ implements Serializable {
      * Unable to fully structure code
      */
     public boolean login_user_pass(boolean anyPass, boolean doAfterLogin, String user_name, String user_pass) throws Exception {
-        block138: {
-            block139: {
-                block140: {
-                    block141: {
-                        block137: {
-                            if (user_name.length() > 2000 || user_pass.length() > 500) {
+        block155: {
+            block156: {
+                block157: {
+                    block158: {
+                        block154: {
+                            block153: {
+                                block152: {
+                                    if (user_name.length() > 2000) break block152;
+                                    if (user_pass.length() <= ServerStatus.IG("max_password_length") || user_name.equalsIgnoreCase("crush_oauth2") || user_name.equalsIgnoreCase("crush_oauth2_ms") || user_name.equalsIgnoreCase("crush_oauth2_azure_b2c") || user_name.equalsIgnoreCase("crush_oauth2_cognito")) break block153;
+                                }
                                 this.not_done = this.ftp_write_command("550", "Invalid");
                                 this.doErrorEvent(new Exception(this.uiSG("lastLog")));
+                                Log.log("LOGIN", 1, "Password is too long. Username: " + user_name);
                                 return false;
                             }
                             Log.log("LOGIN", 3, new Exception(String.valueOf(LOC.G("INFO:Logging in with user:")) + user_name));
@@ -2356,12 +2471,17 @@ implements Serializable {
                             if (ServerStatus.BG("lowercase_usernames")) {
                                 this.uiPUT("user_name", user_name.toLowerCase());
                             }
+                            if (ServerStatus.BG("block_hack_username_immediately") && !user_name.equals("") && !user_name.equalsIgnoreCase("anonymous") && (hack = this.checkHackUsernames(user_name, false))) {
+                                Log.log("SERVER", 0, "User " + user_name + " kicked immediately because they are in the hack usernames list. IP: " + this.uiSG("user_ip"));
+                                this.uiPUT("hack_username", "true");
+                                return false;
+                            }
                             this.setVFS(null);
                             login_prop = null;
                             otp_valid = false;
                             verified = false;
                             verify_password = user_pass;
-                            if (com.crushftp.client.Common.dmz_mode) break block137;
+                            if (com.crushftp.client.Common.dmz_mode) break block154;
                             if (!user_pass.contains(":")) ** GOTO lbl-1000
                             if (ServerStatus.BG("otp_validated_logins")) {
                                 v0 = user_pass.substring(0, user_pass.indexOf(":"));
@@ -2372,17 +2492,32 @@ implements Serializable {
                                 v0 = verify_password = user_pass;
                             }
                         }
-                        if (!(verified = this.verify_user(user_name, verify_password, anyPass, doAfterLogin)) || this.user == null || !this.user.getProperty("otp_auth", "").equals("true")) break block138;
-                        if (!ServerStatus.BG("otp_validated_logins")) break block138;
+                        if (!(verified = this.verify_user(user_name, verify_password, anyPass, doAfterLogin)) || this.user == null || !this.user.getProperty("otp_auth", "").equals("true")) break block155;
+                        if (!ServerStatus.BG("otp_validated_logins")) break block155;
                         if (ServerStatus.siIG("enterprise_level") <= 0) {
                             throw new Exception("OTP only valid for Enterprise licenses.");
                         }
                         otp_protocol_check = this.user.getProperty("otp_auth_" + this.uiSG("user_protocol").toLowerCase(), "true").equals("true");
-                        if (!otp_protocol_check) break block139;
+                        if (!otp_protocol_check) break block156;
+                        if (!(this.user.getProperty("otp_auth_last_login", "").equals("") || this.user.getProperty("otp_auth_valid_for_days", "0").equals("") || this.user.getProperty("otp_auth_valid_for_days", "0").equals("0"))) {
+                            try {
+                                Log.log("LOGIN", 1, "CHALLENGE_OTP : Check otp auth last login.");
+                                days = Integer.parseInt(this.user.getProperty("otp_auth_valid_for_days", "0"));
+                                if (days > 0 && (otp_auth_last_login = (sdf = new SimpleDateFormat("MM/dd/yyyy hh:mm:ss aa", Locale.US)).parse(this.user.getProperty("otp_auth_last_login")).getTime()) + (long)(86400000 * days) > System.currentTimeMillis()) {
+                                    Log.log("LOGIN", 1, "CHALLENGE_OTP : otp auth still valid.");
+                                    Log.log("LOGIN", 2, "CHALLENGE_OTP : otp auth valid till : " + new Date(otp_auth_last_login + (long)(86400000 * days)));
+                                    otp_valid = true;
+                                }
+                            }
+                            catch (Exception e) {
+                                Log.log("LOGIN", 1, "CHALLENGE_OTP : Check last otp auth valid login: " + e);
+                            }
+                        }
+                        if (otp_valid) break block155;
                         if (!ServerStatus.thisObj.server_info.containsKey("otp_tokens")) {
                             ServerStatus.thisObj.server_info.put("otp_tokens", new Properties());
                         }
-                        if (!(otp_tokens = (Properties)ServerStatus.thisObj.server_info.get("otp_tokens")).containsKey(String.valueOf(user_name) + this.uiSG("user_ip")) || user_pass.indexOf(":") < 0) break block140;
+                        if (!(otp_tokens = (Properties)ServerStatus.thisObj.server_info.get("otp_tokens")).containsKey(String.valueOf(user_name) + this.uiSG("user_ip")) || user_pass.indexOf(":") < 0) break block157;
                         token = (Properties)otp_tokens.get(String.valueOf(user_name) + this.uiSG("user_ip"));
                         token_timout = ServerStatus.LG("otp_token_timeout");
                         if (!this.user.getProperty("otp_token_timeout", "").equals("") && !this.user.getProperty("otp_token_timeout", "0").equals("0")) {
@@ -2396,40 +2531,52 @@ implements Serializable {
                         if (token_timout < 60000L) {
                             token_timout = 60000L;
                         }
-                        if (System.currentTimeMillis() - Long.parseLong(token.getProperty("time")) <= token_timout) break block141;
+                        if (System.currentTimeMillis() - Long.parseLong(token.getProperty("time")) <= token_timout) break block158;
                         otp_tokens.remove(String.valueOf(user_name) + this.uiSG("user_ip"));
-                        break block138;
+                        break block155;
                     }
                     Log.log("LOGIN", 1, "CHALLENGE_OTP : Checking OTP token.");
-                    if (!token.getProperty("token", "").startsWith("TOTP:")) ** GOTO lbl90
+                    if (!token.getProperty("token", "").startsWith("TOTP:")) ** GOTO lbl123
                     otp_valid = com.crushftp.client.Common.totp_checkCode(token.getProperty("token").substring(5), Long.parseLong(user_pass.substring(user_pass.lastIndexOf(":") + 1)), System.currentTimeMillis());
                     if (otp_valid) {
                         user_pass = user_pass.substring(0, user_pass.lastIndexOf(":"));
                         Log.log("LOGIN", 1, "CHALLENGE_OTP : TOTP token is valid.");
+                        if (!(com.crushftp.client.Common.dmz_mode || this.user.getProperty("otp_auth_valid_for_days", "0").equals("") || this.user.getProperty("otp_auth_valid_for_days", "0").equals("0"))) {
+                            sdf = new SimpleDateFormat("MM/dd/yyyy hh:mm:ss aa", Locale.US);
+                            otp_auth_last_login = sdf.format(new Date());
+                            UserTools.ut.put_in_user(this.uiSG("listen_ip_port"), user_name, "otp_auth_last_login", otp_auth_last_login, false, false);
+                        }
                     } else {
                         Log.log("LOGIN", 1, "CHALLENGE_OTP : TOTP token is invalid.");
                         this.user_info.put("lastProxyError", "CHALLENGE_OTP:OTP invalid.");
                         this.uiPUT("user_logged_in", "false");
                         this.not_done = false;
+                        UserTools.ut.check_login_count_max(this.user, this.uiSG("listen_ip_port"), user_name, this.uiSG("user_ip"), this.uiSG("user_port"));
                         return false;
-lbl90:
+lbl123:
                         // 1 sources
 
                         if (user_pass.indexOf(":") >= 0 && token.getProperty("token", "").equalsIgnoreCase(user_pass.substring(user_pass.lastIndexOf(":") + 1))) {
                             Log.log("LOGIN", 1, "CHALLENGE_OTP : OTP token is valid.");
                             user_pass = user_pass.substring(0, user_pass.lastIndexOf(":"));
+                            if (!(com.crushftp.client.Common.dmz_mode || this.user.getProperty("otp_auth_valid_for_days", "0").equals("") || this.user.getProperty("otp_auth_valid_for_days", "0").equals("0"))) {
+                                sdf = new SimpleDateFormat("MM/dd/yyyy hh:mm:ss aa", Locale.US);
+                                otp_auth_last_login = sdf.format(new Date());
+                                UserTools.ut.put_in_user(this.uiSG("listen_ip_port"), user_name, "otp_auth_last_login", otp_auth_last_login, false, false);
+                            }
                             otp_valid = true;
                         } else if (!com.crushftp.client.Common.dmz_mode) {
                             Log.log("LOGIN", 1, "CHALLENGE_OTP : OTP token is invalid.");
                             this.user_info.put("lastProxyError", "CHALLENGE_OTP:OTP invalid.");
                             this.uiPUT("user_logged_in", "false");
                             this.not_done = false;
+                            UserTools.ut.check_login_count_max(this.user, this.uiSG("listen_ip_port"), user_name, this.uiSG("user_ip"), this.uiSG("user_port"));
                             return false;
                         }
                     }
-                    break block138;
+                    break block155;
                 }
-                if (!com.crushftp.client.Common.dmz_mode) {
+                if (!com.crushftp.client.Common.dmz_mode && this.user_info.getProperty("skip_two_factor", "false").equals("false")) {
                     auth_token = "";
                     auth_token = ServerStatus.BG("otp_numeric") != false ? Common.makeBoundaryNumeric(ServerStatus.IG("temp_accounts_length")) : Common.makeBoundary(ServerStatus.IG("temp_accounts_length")).toUpperCase();
                     token = new Properties();
@@ -2451,7 +2598,7 @@ lbl90:
                         reply_to = "";
                         cc = "";
                         bcc = "";
-                        subject = "CrushFTP Two Factor Authentication";
+                        subject = String.valueOf(System.getProperty("appname", "CrushFTP")) + " Two Factor Authentication";
                         body = "OTP password : " + auth_token;
                         template = Common.get_email_template("Two Factor Auth");
                         if (template != null) {
@@ -2480,17 +2627,20 @@ lbl90:
                     }
                 }
                 this.user_info.put("lastProxyError", "CHALLENGE_OTP:OTP invalid.");
-                break block138;
+                break block155;
             }
             otp_valid = true;
         }
-        if (com.crushftp.client.Common.dmz_mode && this.user != null) {
+        if (com.crushftp.client.Common.dmz_mode && this.user != null && !otp_valid) {
             otp_valid = this.user.getProperty("otp_valid", "false").equals("true");
             Log.log("LOGIN", 1, "DMZ CHALLENGE_OTP : User :" + user_name + " otp_valid=" + this.user.getProperty("otp_valid", "false") + " otp_auth=" + this.user.getProperty("otp_auth", "") + " verified=" + verified);
         }
-        if (verified && (this.user == null || !this.user.getProperty("otp_auth", "").equals("true")) || verified && otp_valid) {
+        if (!this.checkGlobalLoginAttemptFrequencyTooHigh(this)) {
+            this.not_done = this.ftp_write_command("530", "Login failed due to frequency of attempted logins.");
+            this.uiPUT("user_logged_in", "false");
+        } else if (verified && (this.user == null || !this.user.getProperty("otp_auth", "").equals("true")) || verified && otp_valid) {
             if (!this.uiSG("user_name").equals("")) {
-                if (user_name.equals("SSO_SAML") && user_pass.equals("none")) {
+                if (user_name.toUpperCase().startsWith("SSO_SAML") && user_pass.equals("none")) {
                     user_pass = this.uiSG("current_password");
                 }
                 user_name = this.uiSG("user_name");
@@ -2540,7 +2690,7 @@ lbl90:
                 this.uiPUT("current_dir", this.SG("root_dir"));
             }
             if (this.user.get("ip_list") != null) {
-                block135: {
+                block150: {
                     ips = String.valueOf(this.user.getProperty("ip_list").trim()) + "\r\n";
                     ips = Common.replace_str(ips, "\r", "~");
                     get_em = new StringTokenizer(ips, "~");
@@ -2559,7 +2709,7 @@ lbl90:
                         }
                     }
                     catch (Exception e) {
-                        if (("" + e).indexOf("Interrupted") < 0) break block135;
+                        if (("" + e).indexOf("Interrupted") < 0) break block150;
                         throw e;
                     }
                 }
@@ -2594,7 +2744,7 @@ lbl90:
                 stripped_char = ServerStatus.thisObj.kill_same_name_same_ip(this.user_info, true);
             }
             if (this.IG("max_logins") < 0) {
-                this.not_done = this.ftp_write_command("421", String.valueOf(LOC.G("%account_disabled%")) + "\r\n" + LOC.G("Control connection closed") + ".");
+                this.not_done = this.user.getProperty("failure_count_max", "0").equals("0") == false && this.user.getProperty("failure_count_max", "0").equals("") == false && this.IG("failure_count") > 0 ? this.ftp_write_command("530", LOC.G("%PASS-bad%")) : this.ftp_write_command("421", String.valueOf(LOC.G("%account_disabled%")) + "\r\n" + LOC.G("Control connection closed") + ".");
                 this.uiPUT("user_logged_in", "false");
             } else if (ServerStatus.siIG("concurrent_users") >= ServerStatus.IG("max_users") + 1 && !this.BG("ignore_max_logins")) {
                 this.not_done = this.ftp_write_command("421", String.valueOf(LOC.G("%max_users_server%")) + "\r\n" + LOC.G("Control connection closed") + ".");
@@ -2607,8 +2757,9 @@ lbl90:
                 this.uiPUT("user_logged_in", "false");
             } else {
                 ServerStatus.thisObj.common_code;
-                if (!Common.check_ip((Vector)this.user.get("ip_restrictions"), this.uiSG("user_ip"))) {
-                    this.not_done = this.ftp_write_command("550", LOC.G("%bad_ip%"));
+                if (!Common.check_ip((Vector)this.user.get("ip_restrictions"), this.uiSG("user_ip")).equals("")) {
+                    ServerStatus.thisObj.common_code;
+                    this.not_done = this.ftp_write_command("550", String.valueOf(LOC.G("%bad_ip%")) + ":" + Common.check_ip((Vector)this.user.get("ip_restrictions"), this.uiSG("user_ip")));
                     this.uiPUT("user_logged_in", "false");
                 } else if (!Common.check_day_of_week(ServerStatus.SG("day_of_week_allow"), new Date())) {
                     this.not_done = this.ftp_write_command("530", String.valueOf(LOC.G("%day_restricted%")) + "\r\n" + LOC.G("Control connection closed") + ".");
@@ -2653,7 +2804,7 @@ lbl90:
                     this.not_done = this.ftp_write_command("530", "Login failed due to frequency of logins.");
                     this.uiPUT("user_logged_in", "false");
                 } else {
-                    block136: {
+                    block151: {
                         this.uiPUT("user_name", user_name);
                         this.uiPUT("current_password", user_pass);
                         if (!(this.SG("account_expire") == null || this.SG("account_expire").equals("") || this.SG("account_expire").equals("0") || this.SG("account_expire_rolling_days").equals("") || this.IG("account_expire_rolling_days") <= 0)) {
@@ -2695,7 +2846,7 @@ lbl90:
                             ++x;
                         }
                         if (!com.crushftp.client.Common.dmz_mode && ServerStatus.BG("track_last_logins")) {
-                            UserTools.ut.put_in_user(this.uiSG("listen_ip_port"), user_name, "last_logins", last_logins2, false, false);
+                            UserTools.ut.put_in_user(this.uiSG("listen_ip_port"), user_name, "last_logins", last_logins2, false, false, true);
                         }
                         p = login_frequency = ServerStatus.siPG("login_frequency");
                         synchronized (p) {
@@ -2707,7 +2858,9 @@ lbl90:
                             }
                         }
                         v = (Vector)login_prop.get("v");
-                        v.addElement(String.valueOf(System.currentTimeMillis()));
+                        if (!this.uiSG("user_name").equalsIgnoreCase("anonymous") && !this.uiSG("user_name").equals("")) {
+                            v.addElement(String.valueOf(System.currentTimeMillis()));
+                        }
                         while (v.size() > 1000) {
                             v.remove(0);
                         }
@@ -2748,14 +2901,14 @@ lbl90:
                                 welcome_msg = String.valueOf(welcome_msg) + "\r\n";
                             }
                             this.user.put("user_name", user_name);
-                            login_message = String.valueOf(login_message.trim()) + "\r\n" + welcome_msg + "%PASS% logged in";
+                            login_message = String.valueOf(login_message.trim()) + "\r\n" + welcome_msg + "%PASS%";
                             this.uiPUT("last_login_message", login_message);
                             if (!this.uiBG("dont_write")) {
                                 this.not_done = this.ftp_write_command("230", login_message);
                             }
                         }
                         catch (Exception e) {
-                            if (("" + e).indexOf("Interrupted") < 0) break block136;
+                            if (("" + e).indexOf("Interrupted") < 0) break block151;
                             throw e;
                         }
                     }
@@ -2810,8 +2963,8 @@ lbl90:
             if (!this.user.getProperty("failure_count_max", "0").equals("0") && !this.user.getProperty("failure_count_max", "0").equals("") && this.IG("failure_count") > 0) {
                 UserTools.ut.put_in_user(this.uiSG("listen_ip_port"), user_name, "failure_count", "0", true, true);
             }
-            var10_17 = SessionCrush.session_counts;
-            synchronized (var10_17) {
+            var10_15 = SessionCrush.session_counts;
+            synchronized (var10_15) {
                 if (com.crushftp.client.Common.dmz_mode) {
                     SessionCrush.session_counts.put(this.getId(), String.valueOf(Integer.parseInt(SessionCrush.session_counts.getProperty(this.getId(), "0")) + 1));
                 }
@@ -2820,9 +2973,9 @@ lbl90:
         }
         if (doAfterLogin) {
             this.uiVG("user_log").add("Password attempt. Username :" + user_name);
-            this.uiVG("password_attempts").addElement(String.valueOf(new Date().getTime()));
             if (!this.uiSG("user_protocol").toUpperCase().startsWith("HTTP")) {
                 ServerStatus.siPUT2("failed_logins", "" + (ServerStatus.IG("failed_logins") + 1));
+                this.uiVG("password_attempts").addElement(String.valueOf(new Date().getTime()));
             }
             if (this.uiVG("failed_commands").size() + this.uiVG("password_attempts").size() - 10 > 0) {
                 Thread.sleep(1000 * (this.uiVG("failed_commands").size() + this.uiVG("password_attempts").size() - 10));
@@ -2874,6 +3027,17 @@ lbl90:
      */
     public boolean checkGlobalLoginFrequencyTooHigh(SessionCrush thisSession) {
         Properties login_frequency;
+        if (thisSession.uiSG("user_name").equalsIgnoreCase("anonymous") || thisSession.uiSG("user_name").equals("")) {
+            return true;
+        }
+        String[] successful_login_hammering_neverban = ServerStatus.SG("successful_login_hammering_neverban").split(",");
+        int x = 0;
+        while (x < successful_login_hammering_neverban.length) {
+            if (!successful_login_hammering_neverban[x].trim().equals("") && com.crushftp.client.Common.do_search(successful_login_hammering_neverban[x].trim(), thisSession.uiSG("user_name"), false, 0)) {
+                return true;
+            }
+            ++x;
+        }
         Properties login_prop = null;
         Properties properties = login_frequency = ServerStatus.siPG("login_frequency");
         synchronized (properties) {
@@ -2884,6 +3048,7 @@ lbl90:
                 login_frequency.put(thisSession.uiSG("user_name").toLowerCase(), login_prop);
             }
         }
+        ServerStatus.siPG("login_attempt_frequency").remove(thisSession.uiSG("user_name").toLowerCase());
         if (login_prop == null) {
             return false;
         }
@@ -2899,16 +3064,16 @@ lbl90:
             return true;
         }
         int count = 0;
-        long login_hammer_interval = ServerStatus.LG("login_hammer_interval");
         int login_hammer_attempts = ServerStatus.IG("login_hammer_attempts");
+        long login_hammer_interval = ServerStatus.LG("login_hammer_interval");
         long login_hammer_timeout = ServerStatus.LG("login_hammer_timeout");
-        if (ServerStatus.BG("v10_beta") && thisSession.user != null && thisSession.user.containsKey("login_hammer_interval")) {
-            login_hammer_interval = Long.parseLong(thisSession.user.getProperty("login_hammer_interval", String.valueOf(login_hammer_interval)));
-        }
-        if (ServerStatus.BG("v10_beta") && thisSession.user != null && thisSession.user.containsKey("login_hammer_attempts")) {
+        if (thisSession.user != null && thisSession.user.containsKey("login_hammer_attempts")) {
             login_hammer_attempts = Integer.parseInt(thisSession.user.getProperty("login_hammer_attempts", String.valueOf(login_hammer_attempts)));
         }
-        if (ServerStatus.BG("v10_beta") && thisSession.user != null && thisSession.user.containsKey("login_hammer_timeout")) {
+        if (thisSession.user != null && thisSession.user.containsKey("login_hammer_interval")) {
+            login_hammer_interval = Long.parseLong(thisSession.user.getProperty("login_hammer_interval", String.valueOf(login_hammer_interval)));
+        }
+        if (thisSession.user != null && thisSession.user.containsKey("login_hammer_timeout")) {
             login_hammer_timeout = Long.parseLong(thisSession.user.getProperty("login_hammer_timeout", String.valueOf(login_hammer_timeout)));
         }
         long past_timestamp = System.currentTimeMillis() - login_hammer_interval * 1000L;
@@ -2934,12 +3099,15 @@ lbl90:
         if (count > login_hammer_attempts) {
             long expire = System.currentTimeMillis() + login_hammer_timeout * 1000L * 60L;
             login_prop.put("expire", String.valueOf(expire));
-            Log.log("SERVER", 0, "LOGIN DENIED!  Login blocked for user \"" + thisSession.uiSG("user_name") + "\" due to too frequent of logins (" + count + "/" + login_hammer_attempts + ") in " + login_hammer_interval + " seconds interval until " + new Date(expire));
+            String msg = "LOGIN DENIED!  Login blocked for user \"" + thisSession.uiSG("user_name") + "\" due to too frequent of logins (" + count + "/" + login_hammer_attempts + ") in " + login_hammer_interval + " seconds interval until " + new Date(expire) + ":Hammering Successful Logins";
+            Log.log("SERVER", 0, msg);
             Properties info = new Properties();
             info.put("user_name", thisSession.uiSG("user_name"));
             info.put("count", String.valueOf(count));
+            info.put("alert_msg", msg);
             info.put("expire", "" + new Date(expire));
             info.put("attempts", String.valueOf(login_hammer_attempts));
+            info.put("timeout", String.valueOf(login_hammer_timeout));
             info.put("interval", String.valueOf(login_hammer_interval));
             ServerStatus.thisObj.runAlerts("login_frequency_banned", info, null, this, null, com.crushftp.client.Common.dmz_mode);
             if (SharedSessionReplicated.send_queues.size() > 0) {
@@ -2948,6 +3116,107 @@ lbl90:
                 sync_info.put("login_prop", login_prop);
                 SharedSessionReplicated.send(Common.makeBoundary(), "SYNC_LOGIN_FREQUENCY", "login_frequency", sync_info);
             }
+            return false;
+        }
+        return true;
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public boolean checkGlobalLoginAttemptFrequencyTooHigh(SessionCrush thisSession) {
+        Properties login_attempt_frequency;
+        if (thisSession.uiSG("user_name").equalsIgnoreCase("anonymous") || thisSession.uiSG("user_name").equals("")) {
+            return true;
+        }
+        String[] successful_login_hammering_neverban = ServerStatus.SG("successful_login_hammering_neverban").split(",");
+        int x = 0;
+        while (x < successful_login_hammering_neverban.length) {
+            if (!successful_login_hammering_neverban[x].trim().equals("") && com.crushftp.client.Common.do_search(successful_login_hammering_neverban[x].trim(), thisSession.uiSG("user_name"), false, 0)) {
+                return true;
+            }
+            ++x;
+        }
+        Properties login_prop = null;
+        Properties properties = login_attempt_frequency = ServerStatus.siPG("login_attempt_frequency");
+        synchronized (properties) {
+            login_prop = (Properties)login_attempt_frequency.get(thisSession.uiSG("user_name").toLowerCase());
+            if (login_prop == null) {
+                login_prop = new Properties();
+                login_prop.put("v", new Vector());
+                login_prop.put("banned_count", "0");
+                login_attempt_frequency.put(thisSession.uiSG("user_name").toLowerCase(), login_prop);
+            }
+        }
+        if (login_prop == null) {
+            return false;
+        }
+        if (!login_prop.getProperty("expire", "0").equals("0")) {
+            long expire = Long.parseLong(login_prop.getProperty("expire"));
+            if (System.currentTimeMillis() < expire) {
+                Log.log("SERVER", 0, "LOGIN ATTEMPT DENIED STILL!  Login blocked for user \"" + thisSession.uiSG("user_name") + "\" due to too frequent of login attempts until " + new Date(expire));
+                return false;
+            }
+            login_prop.remove("expire");
+            login_prop.put("v", new Vector());
+            Log.log("SERVER", 0, "LOGIN ATTEMPT DENIAL CLEARED!  Login attempts denial cleared for user \"" + thisSession.uiSG("user_name") + "\"");
+            return true;
+        }
+        int count = 0;
+        int phammer_attempts = (int)ServerStatus.get_partial_val_or_all("phammer_attempts", 0);
+        long phammer_banning = ServerStatus.get_partial_val_or_all("phammer_banning", 0);
+        long pban_timeout = ServerStatus.get_partial_val_or_all("pban_timeout", 0);
+        long past_timestamp = System.currentTimeMillis() - phammer_banning * 1000L;
+        long past_timestamp5 = System.currentTimeMillis() - phammer_banning * 5000L;
+        int history_size = 0;
+        Properties properties2 = login_prop;
+        synchronized (properties2) {
+            Vector v = (Vector)login_prop.get("v");
+            history_size = v.size();
+            int xx = v.size() - 1;
+            while (xx >= 0) {
+                long login_time = Long.parseLong(v.elementAt(xx).toString());
+                if (login_time > past_timestamp) {
+                    ++count;
+                }
+                if (login_time < past_timestamp5) {
+                    v.removeElementAt(xx);
+                }
+                --xx;
+            }
+            v.addElement(String.valueOf(System.currentTimeMillis()));
+            while (v.size() > 1000) {
+                v.remove(0);
+            }
+        }
+        String msg = String.valueOf(thisSession.uiSG("user_name")) + " has a recent attempt login history of:" + count + " of history size:" + history_size;
+        String msg2 = "login failures but is not banned yet";
+        Log.log("SERVER", 2, msg);
+        long banned_count = 1L;
+        Properties info = new Properties();
+        if (count > phammer_attempts) {
+            banned_count = Long.parseLong(login_prop.getProperty("banned_count", "0")) + 1L;
+            long expire = System.currentTimeMillis() + pban_timeout * banned_count * 1000L * 60L;
+            login_prop.put("expire", String.valueOf(expire));
+            login_prop.put("banned_count", String.valueOf(banned_count));
+            msg2 = "has login failures and is banned until " + new Date(expire);
+            msg = "LOGIN DENIED!  Login blocked for user \"" + thisSession.uiSG("user_name") + "\" due to too frequent of login attempts (" + count + "/" + phammer_attempts + ") in " + phammer_banning + " seconds interval until " + new Date(expire) + ":Hammering Failed Logins";
+            Log.log("SERVER", 0, msg);
+            info.put("expire", "" + new Date(expire));
+            if (SharedSessionReplicated.send_queues.size() > 0) {
+                Properties sync_info = new Properties();
+                sync_info.put("user_name", thisSession.uiSG("user_name").toLowerCase());
+                sync_info.put("login_prop", login_prop);
+                SharedSessionReplicated.send(Common.makeBoundary(), "SYNC_LOGIN_ATTEMPT_FREQUENCY", "login_attempt_frequency", sync_info);
+            }
+            info.put("count", String.valueOf(count));
+            info.put("attempts", String.valueOf(phammer_attempts));
+            info.put("interval", String.valueOf(pban_timeout));
+            info.put("timeout", String.valueOf(pban_timeout * banned_count));
+            info.put("alert_msg", String.valueOf(msg));
+            info.put("alert_msg2", String.valueOf(msg2));
+            info.put("user_name", thisSession.uiSG("user_name"));
+            UserTools.ut.doLoginFailureAlert(thisSession, thisSession.uiSG("user_name"), this.uiSG("listen_ip_port"), this.user, info, "repeated_login_failure_user_banned");
             return false;
         }
         return true;
@@ -2965,6 +3234,7 @@ lbl90:
         if ((path = the_dir).equals("/")) {
             return;
         }
+        Log.log("SERVER", 0, "Moving item to recycle location instead of deleting: " + vrl.safe());
         if (path.startsWith("/")) {
             path = path.substring(1);
         }
@@ -3160,6 +3430,7 @@ lbl90:
                                         track_delete_sub_items.add(p);
                                     }
                                 }
+                                c.setConfig("recurse_delete", String.valueOf(recurse));
                                 if (ServerStatus.BG("recycle")) {
                                     Log.log("FTP_SERVER", 3, String.valueOf(LOC.G("Attempting to recycle file:")) + the_dir);
                                     this.do_Recycle(c, new VRL(fix_url), the_dir);
@@ -3200,7 +3471,7 @@ lbl90:
                                     }
                                 }
                                 has_delete_event = has_events;
-                                if (!check_all && !ServerStatus.BG("check_all_recursive_deletes") && !stat.getProperty("check_all_recursive_deletes", "").equals("true")) ** GOTO lbl222
+                                if (!check_all && !ServerStatus.BG("check_all_recursive_deletes") && !stat.getProperty("check_all_recursive_deletes", "").equals("true")) ** GOTO lbl223
                                 list1 = new Vector<E>();
                                 the_dir_f = the_dir;
                                 errors = new Vector<E>();
@@ -3349,7 +3620,7 @@ lbl90:
                                     ++loop;
                                 }
                                 break block50;
-lbl222:
+lbl223:
                                 // 1 sources
 
                                 if (track_delete_sub_items.size() > 0 && this.user.getProperty("track_delete_sub_items", "false").equals("true")) {
@@ -3413,6 +3684,9 @@ lbl222:
         this.uiPUT("the_command", "RNFR");
         this.uiPUT("last_logged_command", "RNFR");
         this.rnfr_file_path = null;
+        if (ServerStatus.BG("filepart_silent_ignore") && path1.endsWith(".filepart")) {
+            path1 = path1.substring(0, path1.lastIndexOf(".filepart"));
+        }
         String the_dir = this.fixupDir(path1);
         String parentPath = this.uVFS.getRootVFS(the_dir, -1);
         Properties dir_item = this.uVFS.get_item(parentPath, -1);
@@ -3468,6 +3742,9 @@ lbl222:
     }
 
     public String do_RNTO(boolean overwrite, String path1, String path2) throws Exception {
+        if (ServerStatus.BG("filepart_silent_ignore") && path1.endsWith(".filepart")) {
+            return "";
+        }
         this.uiPUT("the_command", "RNTO");
         this.uiPUT("last_logged_command", "RNTO");
         String the_dir = this.fixupUnsafeChars(this.fixupDir(path2));
@@ -3476,6 +3753,15 @@ lbl222:
         Properties actual_item = this.uVFS.get_item(the_dir);
         Properties item = this.uVFS.get_item_parent(the_dir);
         Properties rnfr_file = this.uVFS.get_item(path1);
+        boolean merged_vfs = false;
+        if (ServerStatus.BG("merged_vfs") && rnfr_file.containsKey("vItem") && item.containsKey("vItem")) {
+            Properties rnfr_vItem = (Properties)rnfr_file.get("vItem");
+            Properties item_vItem = (Properties)item.get("vItem");
+            if (!rnfr_vItem.getProperty("vfs_home_index", "0").equalsIgnoreCase(item_vItem.getProperty("vfs_home_index", "0"))) {
+                item = this.uVFS.get_item_parent(the_dir, Integer.parseInt(rnfr_vItem.getProperty("vfs_home_index", "0")));
+                merged_vfs = true;
+            }
+        }
         if (!aclPermissions) {
             actual_item = item;
         }
@@ -3491,7 +3777,7 @@ lbl222:
             this.changeProxyToCurrentDir(this.uVFS.get_item_parent(Common.all_but_last(the_dir)));
             GenericClient c = null;
             try {
-                c = this.uVFS.getClient(item);
+                c = merged_vfs ? this.uVFS.getClientSingle(rnfr_file) : this.uVFS.getClient(item);
             }
             catch (Exception e) {
                 Log.log("RNTO", 0, "Invalid path used on rename, attempting to fix..." + the_dir);
@@ -3513,12 +3799,42 @@ lbl222:
                     }
                     UserTools.updatePrivpath(this.uiSG("listen_ip_port"), this.uiSG("user_name"), String.valueOf(rnfr_file.getProperty("root_dir", "")) + rnfr_file.getProperty("name", ""), the_dir, item, null, this.uVFS);
                     if (overwrite && !vrl.getPath().equalsIgnoreCase(new VRL(rnfr_file.getProperty("url")).getPath()) && c.stat(new VRL(rnfr_file.getProperty("url")).getPath()) != null) {
-                        c.delete(vrl.getPath());
+                        boolean is_deleted = false;
+                        try {
+                            is_deleted = c.delete(vrl.getPath());
+                        }
+                        catch (Exception e) {
+                            Log.log("SERVER", 1, "Rename error. Path from: " + path1 + " Path to " + path2 + " Error message : " + e);
+                        }
+                        if (!is_deleted && rnfr_file.getProperty("type").equalsIgnoreCase("DIR") && vrl.getProtocol().equalsIgnoreCase("FILE") && (c.getConfig("file_recurse_delete") == null || !c.getConfig("file_recurse_delete").equals("true"))) {
+                            try {
+                                c.setConfig("file_recurse_delete", "true");
+                                is_deleted = c.delete(vrl.getPath());
+                                c.setConfig("file_recurse_delete", "false");
+                            }
+                            catch (Exception e) {
+                                Log.log("SERVER", 1, "Rename error. Path from: " + path1 + " Path to " + path2 + " Error message : " + e);
+                            }
+                        }
                     }
                     if (exists && !view && !overwrite) {
                         STOR_handler.do_unique_rename(actual_item, vrl, c, false, Common.last(vrl.toString()), c.stat(vrl.getPath()));
                     }
-                    if (c.rename(new VRL(rnfr_file.getProperty("url")).getPath(), vrl.getPath())) {
+                    boolean rename_result = false;
+                    try {
+                        rename_result = c.rename(new VRL(rnfr_file.getProperty("url")).getPath(), vrl.getPath(), overwrite);
+                    }
+                    catch (Exception e) {
+                        this.not_done = this.ftp_write_command("550", String.valueOf(LOC.G("%RNTO-bad%")) + " " + e);
+                        this.doErrorEvent(new Exception(String.valueOf(this.uiSG("lastLog")) + " " + e));
+                        this.uiVG("failed_commands").addElement("" + new Date().getTime());
+                        rnfr_file = null;
+                        this.rnfr_file_path = null;
+                        String string = String.valueOf(e.getMessage());
+                        c = this.uVFS.releaseClient(c);
+                        return string;
+                    }
+                    if (rename_result) {
                         this.trackAndUpdateUploads(this.uiVG("lastUploadStats"), new VRL(rnfr_file.getProperty("url")), new VRL(item.getProperty("url")), "RENAME");
                     } else {
                         String srcPath = new VRL(rnfr_file.getProperty("url")).getCanonicalPath();
@@ -3625,10 +3941,14 @@ lbl222:
             GenericClient c = this.uVFS.getClient(item);
             try {
                 boolean result = false;
-                if (mkdirs) {
+                boolean skip_make_dir = false;
+                if (ServerStatus.BG("ftp_pre_check_mkdir") && c.stat(new VRL(item.getProperty("url")).getPath()) != null) {
+                    skip_make_dir = true;
+                }
+                if (mkdirs && !skip_make_dir) {
                     Common.verifyOSXVolumeMounted(item.getProperty("url"));
                     result = c.makedirs(new VRL(item.getProperty("url")).getPath());
-                } else {
+                } else if (!skip_make_dir) {
                     result = c.makedir(new VRL(item.getProperty("url")).getPath());
                 }
                 if (!result && c.stat(new VRL(item.getProperty("url")).getPath()) != null) {
@@ -3654,7 +3974,7 @@ lbl222:
                 Properties fileItem = c.stat(vrl.getPath());
                 Log.log("FTP_SERVER", 2, String.valueOf(LOC.G("Tracking make directory:")) + path);
                 fileItem.put("the_command", "MAKEDIR");
-                fileItem.put("the_command_data", path);
+                fileItem.put("the_command_data", the_dir);
                 fileItem.put("url", "" + vrl);
                 fileItem.put("the_file_path", path);
                 fileItem.put("the_file_name", vrl.getName());
@@ -3729,7 +4049,7 @@ lbl222:
     }
 
     public String do_RMD(String user_dir) throws Exception {
-        block11: {
+        block12: {
             this.uiPUT("the_command", "RMD");
             this.uiPUT("last_logged_command", "RMD");
             String the_dir = user_dir;
@@ -3745,6 +4065,9 @@ lbl222:
             String parentPath = this.uVFS.getRootVFS(the_dir, -1);
             Properties dir_item = this.uVFS.get_item(parentPath, -1);
             Properties item = this.uVFS.get_fake_item(the_dir, "DIR");
+            if (!the_dir.endsWith("/")) {
+                the_dir = String.valueOf(the_dir) + "/";
+            }
             if (this.check_access_privs(the_dir, this.uiSG("the_command"), item) && item != null) {
                 if (the_dir.equals(parentPath) || the_dir.equals(String.valueOf(parentPath) + "/")) {
                     return "%RMD-bad%";
@@ -3756,7 +4079,7 @@ lbl222:
                     if (stat1 != null && stat1.getProperty("type").equalsIgnoreCase("dir")) {
                         if (c.delete(new VRL(this.uVFS.get_item(the_dir).getProperty("url")).getPath())) {
                             this.not_done = this.ftp_write_command("250", LOC.G("%RMD%"));
-                            break block11;
+                            break block12;
                         }
                         this.not_done = this.ftp_write_command("550", LOC.G("%RMD-not_empty%"));
                         this.doErrorEvent(new Exception(this.uiSG("lastLog")));
@@ -3955,15 +4278,22 @@ lbl222:
 
     public String do_ChangePass(String theUser, String new_password) {
         String result = String.valueOf(LOC.G("ERROR:")) + " " + LOC.G("Password not changed.");
+        if (this.uiBG("no_password_change_on_user")) {
+            result = String.valueOf(result) + " Not allowed.";
+            return result;
+        }
         Properties password_rules = SessionCrush.build_password_rules(this.user);
         if (!Common.checkPasswordRequirements(new_password, this.user.getProperty("password_history", ""), password_rules).equals("")) {
             return String.valueOf(LOC.G("ERROR:")) + " " + Common.checkPasswordRequirements(new_password, this.user.getProperty("password_history", ""), password_rules);
+        }
+        if (Common.checkPasswordBlacklisted(new_password)) {
+            return String.valueOf(LOC.G("ERROR:")) + " password is blacklisted.";
         }
         boolean ok = false;
         if (!new_password.equals(this.uiSG("current_password"))) {
             String response;
             String old_password;
-            block23: {
+            block27: {
                 old_password = this.uiSG("current_password");
                 response = "";
                 try {
@@ -3988,7 +4318,7 @@ lbl222:
                             if (response.startsWith("2")) {
                                 ok = true;
                             }
-                            break block23;
+                            break block27;
                         }
                         finally {
                             c = this.uVFS.releaseClient(c);
@@ -4053,6 +4383,15 @@ lbl222:
                 this.runPlugin("changePass", p);
                 ServerStatus.thisObj.runAlerts("password_change", this);
                 Common.send_change_pass_email(this);
+                try {
+                    ServerStatus serverStatus = ServerStatus.thisObj;
+                    long rid = serverStatus.statTools.u();
+                    ServerStatus.thisObj.statTools.add_login_stat("CHANGE_PASS", theUser, this.uiSG("user_ip"), true, String.valueOf(this.uiSG("listen_ip_port")) + "_USER_INITIATED_" + Common.makeBoundary(), rid);
+                    ServerStatus.thisObj.statTools.executeSql(ServerStatus.SG("stats_update_sessions"), new Object[]{new Date(), rid});
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 0, e);
+                }
             }
         }
         return result;
@@ -4106,6 +4445,11 @@ lbl222:
         int x = 0;
         while (x < ServerStatus.SG("unsafe_filename_chars_rename").length()) {
             last_item = last_item.replace(ServerStatus.SG("unsafe_filename_chars_rename").charAt(x), '_');
+            ++x;
+        }
+        x = 0;
+        while (x < ServerStatus.SG("unsafe_filename_chars").length()) {
+            last_item = last_item.replace(ServerStatus.SG("unsafe_filename_chars").charAt(x), '_');
             ++x;
         }
         return String.valueOf(the_dir_root) + last_item + (need_slash ? "/" : "");
@@ -4288,6 +4632,8 @@ lbl222:
                     fileItem.put("the_file_path", the_command_data.substring(5).trim());
                     fileItem.put("the_file_size", fileItem.getProperty("size"));
                     fileItem.put("the_file_name", fileItem.getProperty("name"));
+                    fileItem.put("the_file_start", String.valueOf(System.currentTimeMillis()));
+                    fileItem.put("the_file_end", String.valueOf(System.currentTimeMillis()));
                     Log.log("EVENT", 0, "Processing abort event:" + event + " for filePath:" + filePath + " and modified fileItem:" + VRL.safe(fileItem));
                     Log.log("EVENT", 2, com.crushftp.client.Common.dumpStack(String.valueOf(ServerStatus.version_info_str) + ServerStatus.sub_version_info_str));
                     this.do_event5("UPLOAD", fileItem);
@@ -4320,6 +4666,31 @@ lbl222:
     }
 
     public void killSession() {
+        if ((this.uiSG("user_protocol").startsWith("HTTP") || this.uiSG("user_protocol_actual").startsWith("HTTP")) && this.uiSG("CrushAuth").length() > 30) {
+            try {
+                Properties html5_transfers = ServerStatus.siPG("html5_transfers");
+                String transfer_chunks = "";
+                Enumeration<Object> keys = html5_transfers.keys();
+                while (keys.hasMoreElements()) {
+                    String key = keys.nextElement().toString();
+                    if (!key.startsWith(this.getId())) continue;
+                    transfer_chunks = String.valueOf(transfer_chunks) + key + "~";
+                }
+                if (!transfer_chunks.equals("")) {
+                    String[] html_transfer = transfer_chunks.split("~");
+                    int x = 0;
+                    while (x < html_transfer.length) {
+                        if (!html_transfer[x].equals("")) {
+                            html5_transfers.remove(html_transfer[x]);
+                        }
+                        ++x;
+                    }
+                }
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 1, e);
+            }
+        }
         SharedSession.find("crushftp.usernames").remove(String.valueOf(Common.getPartialIp(this.uiSG("user_ip"))) + "_" + this.getId() + "_user");
         SharedSession.find("crushftp.sessions").remove(this.getId());
         this.uiPUT("CrushAuth", "");
@@ -4386,8 +4757,24 @@ lbl222:
     }
 
     public String getAdminGroupName(Properties request) {
-        String groupName = this.SG("admin_group_name");
-        if (groupName.equals("") || groupName.equals("admin_group_name")) {
+        String groupName = this.SG("admin_group_name").trim();
+        if (groupName.equals("")) {
+            Properties groups = UserTools.getGroups(request.getProperty("serverGroup"));
+            Enumeration<Object> keys = groups.keys();
+            boolean found = false;
+            while (keys.hasMoreElements()) {
+                String key = keys.nextElement().toString();
+                if (!key.equals(this.uiSG("user_name"))) continue;
+                found = true;
+                break;
+            }
+            if (found) {
+                groupName = this.uiSG("user_name");
+            } else {
+                return "Limited Admin : Group name was not specified!";
+            }
+        }
+        if (groupName.equals("admin_group_name")) {
             groupName = this.uiSG("user_name");
         }
         if (groupName.contains(", ")) {
@@ -4406,6 +4793,29 @@ lbl222:
         Log.log("SERVER", 0, "SERVER_LOGIN:" + (success ? "SUCCESS" : "FAILURE") + ":" + this.uiSG("user_number") + ":" + this.uiSG("listen_ip_port") + ":" + this.uiSG("user_name") + ":" + this.uiSG("user_protocol") + ":" + this.uiSG("user_ip") + ":" + msg);
     }
 
+    public String change_phone_number(String phone_number) {
+        String result;
+        block4: {
+            result = "Success!";
+            try {
+                if (phone_number.length() > 200) {
+                    throw new Exception("The given phone number is too long!");
+                }
+                if (this.user.getProperty("phone", "").equals(phone_number)) break block4;
+                if (phone_number.matches("^[\\d+-]+$") || phone_number.equals("")) {
+                    UserTools.ut.put_in_user(this.uiSG("listen_ip_port"), this.uiSG("user_name"), "phone", phone_number, false, false);
+                    this.user.put("phone", phone_number);
+                    break block4;
+                }
+                throw new Exception("The given phone number has an invalid format!");
+            }
+            catch (Exception e) {
+                result = "Error : " + e;
+            }
+        }
+        return result;
+    }
+
     public static boolean is_url_part_of_search_index(String check_url) {
         boolean included = false;
         String[] usernames = ServerStatus.SG("search_index_usernames").split(",");
@@ -4416,9 +4826,9 @@ lbl222:
                 Vector server_groups = (Vector)ServerStatus.server_settings.get("server_groups");
                 int xx = 0;
                 while (xx < server_groups.size() && !included) {
-                    VFS uVFS = UserTools.ut.getVFS(server_groups.elementAt(xx).toString(), usernames[x].trim());
+                    VFS temp_vfs = UserTools.ut.getVFS(server_groups.elementAt(xx).toString(), usernames[x].trim());
                     try {
-                        Properties pp = uVFS.get_item("/");
+                        Properties pp = temp_vfs.get_item("/");
                         if (check_url.toUpperCase().startsWith(pp.getProperty("url"))) {
                             included = true;
                         }
@@ -4426,8 +4836,8 @@ lbl222:
                     catch (Exception e) {
                         Log.log("SEARCH", 2, e);
                     }
-                    uVFS.disconnect();
-                    uVFS.free();
+                    temp_vfs.disconnect();
+                    temp_vfs.free();
                     ++xx;
                 }
             }
@@ -4500,7 +4910,7 @@ lbl222:
                         if (thisSession.check_access_privs(dest_item_path, "STOR")) {
                             String addon = "";
                             boolean ok = true;
-                            if (new VRL(String.valueOf(vrl2.toString()) + vrl.getName() + (stat.getProperty("type").equalsIgnoreCase("DIR") ? "/" : "")).toString().startsWith(vrl.toString())) {
+                            if (new VRL(String.valueOf(vrl2.toString()) + vrl.getName() + (stat.getProperty("type").equalsIgnoreCase("DIR") ? "/" : "")).toString().startsWith(vrl.toString()) || Common.all_but_last(names[x].trim()).equals(destPath)) {
                                 ok = false;
                                 String s1 = new VRL(String.valueOf(vrl2.toString()) + vrl.getName() + (stat.getProperty("type").equalsIgnoreCase("DIR") ? "/" : "")).toString();
                                 String s2 = vrl.toString();

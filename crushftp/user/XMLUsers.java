@@ -37,6 +37,8 @@ extends UserProvider {
     public static Properties user_write_lock = new Properties();
     public static transient Object username_lookup_lock = new Object();
     public static transient Properties inheritance_groups_cache = new Properties();
+    public static int missing_groups_count = 0;
+    public static int missing_inheritance_count = 0;
 
     private static String getUserPath(String serverGroup, String username) {
         if (serverGroup.endsWith("_restored_backup")) {
@@ -59,7 +61,7 @@ extends UserProvider {
     }
 
     public static String findUser(String path, String username) {
-        if (username.equals("")) {
+        if ((username = Common.safe_xss_filename(username)).equals("")) {
             return null;
         }
         File_S[] list = (File_S[])new File_S(path).listFiles();
@@ -96,8 +98,8 @@ extends UserProvider {
      * Unable to fully structure code
      */
     public static CIProperties buildVFSXML(String vfsHome) {
-        block17: {
-            block16: {
+        block21: {
+            block20: {
                 if (!vfsHome.endsWith("/")) {
                     vfsHome = String.valueOf(vfsHome) + "/";
                 }
@@ -127,32 +129,45 @@ extends UserProvider {
                 catch (Exception e) {
                     Log.log("USER_OBJ", 0, e);
                 }
-                if (new File_S(String.valueOf(vfsHome) + "VFS/").exists()) break block16;
+                if (new File_S(String.valueOf(vfsHome) + "VFS/").exists()) break block20;
                 p = new Properties();
                 p.put("virtualPath", "/");
                 p.put("name", "VFS");
                 p.put("type", "DIR");
                 p.put("vItems", new Vector<E>());
                 virtual.put("/", p);
-                break block17;
+                break block21;
             }
             x = 0;
             while (x < list.size()) {
-                block18: {
-                    block19: {
+                block22: {
+                    block23: {
                         f = (File_S)list.elementAt(x);
-                        if (f.getName().equals(".DS_Store")) break block18;
+                        if (f.getName().equals(".DS_Store")) break block22;
                         p = new Properties();
                         p.put("name", f.getName());
-                        if (!f.isDirectory()) break block19;
+                        if (!f.isDirectory()) break block23;
                         p.put("type", "DIR");
                         p.put("modified", String.valueOf(f.lastModified()));
                         ** GOTO lbl-1000
                     }
                     p.put("type", "FILE");
-                    v = UserTools.vItemLoad(f.getPath());
+                    v = null;
+                    xx = 0;
+                    while ((v == null || v.size() == 0) && xx < 5) {
+                        v = UserTools.vItemLoad(f.getPath());
+                        if (v == null || v.size() == 0) {
+                            try {
+                                Thread.sleep(150L);
+                            }
+                            catch (Exception var13_17) {
+                                // empty catch block
+                            }
+                        }
+                        ++xx;
+                    }
                     if (v == null) {
-                        v = new Vector<E>();
+                        v = new Vector();
                     }
                     xx = 0;
                     while (xx < v.size()) {
@@ -207,7 +222,8 @@ extends UserProvider {
         Properties groups2 = null;
         String groupsPath = String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/groups.XML";
         File_S groupsF = new File_S(groupsPath);
-        if (groupsF.exists()) {
+        int x = 0;
+        while (x < 5) {
             Properties properties = inheritance_groups_cache;
             synchronized (properties) {
                 if (inheritance_groups_cache.getProperty(String.valueOf(groupsPath) + "_time", "0").equals(String.valueOf(groupsF.lastModified()))) {
@@ -217,26 +233,72 @@ extends UserProvider {
                         groups2 = (Properties)Common.readXMLObject(groupsPath);
                         inheritance_groups_cache.put(groupsPath, groups2);
                         inheritance_groups_cache.put(String.valueOf(groupsPath) + "_time", String.valueOf(groupsF.lastModified()));
+                        missing_groups_count = 0;
                     }
                     catch (Exception e) {
                         Log.log("USER_OBJ", 2, e);
                     }
                 }
             }
-            if (groups2 == null) {
-                try {
-                    Thread.sleep(1000L);
-                    groups2 = (Properties)Common.readXMLObject(groupsPath);
-                }
-                catch (Exception e) {
-                    Log.log("USER_OBJ", 2, e);
-                }
+            if (groups2 != null || missing_groups_count >= 10 || serverGroup.equalsIgnoreCase("extra_vfs")) break;
+            try {
+                Thread.sleep(500L);
+                ++missing_groups_count;
             }
+            catch (Exception exception) {
+                // empty catch block
+            }
+            ++x;
         }
         if (groups2 == null) {
             groups2 = new Properties();
         }
         return groups2;
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    @Override
+    public Properties loadInheritance(String serverGroup) {
+        Properties inheritance2 = null;
+        if (serverGroup.endsWith("_restored_backup")) {
+            serverGroup = serverGroup.substring(0, serverGroup.indexOf("_restored_backup"));
+        }
+        String inheritancePath = String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/inheritance.XML";
+        File_S inheritanceF = new File_S(inheritancePath);
+        int x = 0;
+        while (x < 5) {
+            Properties properties = inheritance_groups_cache;
+            synchronized (properties) {
+                if (inheritance_groups_cache.getProperty(String.valueOf(inheritancePath) + "_time", "0").equals(String.valueOf(inheritanceF.lastModified()))) {
+                    inheritance2 = (Properties)inheritance_groups_cache.get(inheritancePath);
+                } else {
+                    try {
+                        inheritance2 = (Properties)Common.readXMLObject(inheritancePath);
+                        inheritance_groups_cache.put(inheritancePath, inheritance2);
+                        inheritance_groups_cache.put(String.valueOf(inheritancePath) + "_time", String.valueOf(inheritanceF.lastModified()));
+                        missing_inheritance_count = 0;
+                    }
+                    catch (Exception e) {
+                        Log.log("USER_OBJ", 2, e);
+                    }
+                }
+            }
+            if (inheritance2 != null || missing_inheritance_count >= 10 || serverGroup.equalsIgnoreCase("extra_vfs")) break;
+            try {
+                Thread.sleep(500L);
+                ++missing_inheritance_count;
+            }
+            catch (InterruptedException interruptedException) {
+                // empty catch block
+            }
+            ++x;
+        }
+        if (inheritance2 == null) {
+            inheritance2 = new Properties();
+        }
+        return inheritance2;
     }
 
     /*
@@ -260,7 +322,9 @@ extends UserProvider {
             }
             try {
                 Common.writeXMLObject(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/groups.XML.new", (Object)groups, "groups");
-                new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/groups.XML").renameTo(new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/groups0.XML"));
+                if (new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/groups.XML").exists() && !new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/groups.XML").renameTo(new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/groups0.XML"))) {
+                    Common.copy(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/groups.XML", String.valueOf(System.getProperty("crushftp.backup")) + "backup/groups0.XML", false);
+                }
                 new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/groups.XML").delete();
                 int loops = 0;
                 Common.xmlCache.remove(new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/groups.XML").getCanonicalPath());
@@ -291,6 +355,9 @@ extends UserProvider {
         }
         try {
             Common.recurseDelete(String.valueOf(XMLUsers.getUserPath(serverGroup, username)) + "VFS/", false);
+            if (Common.xmlCache != null) {
+                Common.xmlCache.clear();
+            }
             new File_S(String.valueOf(XMLUsers.getUserPath(serverGroup, username)) + "VFS/").mkdir();
             Enumeration<Object> keys = virtual.keys();
             while (keys.hasMoreElements()) {
@@ -323,7 +390,6 @@ extends UserProvider {
                     }
                     ++xx;
                 }
-                new Common();
                 Common.writeXMLObject(String.valueOf(XMLUsers.getUserPath(serverGroup, username)) + "VFS" + virtualPath, (Object)v, "VFS");
             }
             Common.updateOSXInfo(XMLUsers.getUserPath(serverGroup, username));
@@ -333,51 +399,8 @@ extends UserProvider {
         }
     }
 
-    /*
-     * WARNING - Removed try catching itself - possible behaviour change.
-     */
     @Override
-    public Properties loadInheritance(String serverGroup) {
-        String inheritancePath;
-        File_S inheritanceF;
-        Properties inheritance2 = null;
-        if (serverGroup.endsWith("_restored_backup")) {
-            serverGroup = serverGroup.substring(0, serverGroup.indexOf("_restored_backup"));
-        }
-        if ((inheritanceF = new File_S(inheritancePath = String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/inheritance.XML")).exists()) {
-            Properties properties = inheritance_groups_cache;
-            synchronized (properties) {
-                if (inheritance_groups_cache.getProperty(String.valueOf(inheritancePath) + "_time", "0").equals(String.valueOf(inheritanceF.lastModified()))) {
-                    inheritance2 = (Properties)inheritance_groups_cache.get(inheritancePath);
-                } else {
-                    try {
-                        inheritance2 = (Properties)Common.readXMLObject(inheritancePath);
-                        inheritance_groups_cache.put(inheritancePath, inheritance2);
-                        inheritance_groups_cache.put(String.valueOf(inheritancePath) + "_time", String.valueOf(inheritanceF.lastModified()));
-                    }
-                    catch (Exception e) {
-                        Log.log("USER_OBJ", 2, e);
-                    }
-                }
-            }
-            if (inheritance2 == null) {
-                try {
-                    Thread.sleep(1000L);
-                    inheritance2 = (Properties)Common.readXMLObject(inheritancePath);
-                }
-                catch (Exception e) {
-                    Log.log("USER_OBJ", 2, e);
-                }
-            }
-        }
-        if (inheritance2 == null) {
-            inheritance2 = new Properties();
-        }
-        return inheritance2;
-    }
-
-    @Override
-    public Properties loadUser(String serverGroup, String username, Properties inheritance, boolean flattenUser) {
+    public Properties loadUser(String serverGroup, String username, Properties inheritance, boolean flattenUser, boolean allow_update) {
         Properties user = this.read_user_no_cache(serverGroup, username);
         String default_server_group = serverGroup;
         if (serverGroup.endsWith("_restored_backup")) {
@@ -389,7 +412,7 @@ extends UserProvider {
         }
         Properties originalUser = (Properties)user.clone();
         boolean needWrite = this.fixExpireAccount(user, originalUser, newUser);
-        if (needWrite |= this.fixExpirePassword(user, originalUser, newUser)) {
+        if ((needWrite |= this.fixExpirePassword(user, originalUser, newUser)) && allow_update) {
             this.writeUser(serverGroup, username, originalUser, false);
         }
         if (!flattenUser) {
@@ -407,13 +430,13 @@ extends UserProvider {
             int x = 0;
             while (x < ichain.size()) {
                 Properties p = this.read_user_no_cache(serverGroup, ichain.elementAt(x).toString());
-                UserTools.mergeWebCustomizations(newUser, p);
-                UserTools.mergeLinkedVFS(newUser, p);
-                UserTools.mergeGroupAdminNames(newUser, p);
-                UserTools.mergeEvents(newUser, p);
                 try {
+                    UserTools.mergeWebCustomizations(newUser, p);
+                    UserTools.mergeLinkedVFS(newUser, p);
+                    UserTools.mergeGroupAdminNames(newUser, p);
+                    UserTools.mergeEvents(newUser, p);
                     needWrite = this.fixExpireAccount(user, originalUser, p);
-                    if (needWrite |= this.fixExpirePassword(user, originalUser, p)) {
+                    if ((needWrite |= this.fixExpirePassword(user, originalUser, p)) && allow_update) {
                         this.writeUser(serverGroup, username, originalUser, true);
                     }
                 }
@@ -429,6 +452,7 @@ extends UserProvider {
         UserTools.mergeWebCustomizations(newUser, user);
         UserTools.mergeEvents(newUser, user);
         newUser.putAll((Map<?, ?>)user);
+        newUser.put("ichain", ichain == null ? new Vector() : ichain);
         return newUser;
     }
 
@@ -472,17 +496,26 @@ extends UserProvider {
     @Override
     public void updateUser(String serverGroup, String username1, String username2, String password) {
         if (username2 != null) {
-            File_S rnfr = new File_S(XMLUsers.getUserPath(serverGroup, username1));
-            File_S rnto = new File_S(XMLUsers.getUserPath(serverGroup, username2));
+            File_S rnfr = new File_S(XMLUsers.getUserPath(serverGroup, Common.safe_xss_filename(username1)));
+            File_S rnto = new File_S(XMLUsers.getUserPath(serverGroup, Common.safe_xss_filename(username2)));
             rnfr.renameTo(rnto);
+            if (Common.xmlCache != null) {
+                Common.xmlCache.clear();
+            }
         }
+    }
+
+    @Override
+    public void writeUser(String serverGroup, String username, Properties user, boolean backup) {
+        this.writeUser(serverGroup, username, user, backup, false);
     }
 
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     @Override
-    public void writeUser(String serverGroup, String username, Properties user, boolean backup) {
+    public void writeUser(String serverGroup, String username, Properties user, boolean backup, boolean clear_only_user_related_xml_from_cache) {
+        username = Common.safe_xss_filename(username);
         Object lock = null;
         Object object = user_write_lock;
         synchronized (object) {
@@ -518,21 +551,35 @@ extends UserProvider {
                     }
                     new File_S(user_dir).renameTo(new File_S(String.valueOf(user_dir.substring(0, user_dir.length() - 1)) + tmp));
                     new File_S(String.valueOf(user_dir.substring(0, user_dir.length() - 1)) + tmp).renameTo(new File_S(user_dir));
+                    if (clear_only_user_related_xml_from_cache && Common.xmlCache != null) {
+                        Common.xmlCache.clear();
+                    }
                 }
                 Common.updateOSXInfo(user_dir);
                 user.put("version", "1.0");
-                Common c = null;
-                c = ServerStatus.thisObj != null ? ServerStatus.thisObj.common_code : new Common();
                 new File_S(String.valueOf(user_dir) + "user_old.XML").delete();
+                if (clear_only_user_related_xml_from_cache && Common.xmlCache != null && Common.xmlCache.containsKey(new File_S(String.valueOf(user_dir) + "user_old.XML").getCanonicalPath())) {
+                    Common.xmlCache.remove(new File_S(String.valueOf(user_dir) + "user_old.XML").getCanonicalPath());
+                }
                 String uid = Common.makeBoundary(6);
                 Common.writeXMLObject(String.valueOf(user_dir) + "user_" + uid + ".XML", (Object)user, "userfile");
-                Common.xmlCache.clear();
+                if (Common.xmlCache != null && !clear_only_user_related_xml_from_cache) {
+                    Common.xmlCache.clear();
+                }
                 Object object2 = user_lock;
                 synchronized (object2) {
                     if (new File_S(String.valueOf(user_dir) + "user_" + uid + ".XML").length() > 0L) {
                         Common.copy(String.valueOf(user_dir) + "user_" + uid + ".XML", String.valueOf(user_dir) + "user.XML", true);
                     }
                     new File_S(String.valueOf(user_dir) + "user_" + uid + ".XML").delete();
+                    if (clear_only_user_related_xml_from_cache && Common.xmlCache != null) {
+                        if (Common.xmlCache.containsKey(new File_S(String.valueOf(user_dir) + "user_" + uid + ".XML").getCanonicalPath())) {
+                            Common.xmlCache.remove(new File_S(String.valueOf(user_dir) + "user_" + uid + ".XML").getCanonicalPath());
+                        }
+                        if (Common.xmlCache.containsKey(new File_S(String.valueOf(user_dir) + "user.XML").getCanonicalPath())) {
+                            Common.xmlCache.remove(new File_S(String.valueOf(user_dir) + "user.XML").getCanonicalPath());
+                        }
+                    }
                 }
                 Common.updateOSXInfo(user_dir);
             }
@@ -568,6 +615,7 @@ extends UserProvider {
     }
 
     private void writeBackupUser(String serverGroup, String username, String path) throws Exception {
+        username = Common.safe_xss_filename(username);
         UserTools.purgeOldBackups(ServerStatus.IG("user_backup_count"));
         SimpleDateFormat sdf = new SimpleDateFormat("MMddyyyy_HHmmss", Locale.US);
         new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/").mkdirs();
@@ -625,7 +673,9 @@ extends UserProvider {
             }
             try {
                 Common.writeXMLObject(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/inheritance.XML.new", (Object)inheritance, "inheritance");
-                new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/inheritance.XML").renameTo(new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/inheritance0.XML"));
+                if (new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/inheritance.XML").exists() && !new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/inheritance.XML").renameTo(new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/inheritance0.XML"))) {
+                    Common.copy(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/inheritance.XML", String.valueOf(System.getProperty("crushftp.backup")) + "backup/inheritance0.XML", false);
+                }
                 new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/inheritance.XML").delete();
                 int loops = 0;
                 Common.xmlCache.remove(new File_S(String.valueOf(System.getProperty("crushftp.users")) + serverGroup + "/inheritance.XML").getCanonicalPath());
@@ -651,6 +701,9 @@ extends UserProvider {
             Log.log("USER_OBJ", 0, ee);
         }
         Common.recurseDelete(XMLUsers.getUserPath(serverGroup, username), false);
+        if (Common.xmlCache != null) {
+            Common.xmlCache.clear();
+        }
     }
 
     /*
@@ -659,7 +712,8 @@ extends UserProvider {
     public Properties read_user_no_cache(String serverGroup, String username) {
         Properties p;
         String real_path;
-        block18: {
+        block20: {
+            username = Common.safe_xss_filename(username);
             username = username.replaceAll("/", "");
             username = username.replaceAll("\\\\", "");
             real_path = "";
@@ -673,18 +727,24 @@ extends UserProvider {
                     common = new Common();
                 }
                 p = null;
+                int xml_user_read_retries = ServerStatus.IG("xml_user_read_retries");
+                if (xml_user_read_retries < 1) {
+                    xml_user_read_retries = 1;
+                }
                 int x = 0;
-                while (p == null && x < 5 && new File_S(real_path).exists()) {
-                    block17: {
+                while (p == null && x < xml_user_read_retries && new File_S(real_path).exists()) {
+                    block19: {
                         try {
                             Log.log("USER_OBJ", 2, "Validating user path object:" + real_path + "user.XML");
                             Log.log("USER_OBJ", 2, "Validating user path XML exists:" + new File_S(String.valueOf(real_path) + "user.XML").exists());
                             Object object = user_lock;
                             synchronized (object) {
-                                p = (Properties)Common.readXMLObject(String.valueOf(real_path) + "user.XML");
+                                if (new File_S(String.valueOf(real_path) + "user.XML").exists()) {
+                                    p = (Properties)Common.readXMLObject(String.valueOf(real_path) + "user.XML");
+                                }
                             }
                             Log.log("USER_OBJ", 2, "Validating user loading object:" + (p != null ? String.valueOf(p.size()) : "no real_path " + real_path + " found!"));
-                            if (!(p != null || username.equals("template") || username.equals("anonymous") || username.equals("") || username.endsWith(".SHARED") || username.equals("default"))) {
+                            if (!(p != null || username.equals("template") || username.equals("anonymous") || username.equals("") || username.endsWith(".SHARED") || username.equals("default") || xml_user_read_retries <= 1)) {
                                 Thread.sleep(200L);
                             }
                         }
@@ -692,7 +752,7 @@ extends UserProvider {
                             if (username.equals("template") || username.equals("anonymous") || username.equals("") || username.endsWith(".SHARED") || username.equals("default")) {
                                 throw e;
                             }
-                            if (x < 4) break block17;
+                            if (x < 4) break block19;
                             throw e;
                         }
                     }
@@ -701,7 +761,7 @@ extends UserProvider {
                 Log.log("USER_OBJ", 3, "Finding path to username:" + username + ":" + real_path);
                 username = new File_S(real_path).getCanonicalFile().getName();
                 Log.log("USER_OBJ", 3, "Got path to username:" + username + ":" + real_path);
-                if (p != null) break block18;
+                if (p != null) break block20;
                 return null;
             }
             catch (Exception e) {
@@ -878,7 +938,7 @@ extends UserProvider {
             int x = 0;
             while (x < item_list.length) {
                 if (item_list[x].isDirectory() && !item_list[x].getName().equalsIgnoreCase("VFS")) {
-                    listing.addElement(item_list[x].getName());
+                    listing.addElement(Common.safe_xss_filename(item_list[x].getName()));
                 }
                 ++x;
             }

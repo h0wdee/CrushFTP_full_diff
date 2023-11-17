@@ -16,9 +16,9 @@ import crushftp.handlers.Log;
 import crushftp.handlers.SessionCrush;
 import crushftp.handlers.UserTools;
 import crushftp.server.ServerStatus;
+import crushftp.server.ssh.PublicKeyVerifier;
 import crushftp.server.ssh.SSHCrushAuthentication8;
 import java.util.Properties;
-import java.util.Vector;
 
 public class PasswordAuthenticationProviderImpl
 extends PasswordAuthenticationProvider {
@@ -28,6 +28,9 @@ extends PasswordAuthenticationProvider {
      * Enabled aggressive exception aggregation
      */
     public boolean verifyPassword(Connection conn, String username, String password) throws PasswordChangeException {
+        if (username == null) {
+            username = conn.getUsername();
+        }
         if (ServerStatus.BG("username_uppercase")) {
             username = username.toUpperCase();
         }
@@ -43,6 +46,7 @@ extends PasswordAuthenticationProvider {
         try {
             thisSession.login_user_pass();
             if (thisSession.uiBG("user_logged_in")) {
+                Properties user;
                 if (thisSession.uiBG("password_expired")) {
                     if (thisSession.SG("site").toUpperCase().indexOf("(SITE_PASS)") >= 0) throw new PasswordChangeException("Password expired.");
                     thisSession.logLogin(false, "Password expired and not changeable.");
@@ -50,26 +54,8 @@ extends PasswordAuthenticationProvider {
                     return false;
                 }
                 boolean publickey_password = thisSession.BG("publickey_password");
-                if (Common.dmz_mode) {
-                    Vector queue = (Vector)Common.System2.get("crushftp.dmz.queue");
-                    Properties action = new Properties();
-                    action.put("type", "GET:USER");
-                    action.put("id", crushftp.handlers.Common.makeBoundary());
-                    String internal_username = username;
-                    if (thisSession.server_item.getProperty("linkedServer", "").equals("@AutoDomain") && internal_username.contains("@")) {
-                        internal_username = internal_username.substring(0, username.lastIndexOf("@"));
-                    }
-                    action.put("username", internal_username);
-                    action.put("need_response", "true");
-                    String preferred_port = UserTools.ut.getPreferredPort(thisSession.uiSG("listen_ip_port"), thisSession.uiSG("user_name"));
-                    if (!preferred_port.equals("")) {
-                        action.put("preferred_port", preferred_port);
-                    }
-                    queue.addElement(action);
-                    action = UserTools.waitResponse(action, 60);
-                    if (action != null && (Properties)action.get("user") != null) {
-                        publickey_password = ((Properties)action.get("user")).getProperty("publickey_password", "false").equalsIgnoreCase("true");
-                    }
+                if (Common.dmz_mode && (user = PublicKeyVerifier.findUserForSSH(username, conn)) != null) {
+                    publickey_password = user.getProperty("publickey_password", "false").equalsIgnoreCase("true");
                 }
                 if (!publickey_password || publickey_password && thisSession.uiBG("publickey_auth_ok")) {
                     Properties p = thisSession.do_event5("LOGIN", null);

@@ -12,6 +12,7 @@ import com.crushftp.client.Worker;
 import crushftp.handlers.Common;
 import crushftp.handlers.JobScheduler;
 import crushftp.handlers.Log;
+import crushftp.handlers.QuotaWorker;
 import crushftp.handlers.SessionCrush;
 import crushftp.handlers.SharedSession;
 import crushftp.handlers.UserTools;
@@ -26,6 +27,7 @@ import java.io.ObjectOutputStream;
 import java.io.RandomAccessFile;
 import java.io.StringReader;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
@@ -34,6 +36,7 @@ import java.util.Enumeration;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Vector;
+import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 
 public class SharedSessionReplicated {
@@ -144,6 +147,9 @@ public class SharedSessionReplicated {
             String remote_host_port = remote_host_ports.elementAt(0).toString();
             int bind_port = 0;
             bind_port = remote_host_port.split(":").length > 2 ? Integer.parseInt(remote_host_port.split(":")[0]) : Integer.parseInt(remote_host_port.split(":")[1]);
+            if (bind_port == 443) {
+                throw new Exception("443 is not valid for replication!  This is not a HTTP/HTTPS port, it must be an unused port!");
+            }
             if (System.getProperty("crushftp.sharedsession.ssl", "true").equals("true")) {
                 ss = ServerStatus.thisObj.common_code.getServerSocket(bind_port, System.getProperty("crushftp.sharedsession.bindip", "0.0.0.0"), "builtin", "crushftp", "crushftp", "", false, 1, true, false, null);
                 Common.configureSSLTLSSocket(ss);
@@ -180,9 +186,10 @@ public class SharedSessionReplicated {
                             try {
                                 while (true) {
                                     if (ss != null) {
-                                        if (current_name.equals("SharedSessionReplciatedReceiver")) {
-                                            current_name = "SharedSessionReplicatedReceiver:" + remote_host_ports.elementAt(0) + ":";
+                                        if (current_name.equals("SharedSessionReplicatedReceiver")) {
+                                            current_name = "SharedSessionReplicatedReceiver:" + remote_host_ports.elementAt(0) + "|" + ss + ":";
                                         }
+                                        Thread.currentThread().setName(current_name);
                                         final Socket sock = ss.accept();
                                         String incoming_ip = sock.getInetAddress().getHostAddress();
                                         if (!allowed_ips.equals("") && !com.crushftp.client.Common.do_search(allowed_ips, incoming_ip, false, 0) && allowed_ips.indexOf(incoming_ip) < 0) {
@@ -428,52 +435,145 @@ public class SharedSessionReplicated {
             Vector remote_host_ports2 = (Vector)remote_host_ports.clone();
             int xx = 0;
             while (xx < remote_host_ports2.size()) {
-                lastActive = System.currentTimeMillis();
-                Vector send_queue = (Vector)send_queues.get(remote_host_ports2.elementAt(xx));
-                try {
-                    if (factory == null && System.getProperty("crushftp.sharedsession.ssl", "true").equals("true")) {
-                        factory = ServerStatus.thisObj.common_code.getSSLContext("builtin", null, "crushftp", "crushftp", "TLS", false, true).getSocketFactory();
-                    }
-                    if (send_queue.size() > 0) {
-                        Properties p;
-                        Socket sock = null;
-                        String remote_host_port = remote_host_ports2.elementAt(xx).toString();
-                        sock = System.getProperty("crushftp.sharedsession.ssl", "true").equals("true") ? (remote_host_port.split(":").length > 2 ? factory.createSocket(remote_host_port.split(":")[1], Integer.parseInt(remote_host_port.split(":")[2])) : factory.createSocket(remote_host_port.split(":")[0], Integer.parseInt(remote_host_port.split(":")[1]))) : new Socket(remote_host_port.split(":")[0], Integer.parseInt(remote_host_port.split(":")[1]));
-                        sock.setSoTimeout(10000);
-                        ObjectOutputStream oos = new ObjectOutputStream(sock.getOutputStream());
-                        while (send_queue.size() > 0) {
-                            Thread.currentThread().setName(String.valueOf(Thread.currentThread().getName().substring(0, Thread.currentThread().getName().lastIndexOf(":") + 1)) + send_queue.size());
-                            p = (Properties)send_queue.elementAt(0);
-                            if (!p.getProperty("action", "").equals("crushftp.session.update")) {
-                                Log.log("SERVER", 2, "SharedSession:Send:" + p.getProperty("id") + ":" + p.getProperty("action") + ":" + p.getProperty("key") + ":" + p.getProperty("size", "0") + " bytes");
+                Vector send_queue;
+                block29: {
+                    Socket sock23;
+                    lastActive = System.currentTimeMillis();
+                    send_queue = (Vector)send_queues.get(remote_host_ports2.elementAt(xx));
+                    Socket sock = new Socket();
+                    try {
+                        if (factory == null && System.getProperty("crushftp.sharedsession.ssl", "true").equals("true")) {
+                            factory = ServerStatus.thisObj.common_code.getSSLContext("builtin", null, "crushftp", "crushftp", "TLS", false, true).getSocketFactory();
+                        }
+                        if (send_queue.size() > 0) {
+                            Properties p;
+                            sock.setSoTimeout(5000);
+                            String remote_host_port = remote_host_ports2.elementAt(xx).toString();
+                            String dest_host = "";
+                            int dest_port = 0;
+                            if (remote_host_port.split(":").length > 2) {
+                                dest_host = remote_host_port.split(":")[1];
+                                dest_port = Integer.parseInt(remote_host_port.split(":")[2]);
+                            } else {
+                                dest_host = remote_host_port.split(":")[0];
+                                dest_port = Integer.parseInt(remote_host_port.split(":")[1]);
                             }
+                            sock.connect(new InetSocketAddress(dest_host, dest_port));
+                            if (System.getProperty("crushftp.sharedsession.ssl", "true").equals("true")) {
+                                sock = (SSLSocket)factory.createSocket(sock, dest_host, dest_port, true);
+                            }
+                            sock.setSoTimeout(10000);
+                            final ObjectOutputStream oos = new ObjectOutputStream(sock.getOutputStream());
+                            final Properties status = new Properties();
+                            while (send_queue.size() > 0) {
+                                Thread.currentThread().setName(String.valueOf(Thread.currentThread().getName().substring(0, Thread.currentThread().getName().lastIndexOf(":") + 1)) + send_queue.size());
+                                p = (Properties)send_queue.elementAt(0);
+                                if (!p.getProperty("action", "").equals("crushftp.session.update")) {
+                                    Log.log("SERVER", 2, "SharedSession:Send:" + p.getProperty("id") + ":" + p.getProperty("action") + ":" + p.getProperty("key") + ":" + p.getProperty("size", "0") + " bytes");
+                                }
+                                status.remove("error");
+                                status.remove("status");
+                                Worker.startWorker(new Runnable(){
+
+                                    @Override
+                                    public void run() {
+                                        try {
+                                            oos.writeObject(p);
+                                            oos.flush();
+                                            status.put("status", "");
+                                        }
+                                        catch (Exception e) {
+                                            status.put("error", e);
+                                            status.put("status", "ERROR:" + e);
+                                        }
+                                    }
+                                }, "SharedSession:Send:" + p.getProperty("id") + ":" + p.getProperty("action") + ":" + p.getProperty("key") + ":" + p.getProperty("size", "0") + " bytes");
+                                int loops = 10;
+                                long start = System.currentTimeMillis();
+                                while (!status.containsKey("status") && System.currentTimeMillis() - start < 10000L) {
+                                    Thread.sleep(loops++);
+                                    if (loops <= 1000) continue;
+                                    loops = 1000;
+                                }
+                                if (status.containsKey("error")) {
+                                    throw (Exception)status.get("error");
+                                }
+                                if (!status.containsKey("status")) {
+                                    throw new Exception("Timeout sending replciation object:SharedSession:Send:" + p.getProperty("id") + ":" + p.getProperty("action") + ":" + p.getProperty("key") + ":" + p.getProperty("size", "0") + " bytes");
+                                }
+                                send_queue.remove(0);
+                                sync_delay = System.currentTimeMillis() - Long.parseLong(p.getProperty("queued"));
+                                lastActive = System.currentTimeMillis();
+                            }
+                            p = new Properties();
+                            p.put("action", "CLOSE");
                             oos.writeObject(p);
                             oos.flush();
-                            send_queue.remove(0);
-                            sync_delay = System.currentTimeMillis() - Long.parseLong(p.getProperty("queued"));
+                            oos.close();
+                            offline = false;
                             lastActive = System.currentTimeMillis();
+                            ServerStatus.thisObj.server_info.put("replicated_servers_lastActive", String.valueOf(lastActive));
+                            ServerStatus.thisObj.server_info.put("replicated_servers_sent_" + xx, String.valueOf(Integer.parseInt(ServerStatus.thisObj.server_info.getProperty("replicated_servers_" + xx, "0")) + 1));
                         }
-                        p = new Properties();
-                        p.put("action", "CLOSE");
-                        oos.writeObject(p);
-                        oos.flush();
-                        oos.close();
-                        sock.close();
-                        offline = false;
-                        lastActive = System.currentTimeMillis();
-                        ServerStatus.thisObj.server_info.put("replicated_servers_lastActive", String.valueOf(lastActive));
-                        ServerStatus.thisObj.server_info.put("replicated_servers_sent_" + xx, String.valueOf(Integer.parseInt(ServerStatus.thisObj.server_info.getProperty("replicated_servers_" + xx, "0")) + 1));
                     }
-                }
-                catch (SocketException e) {
-                    lastActive = 0L;
-                    send_queue.removeAllElements();
-                    dofull = true;
-                }
-                catch (Exception e) {
-                    lastActive = 0L;
-                    Log.log("SERVER", 0, e);
-                    dofull = true;
+                    catch (SocketException e) {
+                        lastActive = 0L;
+                        send_queue.removeAllElements();
+                        dofull = true;
+                        try {
+                            sock23 = sock;
+                            Worker.startWorker(new Runnable(sock23){
+                                private final /* synthetic */ Socket val$sock2;
+                                {
+                                    this.val$sock2 = socket;
+                                }
+
+                                @Override
+                                public void run() {
+                                    try {
+                                        if (this.val$sock2 != null) {
+                                            this.val$sock2.close();
+                                        }
+                                    }
+                                    catch (IOException iOException) {
+                                        // empty catch block
+                                    }
+                                }
+                            });
+                        }
+                        catch (Exception sock22) {}
+                        break block29;
+                    }
+                    catch (Exception e) {
+                        try {
+                            lastActive = 0L;
+                            Log.log("SERVER", 0, e);
+                            dofull = true;
+                        }
+                        catch (Throwable throwable) {
+                            try {
+                                sock23 = sock;
+                                Worker.startWorker(new /* invalid duplicate definition of identical inner class */);
+                            }
+                            catch (Exception sock23) {
+                                // empty catch block
+                            }
+                            throw throwable;
+                        }
+                        try {
+                            sock23 = sock;
+                            Worker.startWorker(new /* invalid duplicate definition of identical inner class */);
+                        }
+                        catch (Exception sock24) {}
+                        break block29;
+                    }
+                    try {
+                        sock23 = sock;
+                        Worker.startWorker(new /* invalid duplicate definition of identical inner class */);
+                    }
+                    catch (Exception exception) {
+                        // empty catch block
+                    }
                 }
                 ServerStatus.thisObj.server_info.put("replicated_servers_queue_" + xx, String.valueOf(send_queue.size()));
                 ++xx;
@@ -611,6 +711,18 @@ public class SharedSessionReplicated {
             catch (Exception e) {
                 Log.log("SERVER", 0, e);
             }
+        } else if (p.getProperty("action", "").startsWith("SYNC_LOGIN_ATTEMPT_FREQUENCY")) {
+            try {
+                Properties login_frequency;
+                Properties sync_info = (Properties)p.get("val");
+                Properties keys = login_frequency = ServerStatus.siPG("login_attempt_frequency");
+                synchronized (keys) {
+                    login_frequency.put(sync_info.getProperty("user_name").toLowerCase(), (Properties)sync_info.get("login_prop"));
+                }
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+            }
         } else if (p.getProperty("action", "").equals("crushftp.AdminControls.saveReport")) {
             try {
                 Properties pp = (Properties)p.get("val");
@@ -682,6 +794,37 @@ public class SharedSessionReplicated {
             catch (Exception e) {
                 Log.log("SERVER", 0, e);
             }
+        } else if (p.getProperty("action", "").equals("crushftp.AdminControls.registerAgent")) {
+            try {
+                Properties pp = (Properties)p.get("val");
+                AdminControls.registerAgent((Properties)pp.remove("request"), false);
+                SharedSessionReplicated.send(p.getProperty("id"), "RESPONSE", "", null);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+            }
+        } else if (p.getProperty("action", "").equals("crushftp.AdminControls.getActionFromAgentQueue")) {
+            try {
+                Properties pp = (Properties)p.get("val");
+                Properties result = AdminControls.getActionFromAgentQueue((Properties)pp.remove("request"), false);
+                Properties response = new Properties();
+                response.put("result", result);
+                SharedSessionReplicated.send(p.getProperty("id"), "RESPONSE", "result", response);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+            }
+        } else if (p.getProperty("action", "").equals("crushftp.AdminControls.getAgentResponse")) {
+            try {
+                Properties pp = (Properties)p.get("val");
+                Properties result = AdminControls.getAgentResponse((Properties)pp.remove("request"), false);
+                Properties response = new Properties();
+                response.put("result", result);
+                SharedSessionReplicated.send(p.getProperty("id"), "RESPONSE", "result", response);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+            }
         } else if (p.getProperty("action", "").equals("crushftp.s3CrushClient.writeFs")) {
             try {
                 Properties pp = (Properties)p.get("val");
@@ -698,14 +841,31 @@ public class SharedSessionReplicated {
             catch (Exception e) {
                 Log.log("SERVER", 0, e);
             }
-        } else if (p.getProperty("action", "").equals("crushftp.JobScheduler.jobRunning")) {
+        } else if (p.getProperty("action", "").equals("crushftp.QuotaWorker.getStatus")) {
+            try {
+                String id = p.getProperty("id");
+                Properties response = new Properties();
+                response.put("quota_status", String.valueOf(QuotaWorker.getStatus()));
+                SharedSessionReplicated.send(id, "RESPONSE", "", response);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+            }
+        } else if (p.getProperty("action", "").equals("crushftp.QuotaWorker.receiveSharedQuota")) {
+            try {
+                QuotaWorker.receiveSharedQuota((Properties)p.get("val"));
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+            }
+        } else if (p.getProperty("action", "").equals("crushftp.JobScheduler.jobRunningCount")) {
             try {
                 String id = p.getProperty("id");
                 Properties val = (Properties)p.get("val");
-                boolean ok = JobScheduler.jobRunning(val.getProperty("scheduleName"));
+                int jobRunningCount = JobScheduler.jobRunningCount(val.getProperty("scheduleName"));
                 Properties response = new Properties();
                 response.put("scheduleName", val.getProperty("scheduleName"));
-                response.put("running_" + Common.makeBoundary(), String.valueOf(ok));
+                response.put("running_" + Common.makeBoundary(), String.valueOf(jobRunningCount));
                 SharedSessionReplicated.send(id, "RESPONSE", "", response);
             }
             catch (Exception e) {
@@ -777,7 +937,7 @@ public class SharedSessionReplicated {
             ServerStatus.thisObj.server_info.put("replicated_job_changes_count", String.valueOf(Integer.parseInt(ServerStatus.thisObj.server_info.getProperty("replicated_job_changes_count", "0")) + 1));
         } else if (p.getProperty("action", "").startsWith("crushftp.handlers.")) {
             String id;
-            block158: {
+            block194: {
                 id = p.getProperty("id");
                 try {
                     String action = p.getProperty("action");
@@ -786,27 +946,27 @@ public class SharedSessionReplicated {
                     if (action.endsWith(".writeGroups")) {
                         Log.log("SERVER", 0, String.valueOf(action) + ":" + p.getProperty("serverGroup"));
                         UserTools.writeGroups(p.getProperty("serverGroup"), (Properties)p.get("groups"), false);
-                        break block158;
+                        break block194;
                     }
                     if (action.endsWith(".writeUser")) {
                         Log.log("SERVER", 0, String.valueOf(action) + ":" + p.getProperty("serverGroup") + ":" + p.getProperty("username") + ":" + p.getProperty("backup", ""));
                         UserTools.writeUser(p.getProperty("serverGroup"), p.getProperty("username"), (Properties)p.get("user"), false, p.getProperty("backup", "").equals("true"));
-                        break block158;
+                        break block194;
                     }
                     if (action.endsWith(".writeInheritance")) {
                         Log.log("SERVER", 0, String.valueOf(action) + ":" + p.getProperty("serverGroup"));
                         UserTools.writeInheritance(p.getProperty("serverGroup"), (Properties)p.get("inheritance"), false);
-                        break block158;
+                        break block194;
                     }
                     if (action.endsWith(".deleteUser")) {
                         Log.log("SERVER", 0, String.valueOf(action) + ":" + p.getProperty("serverGroup") + ":" + p.getProperty("username"));
                         UserTools.deleteUser(p.getProperty("serverGroup"), p.getProperty("username"), false);
-                        break block158;
+                        break block194;
                     }
                     if (action.endsWith(".addFolder")) {
                         Log.log("SERVER", 0, String.valueOf(action) + ":" + p.getProperty("serverGroup") + ":" + p.getProperty("username") + ":" + p.getProperty("path") + ":" + p.getProperty("name"));
                         UserTools.addFolder(p.getProperty("serverGroup"), p.getProperty("username"), p.getProperty("path"), p.getProperty("name"), false);
-                        break block158;
+                        break block194;
                     }
                     if (action.endsWith(".addItem")) {
                         try {
@@ -816,7 +976,7 @@ public class SharedSessionReplicated {
                             Log.log("SERVER", 1, e);
                         }
                         UserTools.addItem(p.getProperty("serverGroup"), p.getProperty("username"), p.getProperty("path"), p.getProperty("name"), p.getProperty("url"), p.getProperty("type"), (Properties)p.get("moreItems"), p.getProperty("encrypted").equals("true"), p.getProperty("encrypted_class"), false);
-                        break block158;
+                        break block194;
                     }
                     if (action.endsWith(".writeVFS")) {
                         Log.log("SERVER", 0, String.valueOf(action) + ":" + p.getProperty("serverGroup") + ":" + p.getProperty("username"));
@@ -863,12 +1023,12 @@ public class SharedSessionReplicated {
                 Log.log("SERVER", 0, e);
             }
         } else if (p.getProperty("action", "").equals("crushftp.session.remove_user")) {
-            block159: {
+            block195: {
                 try {
                     SessionCrush thisSession = (SessionCrush)SharedSession.find("crushftp.sessions").remove(p.getProperty("id"), false);
                     if (thisSession != null) {
                         ServerStatus.thisObj.remove_user(thisSession.user_info, true);
-                        break block159;
+                        break block195;
                     }
                     ServerStatus e = ServerStatus.thisObj;
                     synchronized (e) {
@@ -973,6 +1133,35 @@ public class SharedSessionReplicated {
                 Log.log("SERVER", 0, e);
             }
             ServerStatus.thisObj.server_info.put("replicated_share_changes_count", String.valueOf(Integer.parseInt(ServerStatus.thisObj.server_info.getProperty("replicated_share_changes_count", "0")) + 1));
+        } else if (p.getProperty("action", "").equals("crushftp.jks.update")) {
+            try {
+                Properties pp = (Properties)p.get("val");
+                byte[] jks_bytes = (byte[])pp.get("jks_bytes");
+                if (new File_S(pp.getProperty("keystore_path", "")).exists()) {
+                    RandomAccessFile out = new RandomAccessFile(new File_S(pp.getProperty("keystore_path", "")), "rw");
+                    out.setLength(0L);
+                    out.write(jks_bytes);
+                    out.close();
+                }
+                if (com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + pp.getProperty("keystore_path", "").replace('\\', '/'))) {
+                    Properties jks = (Properties)com.crushftp.client.Common.System2.get("crushftp.keystores." + pp.getProperty("keystore_path", "").replace('\\', '/'));
+                    jks.put("bytes", jks_bytes);
+                }
+                if (!pp.getProperty("instance", "").equals("")) {
+                    try {
+                        DMZServerCommon.sendFileToMemory(pp.getProperty("keystore_path", ""), pp.getProperty("instance", ""));
+                    }
+                    catch (Exception e) {
+                        Log.log("SERVER", 1, e);
+                    }
+                }
+                Properties request = new Properties();
+                request.put("instance", pp.getProperty("instance", ""));
+                AdminControls.restartAllHttpsPorts(request);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+            }
         } else {
             SharedSession ss = SharedSession.find(p.getProperty("id"));
             if (p.getProperty("action").equals("put")) {

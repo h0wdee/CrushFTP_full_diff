@@ -38,7 +38,7 @@ extends JFrame {
     JButton btnInstallDaemon = new JButton("Install Daemon / Service");
     JButton btnRemoveDaemon = new JButton("Remove Daemon / Service");
     JLabel auth_label = new JLabel("<html><body>Before we can accept connections on ports below 1024 (such as 21,80,443) as a temp server, you must authenticate this on OS X.  This will give it the permissions needed to listen on priviledged ports.</body></html>");
-    JLabel lblthisWillInstall = new JLabel("<html><body>This will install the daemon on OS X, or Windows service.  This allows CrushFTP to be running without the need for a user to be logged in on the OS.</body></html>");
+    JLabel lblthisWillInstall = new JLabel("<html><body>This will install the daemon on OS X, or Windows service.  This allows " + System.getProperty("appname", "CrushFTP") + " to be running without the need for a user to be logged in on the OS.</body></html>");
     JLabel lblthisWillRemove = new JLabel("<html><body>This will remove the daemon on OS X, or Windows service.  Only use this when you want to stop and uninstall the server.</body></html>");
     private final JButton btnCreateNewAdmin = new JButton("Create New Admin User");
     private final JLabel lblthisWillBuild = new JLabel("<html><body>This will build a new administration user so that you can configure the server from your web browser.  Do not use the username 'admin', or 'administrator', or 'root'.  Suggested usernames would be your OS username, 'remoteadmin' or 'crushadmin', etc.</body></html>");
@@ -47,7 +47,7 @@ extends JFrame {
 
     public MainFrame() {
         System.setProperty("apple.laf.useScreenMenuBar", "true");
-        System.setProperty("com.apple.mrj.application.apple.menu.about.name", "CrushFTP");
+        System.setProperty("com.apple.mrj.application.apple.menu.about.name", System.getProperty("appname", "CrushFTP"));
         crushftp.handlers.Common.initSystemProperties(true);
         this.thisObj = this;
         String msg = "";
@@ -74,7 +74,7 @@ extends JFrame {
         }
         this.setMenuBar(mbar);
         this.setResizable(false);
-        this.setTitle("CrushFTP " + ServerStatus.version_info_str + ServerStatus.sub_version_info_str);
+        this.setTitle(String.valueOf(System.getProperty("appname", "CrushFTP")) + " " + ServerStatus.version_info_str + ServerStatus.sub_version_info_str);
         this.addWindowListener(new WindowAdapter(){
 
             @Override
@@ -87,7 +87,7 @@ extends JFrame {
         this.contentPane.setBorder(new EmptyBorder(5, 5, 5, 5));
         this.setContentPane(this.contentPane);
         this.contentPane.setLayout(null);
-        this.btnAuthenticateCrushftpFor.setToolTipText("Grants CrushFTP permissions so that it can install a daemon, and use reserved ports.");
+        this.btnAuthenticateCrushftpFor.setToolTipText("Grants " + System.getProperty("appname", "CrushFTP") + " permissions so that it can install a daemon, and use reserved ports.");
         this.btnAuthenticateCrushftpFor.addActionListener(new ActionListener(){
 
             @Override
@@ -127,8 +127,8 @@ extends JFrame {
                         Log.log("SERVER", 0, "Unzipping required service files for Windows.");
                         String ram_megabytes = (String)JOptionPane.showInputDialog(MainFrame.this.thisObj, "Max RAM for server in MegaBytes:", "Max RAM for Server", 0, null, null, "512");
                         if (ram_megabytes != null) {
-                            if (!Common.install_windows_service(Integer.parseInt(ram_megabytes.trim()), "CrushFTP", "plugins/lib/CrushFTPJarProxy.jar")) {
-                                JOptionPane.showMessageDialog(MainFrame.this.thisObj, "Access Denied: You must right click and run CrushFTP as an Administrator.", "Service Install Failed", 0);
+                            if (!Common.install_windows_service(Integer.parseInt(ram_megabytes.trim()), System.getProperty("appname", "CrushFTP"), "plugins/lib/" + System.getProperty("appname", "CrushFTP") + "JarProxy.jar")) {
+                                JOptionPane.showMessageDialog(MainFrame.this.thisObj, "Access Denied: You must right click and run " + System.getProperty("appname", "CrushFTP") + " as an Administrator.", "Service Install Failed", 0);
                                 MainFrame.this.quit();
                                 return;
                             }
@@ -139,7 +139,7 @@ extends JFrame {
                                     String domainuser = (String)JOptionPane.showInputDialog(MainFrame.this.thisObj, "Windows Domain Username:", "Windows Domain Username", 0, null, null, ".\\smithbob");
                                     if (domainuser != null) {
                                         String domainpass = Common.getPasswordPrompt("Password:");
-                                        String result = Common.install_windows_service_username(domainuser, domainpass, "CrushFTP");
+                                        String result = Common.install_windows_service_username(domainuser, domainpass, System.getProperty("appname", "CrushFTP"));
                                         if (result.equals("")) {
                                             MainFrame.this.stopDaemon(true);
                                             MainFrame.this.startDaemon(true);
@@ -184,8 +184,8 @@ extends JFrame {
             @Override
             public void actionPerformed(ActionEvent arg0) {
                 if (crushftp.handlers.Common.machine_is_windows()) {
-                    if (!Common.remove_windows_service("CrushFTP", "plugins/lib/CrushFTPJarProxy.jar")) {
-                        JOptionPane.showMessageDialog(MainFrame.this.thisObj, "Access Denied: You must right click and run CrushFTP as an Administrator.", "Service Remove Failed", 0);
+                    if (!Common.remove_windows_service(System.getProperty("appname", "CrushFTP"), "plugins/lib/" + System.getProperty("appname", "CrushFTP") + "JarProxy.jar")) {
+                        JOptionPane.showMessageDialog(MainFrame.this.thisObj, "Access Denied: You must right click and run " + System.getProperty("appname", "CrushFTP") + " as an Administrator.", "Service Remove Failed", 0);
                     } else {
                         JOptionPane.showMessageDialog(MainFrame.this.thisObj, "Service removed.", "Alert", 1);
                     }
@@ -261,7 +261,7 @@ extends JFrame {
             }
         }).start();
         if (!ServerStatus.killUpdateFiles()) {
-            JOptionPane.showMessageDialog(this, LOC.G("Update not complete!  Please close " + LOC.G("CrushFTP") + " and run 'update.bat' first!"));
+            JOptionPane.showMessageDialog(this, LOC.G("Update not complete!  Please close " + System.getProperty("appname", "CrushFTP") + " and run 'update.bat' first!"));
         }
         if (System.getProperties().getProperty("crushftp.autostart", "false").equals("true")) {
             this.startTempServer();
@@ -269,11 +269,11 @@ extends JFrame {
     }
 
     public void stopDaemon(boolean silent) {
-        Common.stopDaemon(silent, "CrushFTP");
+        Common.stopDaemon(silent, System.getProperty("appname", "CrushFTP"));
     }
 
     public void startDaemon(boolean silent) {
-        Common.startDaemon(silent, "CrushFTP");
+        Common.startDaemon(silent, System.getProperty("appname", "CrushFTP"));
     }
 
     public void checkAuthed() {
@@ -330,7 +330,7 @@ extends JFrame {
 
             @Override
             public void run() {
-                ServerStatus.thisObj.quit_server();
+                ServerStatus.thisObj.quit_server(true);
                 System.exit(0);
             }
         }).start();

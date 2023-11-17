@@ -391,7 +391,7 @@ lbl265:
             xml = this.get_raw_http_command((int)http_len_max);
         } else {
             int timeout = this.sock.getSoTimeout();
-            this.sock.setSoTimeout(3000);
+            this.sock.setSoTimeout(300);
             try {
                 int empty_count = 0;
                 while (http_len_max == -1L && empty_count < 100) {

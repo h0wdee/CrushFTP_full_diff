@@ -1,8 +1,5 @@
 /*
  * Decompiled with CFR 0.152.
- * 
- * Could not load the following classes:
- *  com.maverick.ssh.components.ComponentManager
  */
 package crushftp.server;
 
@@ -11,6 +8,8 @@ import com.crushftp.client.FileClient;
 import com.crushftp.client.File_S;
 import com.crushftp.client.File_U;
 import com.crushftp.client.GenericClientMulti;
+import com.crushftp.client.HTTPClient;
+import com.crushftp.client.HeapDumper;
 import com.crushftp.client.MemoryClient;
 import com.crushftp.client.S3Client;
 import com.crushftp.client.VRL;
@@ -23,14 +22,17 @@ import crushftp.db.SearchHandler;
 import crushftp.db.SearchTools;
 import crushftp.db.StatTools;
 import crushftp.gui.LOC;
+import crushftp.handlers.AlertTools;
 import crushftp.handlers.Common;
 import crushftp.handlers.GeoIP;
 import crushftp.handlers.IdleMonitor;
+import crushftp.handlers.JobFilesHandler;
 import crushftp.handlers.JobScheduler;
 import crushftp.handlers.Log;
 import crushftp.handlers.LoggingProvider;
 import crushftp.handlers.PreferencesProvider;
 import crushftp.handlers.PreviewWorker;
+import crushftp.handlers.QuotaWorker;
 import crushftp.handlers.SessionCrush;
 import crushftp.handlers.SharedSession;
 import crushftp.handlers.SharedSessionReplicated;
@@ -59,7 +61,9 @@ import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.io.RandomAccessFile;
 import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.UnknownHostException;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Collections;
@@ -69,14 +73,15 @@ import java.util.GregorianCalendar;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.TimeZone;
 import java.util.Vector;
 import javax.crypto.Cipher;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 
 public class ServerStatus {
-    public static String sub_version_info_str = "_19";
-    public static String version_info_str = "Version 9.4.0";
+    public static String sub_version_info_str = "_38";
+    public static String version_info_str = "Version 10.5.5";
     public static ClassLoader clasLoader = null;
     public static ServerStatus thisObj = null;
     public static Properties server_settings = new Properties();
@@ -91,6 +96,8 @@ public class ServerStatus {
     ReportTools rt = new ReportTools();
     public long total_server_bytes_sent = 0L;
     public long total_server_bytes_received = 0L;
+    public Thread logging_thread = null;
+    public Thread extra_update_timer_thread = null;
     public Thread update_timer_thread = null;
     public Thread report_scheduler_thread = null;
     public Thread scheduler_thread = null;
@@ -127,20 +134,34 @@ public class ServerStatus {
     public Object loginsLock = new Object();
     public boolean starting = true;
     ShutdownHandler shutdown = new ShutdownHandler();
-    LoggingProvider loggingProvider1 = null;
-    LoggingProvider loggingProvider2 = null;
+    public LoggingProvider loggingProvider1 = null;
+    public LoggingProvider loggingProvider2 = null;
     public PreferencesProvider prefsProvider = new PreferencesProvider();
-    static String hostname = "unknown";
+    public static String hostname = "unknown";
     Properties in_progress_bans = new Properties();
     Object ban_lock = new Object();
     String last_logging_provider2 = "";
-    public GeoIP geoip = null;
+    public GeoIP geoip = new GeoIP();
+    public static ServerSocket thread_dump_socket = null;
 
     public ServerStatus(boolean start_threads, Properties server_settings2) {
         System.getProperties().put("crushftp.worker.v9", System.getProperty("crushftp.worker.v9", "true"));
-        System.getProperties().put("crushftp.version", "9");
+        System.getProperties().put("crushftp.version", "10");
         try {
-            hostname = InetAddress.getLocalHost().getCanonicalHostName();
+            Thread t = new Thread(new Runnable(){
+
+                @Override
+                public void run() {
+                    try {
+                        hostname = InetAddress.getLocalHost().getCanonicalHostName();
+                    }
+                    catch (UnknownHostException e) {
+                        e.printStackTrace();
+                    }
+                }
+            });
+            t.start();
+            t.join(5000L);
         }
         catch (Exception e) {
             e.printStackTrace();
@@ -156,13 +177,14 @@ public class ServerStatus {
             e.printStackTrace();
         }
         thisObj = this;
-        System.getProperties().put("crushftp.version", "6");
         System.setProperty("mail.mime.ignoreunknownencoding", "true");
         this.server_info.put("user_list", new Vector());
         this.server_info.put("user_list_prop", new Properties());
+        this.server_info.put("html5_transfers", new Properties());
         this.server_info.put("last_logins", new Vector());
         this.server_info.put("domain_cross_reference", new Properties());
         this.server_info.put("login_frequency", new Properties());
+        this.server_info.put("login_attempt_frequency", new Properties());
         this.server_info.put("recent_user_list", new Vector());
         this.server_info.put("invalid_usernames", new Properties());
         this.server_info.put("running_tasks", new Vector());
@@ -185,8 +207,11 @@ public class ServerStatus {
         this.server_info.put("ram_pending_bytes", "0");
         this.server_info.put("ram_pending_bytes_s3_download", "0");
         this.server_info.put("ram_pending_bytes_s3_upload", "0");
+        this.server_info.put("ram_pending_bytes_multisegment_download", "0");
+        this.server_info.put("ram_pending_bytes_multisegment_upload", "0");
         this.server_info.put("running_event_threads", "0");
         this.server_info.put("allow_logins", "true");
+        this.server_info.put("update_when_idle", "false");
         this.server_info.put("restart_when_idle", "false");
         this.server_info.put("shutdown_when_idle", "false");
         Properties ip_data = new Properties();
@@ -202,7 +227,7 @@ public class ServerStatus {
         com.crushftp.client.Common.System2.put("persistent_variables", new Properties());
         com.crushftp.client.Common.loadPersistentVariables();
         try {
-            ComponentManager.setPerContextAlgorithmPreferences((boolean)true);
+            ComponentManager.setPerContextAlgorithmPreferences(true);
         }
         catch (Throwable e) {
             System.out.println("Maverick failed to initialize:" + e);
@@ -271,6 +296,8 @@ public class ServerStatus {
         ServerStatus.killJar("slf4j-log4j12-1.7.2.jar", "slf4j-log4j12-1.7.2.jar");
         ServerStatus.killJar("log4j-api.jar", "log4j-api.jar");
         ServerStatus.killJar("log4j-1.2.17.jar", "log4j-1.2.17.jar");
+        ServerStatus.killJar("bcpg-jdk15on-lw.jar", "bcpg-jdk15on-lw.jar");
+        ServerStatus.killJar("bcprov-jdk15on-lw.jar", "bcprov-jdk15on-lw.jar");
         String updateHome = "./";
         if (Common.OSXApp()) {
             updateHome = "../../../../";
@@ -307,12 +334,12 @@ public class ServerStatus {
                     v = this.common_code.getRegistrationAccess("V", ServerStatus.SG("registration_code"));
                 }
                 if (v != null && (v.equals("4") || v.equals("5") || v.equals("6") || v.equals("7"))) {
-                    String msg = "CrushFTP " + version_info_str + " will not work with a CrushFTP " + v + " license.";
+                    String msg = String.valueOf(System.getProperty("appname", "CrushFTP")) + " " + version_info_str + " will not work with a " + System.getProperty("appname", "CrushFTP") + " " + v + " license.";
                     Log.log("SERVER", 0, msg);
                     ServerStatus.put_in("max_max_users", "5");
                     ServerStatus.put_in("max_users", "5");
                 } else if (v == null && this.expireThread == null) {
-                    String msg = "Your license is expired.\r\nCrushFTP will automatically quit in 5 minutes.";
+                    String msg = "Your license is expired.\r\n" + System.getProperty("appname", "CrushFTP") + " will automatically quit in 5 minutes.";
                     Log.log("SERVER", 0, msg);
                     this.expireThread = new Thread(new Runnable(){
 
@@ -325,9 +352,9 @@ public class ServerStatus {
                                     ServerStatus.this.checkCrushExpiration();
                                     ++x;
                                 }
-                                String msg = "Your license is expired.\r\nYour 5 minutes is up. CrushFTP is quitting now.";
+                                String msg = "Your license is expired.\r\nYour 5 minutes is up. " + System.getProperty("appname", "CrushFTP") + " is quitting now.";
                                 Log.log("SERVER", 0, msg);
-                                ServerStatus.this.quit_server();
+                                ServerStatus.this.quit_server(true);
                             }
                             catch (Exception exception) {
                                 // empty catch block
@@ -341,7 +368,7 @@ public class ServerStatus {
             }
             catch (Exception e) {
                 Log.log("SERVER", 0, e);
-                this.quit_server();
+                this.quit_server(true);
             }
         }
     }
@@ -360,7 +387,7 @@ public class ServerStatus {
         ServerStatus.siPUT("concurrent_users", "0");
         ServerStatus.siPUT("version_info_str", version_info_str);
         ServerStatus.siPUT("sub_version_info_str", sub_version_info_str);
-        ServerStatus.siPUT("about_info_str", String.valueOf(LOC.G("CrushFTP")) + " " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str") + " from CrushFTP, LLC");
+        ServerStatus.siPUT("about_info_str", String.valueOf(System.getProperty("appname", "CrushFTP")) + " " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str"));
         ServerStatus.siPUT("java_info", String.valueOf(System.getProperty("java.home")) + "/bin/java\r\n" + System.getProperty("java.version") + ", " + System.getProperty("sun.arch.data.model") + " bit\r\n" + System.getProperties().getProperty("os.name"));
         ServerStatus.siPUT("server_start_time", "" + this.server_start_time);
         ServerStatus.siPUT("current_download_speed", "0");
@@ -376,14 +403,16 @@ public class ServerStatus {
         ServerStatus.siPUT("ram_max", String.valueOf(Runtime.getRuntime().maxMemory()));
         ServerStatus.siPUT("ram_free", String.valueOf(Runtime.getRuntime().maxMemory() - Runtime.getRuntime().totalMemory() + Runtime.getRuntime().freeMemory()));
         ServerStatus.siPUT("ram_used", String.valueOf(ServerStatus.siLG("ram_max") - ServerStatus.siLG("ram_free")));
+        ServerStatus.siPUT("ram_used_percent", String.valueOf((int)((float)ServerStatus.siLG("ram_used") / (float)ServerStatus.siLG("ram_max") * 100.0f)));
+        System.getProperties().put("crushftp.ram_used_percent", ServerStatus.siSG("ram_used_percent"));
         String cpu_usage = com.crushftp.client.Common.getCpuUsage();
         ServerStatus.siPUT("server_cpu", "0");
         ServerStatus.siPUT("os_cpu", "0");
         ServerStatus.siPUT("open_files", "0");
         ServerStatus.siPUT("max_open_files", "0");
         if (!cpu_usage.equals("")) {
-            ServerStatus.siPUT("server_cpu", cpu_usage.split(":")[0]);
-            ServerStatus.siPUT("os_cpu", cpu_usage.split(":")[1]);
+            ServerStatus.siPUT("server_cpu", String.valueOf((int)Float.parseFloat(cpu_usage.split(":")[0])));
+            ServerStatus.siPUT("os_cpu", String.valueOf((int)Float.parseFloat(cpu_usage.split(":")[1])));
             if (cpu_usage.split(":").length > 2) {
                 ServerStatus.siPUT("open_files", cpu_usage.split(":")[2]);
             }
@@ -594,7 +623,7 @@ public class ServerStatus {
                 scheduleName = JobScheduler.safeName(scheduleName);
                 new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + scheduleName).mkdirs();
                 try {
-                    Common.writeXMLObject(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + scheduleName + "/job.XML", (Object)p, "job");
+                    JobFilesHandler.writeXMLObject(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + scheduleName + "/job.XML", p, "job");
                 }
                 catch (Exception e) {
                     throw new RuntimeException(e);
@@ -605,6 +634,16 @@ public class ServerStatus {
             server_settings.put("prefs_version", "7.0");
         }
         System.getProperties().put("jdk.tls.useExtendedMasterSecret", System.getProperty("crushftp.tls.resume_session", "false"));
+        if (!ServerStatus.SG("extra_system_properties").equals("")) {
+            String[] params = ServerStatus.SG("extra_system_properties").split("-D");
+            int x6 = 0;
+            while (x6 < params.length) {
+                if (params[x6].indexOf("=") >= 0) {
+                    System.getProperties().put(params[x6].split("=")[0].trim(), params[x6].split("=")[1].trim());
+                }
+                ++x6;
+            }
+        }
         server_settings.put("v8_beta", "true");
         if (ServerStatus.SG("Access-Control-Allow-Origin").equals("true")) {
             server_settings.put("Access-Control-Allow-Origin", "*");
@@ -620,13 +659,13 @@ public class ServerStatus {
         }
         if (ServerStatus.SG("ssh_sha1_kex_allowed").equals("true")) {
             Vector pref_server_items = (Vector)server_settings.get("server_list");
-            int x6 = 0;
-            while (x6 < pref_server_items.size()) {
-                Properties server_item = (Properties)pref_server_items.elementAt(x6);
+            int x7 = 0;
+            while (x7 < pref_server_items.size()) {
+                Properties server_item = (Properties)pref_server_items.elementAt(x7);
                 if (server_item.getProperty("serverType", "FTP").equalsIgnoreCase("SFTP")) {
                     server_item.put("key_exchanges", "diffie-hellman-group1-sha1," + server_item.getProperty("key_exchanges", "diffie-hellman-group14-sha1, diffie-hellman-group-exchange-sha1, diffie-hellman-group-exchange-sha256, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521"));
                 }
-                ++x6;
+                ++x7;
             }
         }
         if (ServerStatus.SG("disabled_ciphers").toUpperCase().indexOf("_EXPORT_") < 0) {
@@ -636,22 +675,22 @@ public class ServerStatus {
                 SSLServerSocket serverSock = (SSLServerSocket)ssf.createServerSocket(0, 1);
                 String[] ciphers = serverSock.getSupportedCipherSuites();
                 serverSock.close();
-                int x7 = 0;
-                while (x7 < ciphers.length) {
-                    if (ciphers[x7].toUpperCase().indexOf("EXPORT") >= 0 && disabled_ciphers.indexOf(ciphers[x7].toUpperCase()) < 0) {
-                        disabled_ciphers = String.valueOf(disabled_ciphers) + "(" + ciphers[x7].toUpperCase() + ")";
+                int x8 = 0;
+                while (x8 < ciphers.length) {
+                    if (ciphers[x8].toUpperCase().indexOf("EXPORT") >= 0 && disabled_ciphers.indexOf(ciphers[x8].toUpperCase()) < 0) {
+                        disabled_ciphers = String.valueOf(disabled_ciphers) + "(" + ciphers[x8].toUpperCase() + ")";
                         needSave = true;
-                    } else if (ciphers[x7].toUpperCase().indexOf("ANON") >= 0 && disabled_ciphers.indexOf(ciphers[x7].toUpperCase()) < 0) {
-                        disabled_ciphers = String.valueOf(disabled_ciphers) + "(" + ciphers[x7].toUpperCase() + ")";
+                    } else if (ciphers[x8].toUpperCase().indexOf("ANON") >= 0 && disabled_ciphers.indexOf(ciphers[x8].toUpperCase()) < 0) {
+                        disabled_ciphers = String.valueOf(disabled_ciphers) + "(" + ciphers[x8].toUpperCase() + ")";
                         needSave = true;
-                    } else if (ciphers[x7].toUpperCase().indexOf("NULL") >= 0 && disabled_ciphers.indexOf(ciphers[x7].toUpperCase()) < 0) {
-                        disabled_ciphers = String.valueOf(disabled_ciphers) + "(" + ciphers[x7].toUpperCase() + ")";
+                    } else if (ciphers[x8].toUpperCase().indexOf("NULL") >= 0 && disabled_ciphers.indexOf(ciphers[x8].toUpperCase()) < 0) {
+                        disabled_ciphers = String.valueOf(disabled_ciphers) + "(" + ciphers[x8].toUpperCase() + ")";
                         needSave = true;
-                    } else if (ciphers[x7].toUpperCase().indexOf("INFO") >= 0 && disabled_ciphers.indexOf(ciphers[x7].toUpperCase()) < 0) {
-                        disabled_ciphers = String.valueOf(disabled_ciphers) + "(" + ciphers[x7].toUpperCase() + ")";
+                    } else if (ciphers[x8].toUpperCase().indexOf("INFO") >= 0 && disabled_ciphers.indexOf(ciphers[x8].toUpperCase()) < 0) {
+                        disabled_ciphers = String.valueOf(disabled_ciphers) + "(" + ciphers[x8].toUpperCase() + ")";
                         needSave = true;
                     }
-                    ++x7;
+                    ++x8;
                 }
                 server_settings.put("disabled_ciphers", disabled_ciphers);
             }
@@ -708,15 +747,21 @@ public class ServerStatus {
             server_settings.remove(cur.toString());
             needSave = true;
         }
+        server_settings.put("v10_beta", "true");
         this.prefsProvider.check_code();
+        server_settings.put("v10_beta", "true");
         if (ServerStatus.BG("block_client_renegotiation")) {
             System.setProperty("jdk.tls.rejectClientInitiatedRenegotiation", "true");
         }
+        long last_stats_db_size = com.crushftp.client.Common.recurseSize("./statsDB", 0L);
+        long last_sessions_obj_size = com.crushftp.client.Common.recurseSize("./sessions.obj", 0L);
+        ServerStatus.siPUT("last_stats_db_size", String.valueOf(last_stats_db_size));
+        ServerStatus.siPUT("last_sessions_obj_size", String.valueOf(last_sessions_obj_size));
         if (ServerStatus.BG("encryption_pass_needed") && new String(com.crushftp.client.Common.encryption_password).equals("crushftp")) {
             this.append_log("WARNING: Encryption password needed for the server!  Please login to admin console to provide it.", "RUN_SERVER");
         }
-        String memory_threads = "Server Memory Stats: Max=" + com.crushftp.client.Common.format_bytes_short2(ServerStatus.siLG("ram_max")) + ", Free=" + com.crushftp.client.Common.format_bytes_short2(ServerStatus.siLG("ram_free")) + ", Threads:" + Worker.busyWorkers.size() + ", " + System.getProperty("java.version") + ":" + System.getProperty("sun.arch.data.model") + " bit," + Runtime.getRuntime().availableProcessors() + "cores  OS:" + System.getProperties().getProperty("os.name") + " CPU usage Server/OS:" + ServerStatus.siSG("server_cpu") + "/" + ServerStatus.siSG("os_cpu") + " OpenFiles:" + ServerStatus.siSG("open_files") + "/" + ServerStatus.siSG("max_open_files") + ", statsDB size=" + com.crushftp.client.Common.format_bytes_short(com.crushftp.client.Common.recurseSize("./statsDB", 0L)) + " :" + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str");
-        this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********" + LOC.G("CrushFTP Run") + "******** " + memory_threads, "RUN_SERVER");
+        String memory_threads = "Server Memory Stats: Max=" + com.crushftp.client.Common.format_bytes_short2(ServerStatus.siLG("ram_max")) + ", Free=" + com.crushftp.client.Common.format_bytes_short2(ServerStatus.siLG("ram_free")) + ", Threads:" + Worker.busyWorkers.size() + ", " + System.getProperty("java.version") + ":" + System.getProperty("sun.arch.data.model") + " bit," + Runtime.getRuntime().availableProcessors() + "cores  OS:" + System.getProperties().getProperty("os.name") + " CPU usage Server/OS:" + ServerStatus.siSG("server_cpu") + "/" + ServerStatus.siSG("os_cpu") + " OpenFiles:" + ServerStatus.siSG("open_files") + "/" + ServerStatus.siSG("max_open_files") + ", statsDB size=" + com.crushftp.client.Common.format_bytes_short(last_stats_db_size) + ", sessions.obj size=" + com.crushftp.client.Common.format_bytes_short(last_sessions_obj_size) + " :" + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str");
+        this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********" + System.getProperty("appname", "CrushFTP") + " " + LOC.G("Run") + "******** " + memory_threads, "RUN_SERVER");
         try {
             this.server_info.put("jce_installed", String.valueOf(Cipher.getMaxAllowedKeyLength("AES") == Integer.MAX_VALUE));
             String ipList = "";
@@ -790,9 +835,33 @@ public class ServerStatus {
             this.update_timer_thread = null;
             UpdateTimer the_thread = new UpdateTimer(this, 1000, "ServerStatus", "gui_timer");
             this.update_timer_thread = new Thread(the_thread);
-            this.update_timer_thread.setName("ServerStatus:update_timer");
+            this.update_timer_thread.setName("ServerStatus:update_timer:gui_timer:");
             this.update_timer_thread.setPriority(1);
             this.update_timer_thread.start();
+            try {
+                this.extra_update_timer_thread.interrupt();
+            }
+            catch (Exception x9) {
+                // empty catch block
+            }
+            this.extra_update_timer_thread = null;
+            the_thread = new UpdateTimer(this, 1000, "ServerStatus", "extra_update_timer");
+            this.extra_update_timer_thread = new Thread(the_thread);
+            this.extra_update_timer_thread.setName("ServerStatus:update_timer:extra_update_timer:");
+            this.extra_update_timer_thread.setPriority(1);
+            this.extra_update_timer_thread.start();
+            try {
+                this.logging_thread.interrupt();
+            }
+            catch (Exception x9) {
+                // empty catch block
+            }
+            this.logging_thread = null;
+            the_thread = new UpdateTimer(this, 1000, "ServerStatus", "log_handler");
+            this.logging_thread = new Thread(the_thread);
+            this.logging_thread.setName("ServerStatus:update_timer:log_handler:");
+            this.logging_thread.setPriority(10);
+            this.logging_thread.start();
             try {
                 IdleMonitor.init();
             }
@@ -805,17 +874,74 @@ public class ServerStatus {
             try {
                 Worker.startWorker(this.commandBufferFlusher, "ServerStatus:CommandBufferFlusher");
             }
-            catch (IOException iOException) {
+            catch (IOException the_thread) {
                 // empty catch block
             }
         }
+        try {
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    try {
+                        Vector server_groups;
+                        if (!new File("./prefs.XML").exists()) {
+                            Thread.sleep(20000L);
+                        }
+                        if (!(server_groups = (Vector)com.crushftp.client.Common.CLONE(server_settings.get("server_groups"))).contains("extra_vfs")) {
+                            server_groups.add("extra_vfs");
+                        }
+                        int xx = 0;
+                        while (xx < server_groups.size()) {
+                            Properties groups = UserTools.getGroups(server_groups.elementAt(xx).toString());
+                            UserTools.writeGroups(server_groups.elementAt(xx).toString(), groups);
+                            Properties inheritance = UserTools.getInheritance(server_groups.elementAt(xx).toString());
+                            UserTools.writeInheritance(server_groups.elementAt(xx).toString(), inheritance);
+                            ++xx;
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("SERVER", 0, e);
+                    }
+                }
+            });
+        }
+        catch (IOException the_thread) {
+            // empty catch block
+        }
         this.commandBufferFlusher.setInterval(ServerStatus.IG("command_flush_interval"));
-        if (start_threads && System.getProperty("crushftp.start_servers", "true").equals("true")) {
+        if (start_threads && System.getProperty("crushftp.start_servers", "true").equals("true") && Common.isValidTemplateUserOfDMZ()) {
             this.start_all_servers();
         }
         this.starting = false;
         if (needSave) {
             this.save_server_settings(true);
+        }
+        if (ServerStatus.siIG("enterprise_level") > 0) {
+            try {
+                RandomAccessFile raf = new RandomAccessFile(String.valueOf(System.getProperty("crushftp.backup")) + "backup/yc.yaml", "rw");
+                raf.setLength(0L);
+                raf.write("version: '1'\r\n".getBytes("UTF8"));
+                raf.write("options:\r\n".getBytes("UTF8"));
+                raf.write(("   j: " + System.getProperty("java.home") + "\r\n").getBytes("UTF8"));
+                raf.write("   k: M2hVZFJxajF5NVlQc2ZaS25kcjRNZz09@193dc151-ed91-4c77-acb4-dd08cb5bf23d\r\n".getBytes("UTF8"));
+                raf.write("   s: https://receiver.ycrash.io\r\n".getBytes("UTF8"));
+                raf.write(("   a: " + ServerStatus.SG("registration_email") + "_CFTP\r\n").getBytes("UTF8"));
+                raf.close();
+                raf = new RandomAccessFile(String.valueOf(System.getProperty("crushftp.backup")) + "backup/yc.sh", "rw");
+                raf.setLength(0L);
+                raf.write(("#!/usr/bin/env bash\nget_pid()\n{\n CRUSH_PID=\"`ps -ef | grep java | grep CrushFTP | grep .jar | awk '{print $2}'`\"\n}\nget_pid\n" + new File_S("./plugins/lib/yc").getCanonicalPath() + " -c " + new File_S(System.getProperty("crushftp.backup")).getCanonicalPath() + "/backup/yc.yaml -p $CRUSH_PID\n").getBytes("UTF8"));
+                raf.close();
+                if (Common.machine_is_linux()) {
+                    com.crushftp.client.Common.exec(new String[]{"chmod", "+x", new File_S("./plugins/lib/yc").getCanonicalPath()});
+                }
+                if (Common.machine_is_linux()) {
+                    com.crushftp.client.Common.exec(new String[]{"chmod", "+x", new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/yc.sh").getCanonicalPath()});
+                }
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+            }
         }
     }
 
@@ -967,7 +1093,7 @@ lbl18:
         this.log_rolling_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 25000, "ServerStatus", "log_rolling");
         this.log_rolling_thread = new Thread(the_thread);
-        this.log_rolling_thread.setName("ServerStatus:log_rolling");
+        this.log_rolling_thread.setName("ServerStatus:log_rolling:");
         this.log_rolling_thread.setPriority(1);
         this.log_rolling_thread.start();
     }
@@ -982,7 +1108,7 @@ lbl18:
         this.events_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 1000, "ServerStatus", "events_thread");
         this.events_thread = new Thread(the_thread);
-        this.events_thread.setName("ServerStatus:events_thread");
+        this.events_thread.setName("ServerStatus:events_thread:");
         this.events_thread.setPriority(1);
         this.events_thread.start();
     }
@@ -997,7 +1123,7 @@ lbl18:
         this.monitor_folders_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 60000, "ServerStatus", "monitor_folders");
         this.monitor_folders_thread = new Thread(the_thread);
-        this.monitor_folders_thread.setName("ServerStatus:monitor_folders");
+        this.monitor_folders_thread.setName("ServerStatus:monitor_folders:");
         this.monitor_folders_thread.setPriority(1);
         this.monitor_folders_thread.start();
         try {
@@ -1007,7 +1133,7 @@ lbl18:
             // empty catch block
         }
         this.monitor_folders_thread_instant = new Thread(new UpdateTimer(this, 1000, "ServerStatus", "monitor_folders_instant"));
-        this.monitor_folders_thread_instant.setName("ServerStatus:monitor_folders_instant");
+        this.monitor_folders_thread_instant.setName("ServerStatus:monitor_folders_instant:");
         this.monitor_folders_thread_instant.setPriority(1);
         this.monitor_folders_thread_instant.start();
     }
@@ -1026,9 +1152,9 @@ lbl18:
             // empty catch block
         }
         this.http_cleaner_thread = null;
-        UpdateTimer the_thread = new UpdateTimer(this, 60000, "ServerStatus", "http_cleaner");
+        UpdateTimer the_thread = new UpdateTimer(this, 1000 * ServerStatus.IG("http_cleaner_interval") * 1, "ServerStatus", "http_cleaner");
         this.http_cleaner_thread = new Thread(the_thread);
-        this.http_cleaner_thread.setName("ServerStatus:http_cleaner");
+        this.http_cleaner_thread.setName("ServerStatus:http_cleaner:");
         this.http_cleaner_thread.setPriority(1);
         this.http_cleaner_thread.start();
     }
@@ -1074,7 +1200,7 @@ lbl18:
         }
         UpdateTimer the_thread = new UpdateTimer(this, mins * 60000, "ServerStatus", "discover_ip_timer");
         this.discover_ip_timer_thread = new Thread(the_thread);
-        this.discover_ip_timer_thread.setName("ServerStatus:discover_ip_timer");
+        this.discover_ip_timer_thread.setName("ServerStatus:discover_ip_timer:");
         this.discover_ip_timer_thread.setPriority(1);
         this.discover_ip_timer_thread.start();
     }
@@ -1095,7 +1221,7 @@ lbl18:
         this.ban_timer_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 10000, "ServerStatus", "ban_timer");
         this.ban_timer_thread = new Thread(the_thread);
-        this.ban_timer_thread.setName("ServerStatus:ban_timer");
+        this.ban_timer_thread.setName("ServerStatus:ban_timer:");
         this.ban_timer_thread.setPriority(1);
         this.ban_timer_thread.start();
         try {
@@ -1107,7 +1233,7 @@ lbl18:
         this.cban_timer_thread = null;
         the_thread = new UpdateTimer(this, 1000, "ServerStatus", "cban_timer");
         this.cban_timer_thread = new Thread(the_thread);
-        this.cban_timer_thread.setName("ServerStatus:cban_timer");
+        this.cban_timer_thread.setName("ServerStatus:cban_timer:");
         this.cban_timer_thread.setPriority(1);
         this.cban_timer_thread.start();
     }
@@ -1126,7 +1252,7 @@ lbl18:
             // empty catch block
         }
         this.hammer_timer_thread = new Thread(new UpdateTimer(this, ServerStatus.IG("hammer_banning") * 1000, "ServerStatus", "hammer_timer"));
-        this.hammer_timer_thread.setName("ServerStatus:hammer_timer");
+        this.hammer_timer_thread.setName("ServerStatus:hammer_timer:");
         this.hammer_timer_thread.setPriority(1);
         this.hammer_timer_thread.start();
         try {
@@ -1142,7 +1268,7 @@ lbl18:
             // empty catch block
         }
         this.hammer_timer_http_thread = new Thread(new UpdateTimer(this, ServerStatus.IG("hammer_banning_http") * 1000, "ServerStatus", "hammer_timer_http"));
-        this.hammer_timer_http_thread.setName("ServerStatus:hammer_timer");
+        this.hammer_timer_http_thread.setName("ServerStatus:hammer_timer:");
         this.hammer_timer_http_thread.setPriority(1);
         this.hammer_timer_http_thread.start();
     }
@@ -1157,7 +1283,7 @@ lbl18:
         this.phammer_timer_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 10000, "ServerStatus", "phammer_timer");
         this.phammer_timer_thread = new Thread(the_thread);
-        this.phammer_timer_thread.setName("ServerStatus:phammer_timer");
+        this.phammer_timer_thread.setName("ServerStatus:phammer_timer:");
         this.phammer_timer_thread.setPriority(1);
         if (System.getProperty("crushftp.disablephammer", "false").equals("false")) {
             this.phammer_timer_thread.start();
@@ -1174,7 +1300,7 @@ lbl18:
         this.update_2_timer_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 5000, "ServerStatus", "update_2_timer");
         this.update_2_timer_thread = new Thread(the_thread);
-        this.update_2_timer_thread.setName("ServerStatus:update_2_timer");
+        this.update_2_timer_thread.setName("ServerStatus:update_2_timer:");
         this.update_2_timer_thread.setPriority(1);
         this.update_2_timer_thread.start();
     }
@@ -1195,7 +1321,7 @@ lbl18:
         this.stats_saver_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, ServerStatus.IG("stats_min") * 60000, "ServerStatus", "stats_saver");
         this.stats_saver_thread = new Thread(the_thread);
-        this.stats_saver_thread.setName("ServerStatus:stats_saver");
+        this.stats_saver_thread.setName("ServerStatus:stats_saver:");
         this.stats_saver_thread.setPriority(1);
         this.stats_saver_thread.start();
     }
@@ -1238,7 +1364,7 @@ lbl18:
                                 f = (File_S)jobs.elementAt(x);
                                 if (new File_S(String.valueOf(f.getPath()) + "/inprogress.XML").exists()) {
                                     new File_S(String.valueOf(f.getPath()) + "/inprogress/").mkdirs();
-                                    tracker = (Properties)Common.readXMLObject(new File_S(String.valueOf(f.getPath()) + "/inprogress.XML"));
+                                    tracker = (Properties)JobFilesHandler.readXMLObject(new File_S(String.valueOf(f.getPath()) + "/inprogress.XML"));
                                     new File_S(String.valueOf(f.getPath()) + "/inprogress.XML").renameTo(new File_S(String.valueOf(f.getPath()) + "/inprogress/" + tracker.getProperty("id") + ".XML"));
                                 }
                                 if (new File_S(String.valueOf(f.getPath()) + "/inprogress/").exists()) {
@@ -1251,8 +1377,12 @@ lbl18:
                                             } else {
                                                 delay = System.currentTimeMillis() - ids[xx].lastModified();
                                                 ids[xx].setLastModified(System.currentTimeMillis() + (long)(ServerStatus.IG("resume_idle_job_delay") * 1000));
-                                                Log.log("SERVER", 0, "Resuming idle job...:" + delay + ":" + ids[xx]);
-                                                AdminControls.startJob(f, true, new StringBuffer(ids[xx].getName().substring(0, ids[xx].getName().lastIndexOf("."))), null);
+                                                if (ids[xx].length() > 0x100000L * ServerStatus.LG("max_resume_job_size_mb")) {
+                                                    Log.log("SERVER", 0, "SKIPPING RESUME IDLE JOB!  Too large! :" + ids[xx] + ":" + com.crushftp.client.Common.format_bytes_short(ids[xx].length()) + ", its been sitting idle:" + delay + "ms");
+                                                } else {
+                                                    Log.log("SERVER", 0, "Resuming idle job...:" + ids[xx] + ":" + com.crushftp.client.Common.format_bytes_short(ids[xx].length()) + ", its been sitting idle:" + delay + "ms");
+                                                    AdminControls.startJob(f, true, new StringBuffer(ids[xx].getName().substring(0, ids[xx].getName().lastIndexOf("."))), null);
+                                                }
                                             }
                                         }
                                         ++xx;
@@ -1274,7 +1404,7 @@ lbl18:
                 }
             }
         });
-        this.jobs_resumer_thread.setName("ServerStatus:jobs_resumer");
+        this.jobs_resumer_thread.setName("ServerStatus:jobs_resumer:");
         this.jobs_resumer_thread.setPriority(1);
         this.jobs_resumer_thread.start();
     }
@@ -1295,7 +1425,7 @@ lbl18:
         this.report_scheduler_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 40000, "ServerStatus", "report_scheduler");
         this.report_scheduler_thread = new Thread(the_thread);
-        this.report_scheduler_thread.setName("ServerStatus:report_scheduler");
+        this.report_scheduler_thread.setName("ServerStatus:report_scheduler:");
         this.report_scheduler_thread.setPriority(1);
         this.report_scheduler_thread.start();
     }
@@ -1310,7 +1440,7 @@ lbl18:
         this.scheduler_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 1000, "ServerStatus", "schedules");
         this.scheduler_thread = new Thread(the_thread);
-        this.scheduler_thread.setName("ServerStatus:schedules");
+        this.scheduler_thread.setName("ServerStatus:schedules:");
         this.scheduler_thread.setPriority(1);
         this.scheduler_thread.start();
     }
@@ -1325,7 +1455,7 @@ lbl18:
         this.alerts_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 60000, "ServerStatus", "alerts");
         this.alerts_thread = new Thread(the_thread);
-        this.alerts_thread.setName("ServerStatus:alerts");
+        this.alerts_thread.setName("ServerStatus:alerts:");
         this.alerts_thread.setPriority(1);
         this.alerts_thread.start();
     }
@@ -1340,7 +1470,7 @@ lbl18:
         this.new_version_thread = null;
         UpdateTimer the_thread = new UpdateTimer(this, 60000, "ServerStatus", "new_version");
         this.new_version_thread = new Thread(the_thread);
-        this.new_version_thread.setName("ServerStatus:new_version");
+        this.new_version_thread.setName("ServerStatus:new_version:");
         this.new_version_thread.setPriority(1);
         this.new_version_thread.start();
     }
@@ -1666,7 +1796,7 @@ lbl18:
                     synchronized (x2) {
                         user_info.put("root_dir", "/");
                         ServerStatus.siVG("recent_user_list").remove(user_info);
-                        if (ServerStatus.siVG("recent_user_list").indexOf(user_info) < 0) {
+                        if (ServerStatus.siVG("recent_user_list").indexOf(user_info) < 0 && !user_info.getProperty("hack_username", "false").equals("true")) {
                             ServerStatus.siVG("recent_user_list").addElement(user_info);
                         }
                     }
@@ -1732,6 +1862,10 @@ lbl18:
     }
 
     public void start_all_servers() {
+        this.start_all_servers(false);
+    }
+
+    public void start_all_servers(boolean starts_down_only) {
         try {
             Vector the_server_list = null;
             try {
@@ -1743,7 +1877,10 @@ lbl18:
             }
             int x = 0;
             while (x < the_server_list.size()) {
-                this.start_this_server(x);
+                Properties server_item = (Properties)the_server_list.elementAt(x);
+                if (!starts_down_only || !server_item.getProperty("running", "false").equals("true")) {
+                    this.start_this_server(x);
+                }
                 ++x;
             }
             this.setup_discover_ip_refresh();
@@ -1925,1336 +2062,1510 @@ lbl18:
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     public void update_now(String arg) throws Exception {
-        block275: {
-            Properties pp;
-            block291: {
-                block290: {
-                    block289: {
-                        block288: {
-                            block287: {
-                                Properties info;
-                                long low_memory_trigger_value3;
-                                long low_memory_trigger_value2;
-                                long low_memory_trigger_value1;
-                                block276: {
-                                    block286: {
-                                        block285: {
-                                            block284: {
-                                                block283: {
-                                                    block282: {
-                                                        block281: {
-                                                            block280: {
-                                                                block279: {
-                                                                    Vector password_attempts;
-                                                                    Properties user_info2;
-                                                                    block278: {
-                                                                        block277: {
-                                                                            if (!arg.equals("hammer_timer")) break block277;
-                                                                            ServerStatus.siPUT("hammer_history", "");
-                                                                            break block275;
-                                                                        }
-                                                                        if (!arg.equals("hammer_timer_http")) break block278;
-                                                                        ServerStatus.siPUT("hammer_history_http", "");
-                                                                        break block275;
-                                                                    }
-                                                                    if (!arg.equals("phammer_timer")) break block279;
-                                                                    Properties ips = new Properties();
-                                                                    Vector v = (Vector)ServerStatus.siVG("user_list").clone();
-                                                                    int x = v.size() - 1;
-                                                                    while (x >= 0) {
-                                                                        try {
-                                                                            user_info2 = (Properties)v.elementAt(x);
-                                                                            password_attempts = (Vector)user_info2.get("password_attempts");
-                                                                            if (ips.get(user_info2.getProperty("user_ip")) == null) {
-                                                                                ips.put(user_info2.getProperty("user_ip"), new Vector());
-                                                                                ((Vector)ips.get(user_info2.getProperty("user_ip"))).add(user_info2);
-                                                                            }
-                                                                            ((Vector)ips.get(user_info2.getProperty("user_ip"))).addAll(password_attempts);
-                                                                        }
-                                                                        catch (Exception user_info2) {
-                                                                            // empty catch block
-                                                                        }
-                                                                        --x;
-                                                                    }
-                                                                    x = 0;
-                                                                    while (x < ServerStatus.siVG("recent_user_list").size()) {
-                                                                        try {
-                                                                            user_info2 = (Properties)ServerStatus.siVG("recent_user_list").elementAt(x);
-                                                                            password_attempts = (Vector)user_info2.get("password_attempts");
-                                                                            if (ips.get(user_info2.getProperty("user_ip")) == null) {
-                                                                                ips.put(user_info2.getProperty("user_ip"), new Vector());
-                                                                                ((Vector)ips.get(user_info2.getProperty("user_ip"))).add(user_info2);
-                                                                            }
-                                                                            ((Vector)ips.get(user_info2.getProperty("user_ip"))).addAll(password_attempts);
-                                                                        }
-                                                                        catch (Exception user_info3) {
-                                                                            // empty catch block
-                                                                        }
-                                                                        ++x;
-                                                                    }
-                                                                    Enumeration<Object> keys = ips.keys();
-                                                                    while (keys.hasMoreElements()) {
-                                                                        Properties p2;
-                                                                        String ip = keys.nextElement().toString();
-                                                                        Vector password_attempts2 = (Vector)ips.get(ip);
-                                                                        int count = 0;
-                                                                        int x22 = 1;
-                                                                        while (x22 < password_attempts2.size()) {
-                                                                            long time = Long.parseLong(password_attempts2.elementAt(x22).toString());
-                                                                            if (time > new Date().getTime() - (long)(1000 * ServerStatus.IG("phammer_banning"))) {
-                                                                                ++count;
-                                                                            }
-                                                                            ++x22;
-                                                                        }
-                                                                        if (count <= ServerStatus.IG("phammer_attempts") || !this.ban((Properties)password_attempts2.elementAt(0), ServerStatus.IG("pban_timeout"), true, "password attempts")) continue;
-                                                                        try {
-                                                                            this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|---" + LOC.G("Kicking session because of password hammer trigger.") + "---", "KICK");
-                                                                        }
-                                                                        catch (Exception x22) {
-                                                                            // empty catch block
-                                                                        }
-                                                                        Properties user_info4 = (Properties)password_attempts2.elementAt(0);
-                                                                        SessionCrush thisSession = null;
-                                                                        try {
-                                                                            thisSession = (SessionCrush)user_info4.get("session");
-                                                                        }
-                                                                        catch (Exception e) {
-                                                                            Log.log("BAN", 1, e);
-                                                                        }
-                                                                        this.kick(user_info4);
-                                                                        try {
-                                                                            Vector user_log;
-                                                                            Properties user = null;
-                                                                            String username = "";
-                                                                            boolean fire_event = false;
-                                                                            if (thisSession != null) {
-                                                                                user = thisSession.user;
-                                                                            }
-                                                                            if (user != null) {
-                                                                                username = user.getProperty("user_name", "");
-                                                                            }
-                                                                            if (username.equals("") && user_info4 != null && !user_info4.getProperty("user_name", "").equals("")) {
-                                                                                username = user_info4.getProperty("user_name", "");
-                                                                            } else if (username.equals("") && user_info4 != null && !user_info4.getProperty("username", "").equals("")) {
-                                                                                username = user_info4.getProperty("username", "");
-                                                                            } else if (username.equals("") && user_info4 != null && user_info4.getProperty("user_name", "").equals("") && user_info4.containsKey("request")) {
-                                                                                Properties request = (Properties)user_info4.get("request");
-                                                                                username = request.getProperty("username", "");
-                                                                            } else if (username.equals("") && user_info4 != null && (user_log = (Vector)user_info4.get("user_log")) != null && user_log.size() > 0) {
-                                                                                boolean found = false;
-                                                                                int x3 = user_log.size() - 1;
-                                                                                while (x3 >= 0) {
-                                                                                    Object o = user_log.get(x3);
-                                                                                    if (o != null && o instanceof String && o.toString().startsWith("Password attempt. Username :")) {
-                                                                                        username = o.toString().substring("Password attempt. Username :".length());
-                                                                                        found = true;
-                                                                                        break;
-                                                                                    }
-                                                                                    --x3;
-                                                                                }
-                                                                            }
-                                                                            Log.log("BAN", 1, "Failed logins alert info : Fire event : " + fire_event + " Username : " + username);
-                                                                            if (!fire_event && !username.equals("")) {
-                                                                                Log.log("BAN", 1, "Failed logins alert info : Check if user exits : " + username);
-                                                                                String connectionGroup = "MainUsers";
-                                                                                if (thisSession != null && thisSession.server_item != null) {
-                                                                                    connectionGroup = thisSession.server_item.getProperty("linkedServer");
-                                                                                }
-                                                                                if ((user = UserTools.ut.getUser(connectionGroup, username, false)) != null) {
-                                                                                    user.put("alert_timeout", String.valueOf(ServerStatus.IG("pban_timeout")));
-                                                                                    user_info4.put("alert_timeout", String.valueOf(ServerStatus.IG("pban_timeout")));
-                                                                                    user_info4.put("user_name", username);
-                                                                                    fire_event = true;
-                                                                                    Log.log("BAN", 1, "Failed logins alert info :  Found user : " + username);
-                                                                                } else {
-                                                                                    Log.log("BAN", 1, "Failed logins alert info :  User does not exits : " + username);
-                                                                                }
-                                                                            }
-                                                                            if (fire_event) {
-                                                                                Log.log("BAN", 1, "Failed logins alert info : Run the alert!");
-                                                                                this.runAlerts("ip_banned_logins", user, user_info4, thisSession);
-                                                                            }
-                                                                        }
-                                                                        catch (Exception e) {
-                                                                            Log.log("BAN", 1, e);
-                                                                        }
-                                                                        try {
-                                                                            Properties info2 = new Properties();
-                                                                            info2.put("alert_type", "hammering");
-                                                                            info2.put("alert_sub_type", "password");
-                                                                            info2.put("alert_timeout", String.valueOf(ServerStatus.IG("pban_timeout")));
-                                                                            info2.put("alert_max", String.valueOf(ServerStatus.IG("phammer_attempts")));
-                                                                            info2.put("alert_msg", user_info4.getProperty("user_name"));
-                                                                            this.runAlerts("security_alert", info2, user_info4, thisSession);
-                                                                        }
-                                                                        catch (Exception e) {
-                                                                            Log.log("BAN", 1, e);
-                                                                        }
-                                                                        v = (Vector)ServerStatus.siVG("user_list").clone();
-                                                                        int x4 = v.size() - 1;
-                                                                        while (x4 >= 0) {
-                                                                            try {
-                                                                                p2 = (Properties)v.elementAt(x4);
-                                                                                if (p2.getProperty("user_ip").equals(ip)) {
-                                                                                    ((Vector)p2.get("password_attempts")).removeAllElements();
-                                                                                }
-                                                                            }
-                                                                            catch (Exception p2) {
-                                                                                // empty catch block
-                                                                            }
-                                                                            --x4;
-                                                                        }
-                                                                        x4 = 0;
-                                                                        while (x4 < ServerStatus.siVG("recent_user_list").size()) {
-                                                                            try {
-                                                                                p2 = (Properties)ServerStatus.siVG("recent_user_list").elementAt(x4);
-                                                                                if (p2.getProperty("user_ip").equals(ip)) {
-                                                                                    ((Vector)p2.get("password_attempts")).removeAllElements();
-                                                                                }
-                                                                            }
-                                                                            catch (Exception p3) {
-                                                                                // empty catch block
-                                                                            }
-                                                                            ++x4;
-                                                                        }
-                                                                    }
-                                                                    this.runAlerts("user_hammering", null);
-                                                                    break block275;
-                                                                }
-                                                                if (!arg.equals("report_scheduler")) break block280;
-                                                                this.rt.runScheduledReports(server_settings, this.server_info);
-                                                                break block275;
-                                                            }
-                                                            if (!arg.equals("schedules")) break block281;
-                                                            try {
-                                                                String last_m = this.server_info.getProperty("job_scheduler_last_run_mm", "");
-                                                                SimpleDateFormat mm = new SimpleDateFormat("mm");
-                                                                String current_m = mm.format(new Date());
-                                                                if (!last_m.equals(current_m)) {
-                                                                    this.server_info.put("job_scheduler_last_run_mm", current_m);
-                                                                    Thread.sleep(3000L);
-                                                                    JobScheduler.runSchedules(new Properties());
-                                                                }
-                                                                break block275;
-                                                            }
-                                                            catch (Exception e) {
-                                                                System.out.println("" + new Date());
-                                                                e.printStackTrace();
-                                                                Log.log("SERVER", 0, e);
-                                                            }
-                                                            break block275;
-                                                        }
-                                                        if (!arg.equals("alerts")) break block282;
-                                                        if (this.server_info.get("recent_drives") != null) {
-                                                            ((Properties)this.server_info.get("recent_drives")).clear();
-                                                        }
-                                                        this.runAlerts("disk", null);
-                                                        this.runAlerts("variables", null);
-                                                        break block275;
-                                                    }
-                                                    if (!arg.equals("new_version")) break block283;
-                                                    if (ServerStatus.SG("newversion") == null || ServerStatus.BG("newversion")) {
-                                                        try {
-                                                            Thread.sleep(1000L);
-                                                        }
-                                                        catch (Exception e) {
-                                                            // empty catch block
-                                                        }
-                                                        this.doCheckForUpdate(false);
-                                                        try {
-                                                            Thread.sleep(259200000L);
-                                                        }
-                                                        catch (Exception e) {}
-                                                    }
-                                                    break block275;
-                                                }
-                                                if (arg.equals("stats_saver")) {
-                                                    Thread.sleep(10000L);
-                                                    Object e = this.stats_saver_lock;
-                                                    synchronized (e) {
-                                                        long last_stats_time = Long.parseLong(this.server_info.getProperty("last_stats_time", "0"));
-                                                        if (System.currentTimeMillis() - last_stats_time > 30000L) {
-                                                            if (ServerBeat.current_master && !ServerStatus.BG("disable_stats")) {
-                                                                last_stats_time = System.currentTimeMillis();
-                                                                GregorianCalendar c = new GregorianCalendar();
-                                                                c.setTime(new Date());
-                                                                ((Calendar)c).add(5, ServerStatus.IG("stats_transfer_days") * -1);
-                                                                int last_transfer_rids_size = 1;
-                                                                while (last_transfer_rids_size > 0) {
-                                                                    DVector transfer_rids = this.statTools.executeSqlQuery(ServerStatus.SG("stats_get_transfers_time"), new Object[]{c.getTime()}, false, new Properties(), 1000);
-                                                                    last_transfer_rids_size = transfer_rids.size();
-                                                                    Log.log("STATISTICS", 2, "Stats Transfer Cleanup: Deleting transfer meta " + transfer_rids.size() + " items.");
-                                                                    Thread.currentThread().setName("ServerStatus:stats_saver:stats_get_transfers_time:" + last_transfer_rids_size + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
-                                                                    StringBuffer transferRidsStr = new StringBuffer();
-                                                                    int x = 0;
-                                                                    while (x < transfer_rids.size()) {
-                                                                        Properties p = (Properties)transfer_rids.elementAt(x);
-                                                                        if (x > 0) {
-                                                                            transferRidsStr.append(",");
-                                                                        }
-                                                                        transferRidsStr.append(p.getProperty("RID"));
-                                                                        ++x;
-                                                                    }
-                                                                    transfer_rids.close();
-                                                                    if (transferRidsStr.length() > 0) {
-                                                                        this.statTools.executeSql(Common.replace_str(ServerStatus.SG("stats_delete_meta_transfers"), "%transfers%", transferRidsStr.toString()), new Object[0]);
-                                                                    }
-                                                                    Thread.sleep(1000L);
-                                                                    if (transferRidsStr.toString().length() <= 0) continue;
-                                                                    Thread.currentThread().setName("ServerStatus:stats_saver:stats_delete_transfers_time:" + last_transfer_rids_size + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
-                                                                    String stats_delete_transfers_time = ServerStatus.SG("stats_delete_transfers_time");
-                                                                    stats_delete_transfers_time = stats_delete_transfers_time.indexOf(" and RID ") < 0 ? String.valueOf(stats_delete_transfers_time) + " and RID IN (" + transferRidsStr.toString() + ")" : Common.replace_str(stats_delete_transfers_time, "%transfers%", transferRidsStr.toString());
-                                                                    this.statTools.executeSql(stats_delete_transfers_time, new Object[]{c.getTime()});
-                                                                }
-                                                                c = new GregorianCalendar();
-                                                                c.setTime(new Date());
-                                                                ((Calendar)c).add(5, ServerStatus.IG("stats_session_days") * -1);
-                                                                int last_session_rids_size = 1;
-                                                                while (last_session_rids_size > 0) {
-                                                                    DVector session_rids = this.statTools.executeSqlQuery(ServerStatus.SG("stats_get_sessions_time"), new Object[]{c.getTime()}, false, new Properties(), 1000);
-                                                                    last_session_rids_size = session_rids.size();
-                                                                    Log.log("STATISTICS", 2, "Stats Transfer Cleanup: Deleting sessions " + session_rids.size() + " items.");
-                                                                    Thread.currentThread().setName("ServerStatus:stats_saver:stats_get_sessions_time:" + last_transfer_rids_size + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
-                                                                    StringBuffer sessionRidsStr = new StringBuffer();
-                                                                    int x = 0;
-                                                                    while (x < session_rids.size()) {
-                                                                        Properties p = (Properties)session_rids.elementAt(x);
-                                                                        if (x > 0) {
-                                                                            sessionRidsStr.append(",");
-                                                                        }
-                                                                        sessionRidsStr.append(p.getProperty("RID"));
-                                                                        ++x;
-                                                                    }
-                                                                    session_rids.close();
-                                                                    DVector transfer_rids = new DVector();
-                                                                    if (sessionRidsStr.length() > 0) {
-                                                                        transfer_rids = this.statTools.executeSqlQuery(Common.replace_str(ServerStatus.SG("stats_get_transfers_sessions"), "%sessions%", sessionRidsStr.toString()), new Object[0], false, new Properties(), 1000);
-                                                                    }
-                                                                    Thread.currentThread().setName("ServerStatus:stats_saver:stats_get_transfers_sessions:" + transfer_rids.size() + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
-                                                                    StringBuffer transferRidsStr = new StringBuffer();
-                                                                    int x5 = 0;
-                                                                    while (x5 < transfer_rids.size()) {
-                                                                        Properties p = (Properties)transfer_rids.elementAt(x5);
-                                                                        if (x5 > 0) {
-                                                                            transferRidsStr.append(",");
-                                                                        }
-                                                                        transferRidsStr.append(p.getProperty("RID"));
-                                                                        ++x5;
-                                                                    }
-                                                                    Thread.currentThread().setName("ServerStatus:stats_saver:stats_delete_meta_transfers:" + transfer_rids.size() + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
-                                                                    if (transferRidsStr.length() > 0) {
-                                                                        this.statTools.executeSql(Common.replace_str(ServerStatus.SG("stats_delete_meta_transfers"), "%transfers%", transferRidsStr.toString()), new Object[0]);
-                                                                    }
-                                                                    transfer_rids.close();
-                                                                    Thread.sleep(1000L);
-                                                                    Thread.currentThread().setName("ServerStatus:stats_saver:stats_delete_sessions_time:start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
-                                                                    if (sessionRidsStr.toString().length() <= 0) continue;
-                                                                    String stats_delete_sessions_time = ServerStatus.SG("stats_delete_sessions_time");
-                                                                    stats_delete_sessions_time = stats_delete_sessions_time.indexOf(" and RID ") < 0 ? String.valueOf(stats_delete_sessions_time) + " and RID IN (" + sessionRidsStr.toString() + ")" : Common.replace_str(stats_delete_sessions_time, "%sessions%", sessionRidsStr.toString());
-                                                                    this.statTools.executeSql(stats_delete_sessions_time, new Object[]{c.getTime()});
-                                                                }
-                                                            }
-                                                            this.checkCrushExpiration();
-                                                            if (ServerStatus.BG("allow_session_caching")) {
-                                                                SharedSession.flush();
-                                                            }
-                                                            this.server_info.put("last_stats_time", String.valueOf(System.currentTimeMillis()));
-                                                        }
-                                                        Thread.currentThread().setName("ServerStatus:stats_saver:DONE:start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
-                                                    }
-                                                }
-                                                if (!arg.equals("ban_timer")) break block284;
-                                                Vector ip_vec = (Vector)server_settings.get("ip_restrictions");
-                                                this.common_code.remove_expired_bans(ip_vec);
-                                                server_settings.put("ip_restrictions", ip_vec);
-                                                this.common_code.remove_expired_bans(ServerStatus.siVG("ip_restrictions_temp"));
-                                                break block275;
-                                            }
-                                            if (!arg.equals("cban_timer")) break block285;
-                                            Vector<Properties> kick_list = new Vector<Properties>();
-                                            int x = 0;
-                                            while (x < ServerStatus.siVG("user_list").size()) {
-                                                try {
-                                                    Properties user_info = (Properties)ServerStatus.siVG("user_list").elementAt(x);
-                                                    if (user_info != null) {
-                                                        int search_loc = -1;
-                                                        Vector ip_list = (Vector)server_settings.get("ip_restrictions");
-                                                        int loop = 0;
-                                                        while (loop < ip_list.size()) {
-                                                            Properties ip_data = (Properties)ip_list.elementAt(loop);
-                                                            if ((String.valueOf(ip_data.getProperty("start_ip")) + "," + ip_data.getProperty("stop_ip")).equals(user_info.get("user_ip") + "," + user_info.get("user_ip"))) {
-                                                                search_loc = loop;
-                                                                break;
-                                                            }
-                                                            ++loop;
-                                                        }
-                                                        if (search_loc < 0) {
-                                                            long time_now = new Date().getTime();
-                                                            int xx = 0;
-                                                            while (xx < ((Vector)user_info.get("failed_commands")).size()) {
-                                                                long the_time = Long.parseLong("" + ((Vector)user_info.get("failed_commands")).elementAt(xx));
-                                                                if (time_now - the_time > (long)(ServerStatus.IG("chammer_banning") * 1000)) {
-                                                                    ((Vector)user_info.get("failed_commands")).removeElementAt(xx);
-                                                                    continue;
-                                                                }
-                                                                ++xx;
-                                                            }
-                                                            if (((Vector)user_info.get("failed_commands")).size() >= ServerStatus.IG("chammer_attempts")) {
-                                                                String ip = user_info.getProperty("user_ip");
-                                                                if (!this.ban_ip(ip, ServerStatus.IG("cban_timeout"), false, "failed commands")) continue;
-                                                                ((Vector)user_info.get("failed_commands")).removeAllElements();
-                                                                try {
-                                                                    this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|---IP " + LOC.G("Banned") + "---:" + ip + " for failed commands.", "BAN");
-                                                                }
-                                                                catch (Exception exception) {
-                                                                    // empty catch block
-                                                                }
-                                                                kick_list.addElement(user_info);
-                                                                continue;
-                                                            }
-                                                            ++x;
-                                                            continue;
-                                                        }
-                                                        ++x;
-                                                        continue;
-                                                    }
-                                                    ++x;
-                                                }
-                                                catch (ArrayIndexOutOfBoundsException user_info) {
-                                                    // empty catch block
-                                                }
-                                            }
-                                            int xxx = 0;
-                                            while (xxx < kick_list.size()) {
-                                                try {
-                                                    this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|---" + LOC.G("Kicking sessions because of too many failed commands.") + "---", "KICK");
-                                                }
-                                                catch (Exception search_loc) {
-                                                    // empty catch block
-                                                }
-                                                Properties user_info = (Properties)kick_list.elementAt(xxx);
-                                                this.kick(user_info);
-                                                try {
-                                                    Properties info3 = new Properties();
-                                                    info3.put("alert_type", "hammering");
-                                                    info3.put("alert_sub_type", "command");
-                                                    info3.put("alert_timeout", String.valueOf(ServerStatus.IG("cban_timeout")));
-                                                    info3.put("alert_max", String.valueOf(ServerStatus.IG("chammer_attempts")));
-                                                    info3.put("alert_msg", user_info.getProperty("user_name"));
-                                                    this.runAlerts("security_alert", info3, user_info, null);
-                                                }
-                                                catch (Exception e) {
-                                                    Log.log("BAN", 1, e);
-                                                }
-                                                ++xxx;
-                                            }
-                                            Thread.sleep(5000L);
-                                            break block275;
-                                        }
-                                        if (!arg.equals("discover_ip_timer")) break block286;
-                                        if (ServerStatus.BG("auto_ip_discovery")) {
-                                            this.update_ip();
-                                        }
-                                        if (ServerStatus.BG("v10_beta")) {
-                                            if (this.geoip == null) {
-                                                this.geoip = new GeoIP();
-                                            }
-                                            this.geoip.init(ServerStatus.SG("discovered_ip"));
-                                        }
-                                        Thread.sleep(20000L);
-                                        break block275;
+        if (arg.equals("hammer_timer")) {
+            ServerStatus.siPUT("hammer_history", "");
+        } else if (arg.equals("hammer_timer_http")) {
+            ServerStatus.siPUT("hammer_history_http", "");
+        } else if (arg.equals("phammer_timer")) {
+            Vector password_attempts;
+            Properties user_info2;
+            Properties ips = new Properties();
+            Vector v = (Vector)ServerStatus.siVG("user_list").clone();
+            int x = v.size() - 1;
+            while (x >= 0) {
+                try {
+                    user_info2 = (Properties)v.elementAt(x);
+                    password_attempts = (Vector)user_info2.get("password_attempts");
+                    if (ips.get(user_info2.getProperty("user_ip")) == null) {
+                        ips.put(user_info2.getProperty("user_ip"), new Vector());
+                        ((Vector)ips.get(user_info2.getProperty("user_ip"))).add(user_info2);
+                    }
+                    ((Vector)ips.get(user_info2.getProperty("user_ip"))).addAll(password_attempts);
+                }
+                catch (Exception user_info2) {
+                    // empty catch block
+                }
+                --x;
+            }
+            x = 0;
+            while (x < ServerStatus.siVG("recent_user_list").size()) {
+                try {
+                    user_info2 = (Properties)ServerStatus.siVG("recent_user_list").elementAt(x);
+                    password_attempts = (Vector)user_info2.get("password_attempts");
+                    if (ips.get(user_info2.getProperty("user_ip")) == null) {
+                        ips.put(user_info2.getProperty("user_ip"), new Vector());
+                        ((Vector)ips.get(user_info2.getProperty("user_ip"))).add(user_info2);
+                    }
+                    ((Vector)ips.get(user_info2.getProperty("user_ip"))).addAll(password_attempts);
+                }
+                catch (Exception user_info3) {
+                    // empty catch block
+                }
+                ++x;
+            }
+            int phammer_attempts = (int)ServerStatus.get_partial_val_or_all("phammer_attempts", 1);
+            long phammer_banning = ServerStatus.get_partial_val_or_all("phammer_banning", 1);
+            int pban_timeout = (int)ServerStatus.get_partial_val_or_all("pban_timeout", 1);
+            Enumeration<Object> keys = ips.keys();
+            while (keys.hasMoreElements()) {
+                Properties p2;
+                String ip = keys.nextElement().toString();
+                Vector password_attempts2 = (Vector)ips.get(ip);
+                int count = 0;
+                int x22 = 1;
+                while (x22 < password_attempts2.size()) {
+                    long time = Long.parseLong(password_attempts2.elementAt(x22).toString());
+                    if (time > new Date().getTime() - 1000L * phammer_banning) {
+                        ++count;
+                    }
+                    ++x22;
+                }
+                if (count <= phammer_attempts) continue;
+                Log.log("SERVER", 2, "Attempting to BAN IP for excessive failed logins.");
+                if (!this.ban((Properties)password_attempts2.elementAt(0), pban_timeout, true, "password attempts")) continue;
+                try {
+                    this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|---" + LOC.G("Kicking session because of password hammer trigger.") + "---", "KICK");
+                }
+                catch (Exception x22) {
+                    // empty catch block
+                }
+                Properties user_info4 = (Properties)password_attempts2.elementAt(0);
+                SessionCrush thisSession = null;
+                try {
+                    thisSession = (SessionCrush)user_info4.get("session");
+                }
+                catch (Exception e) {
+                    Log.log("BAN", 1, e);
+                }
+                this.kick(user_info4);
+                try {
+                    Vector user_log;
+                    Properties user = null;
+                    String username = "";
+                    boolean fire_event = false;
+                    if (thisSession != null) {
+                        user = thisSession.user;
+                    }
+                    if (user != null) {
+                        username = user.getProperty("user_name", "");
+                    }
+                    if (username.equals("") && user_info4 != null && !user_info4.getProperty("user_name", "").equals("")) {
+                        username = user_info4.getProperty("user_name", "");
+                    } else if (username.equals("") && user_info4 != null && !user_info4.getProperty("username", "").equals("")) {
+                        username = user_info4.getProperty("username", "");
+                    } else if (username.equals("") && user_info4 != null && user_info4.getProperty("user_name", "").equals("") && user_info4.containsKey("request")) {
+                        Properties request = (Properties)user_info4.get("request");
+                        username = request.getProperty("username", "");
+                    } else if (username.equals("") && user_info4 != null && (user_log = (Vector)user_info4.get("user_log")) != null && user_log.size() > 0) {
+                        boolean found = false;
+                        int x3 = user_log.size() - 1;
+                        while (x3 >= 0) {
+                            Object o = user_log.get(x3);
+                            if (o != null && o instanceof String && o.toString().startsWith("Password attempt. Username :")) {
+                                username = o.toString().substring("Password attempt. Username :".length());
+                                found = true;
+                                break;
+                            }
+                            --x3;
+                        }
+                    }
+                    Log.log("BAN", 1, "Failed logins alert info : Fire event : " + fire_event + " Username : " + username);
+                    if (!fire_event && !username.equals("")) {
+                        Log.log("BAN", 1, "Failed logins alert info : Check if user exits : " + username);
+                        String connectionGroup = "MainUsers";
+                        if (thisSession != null && thisSession.server_item != null) {
+                            connectionGroup = thisSession.server_item.getProperty("linkedServer");
+                        }
+                        if ((user = UserTools.ut.getUser(connectionGroup, username, false)) != null) {
+                            user.put("alert_timeout", String.valueOf(pban_timeout));
+                            user_info4.put("alert_timeout", String.valueOf(pban_timeout));
+                            user_info4.put("user_name", username);
+                            fire_event = true;
+                            Log.log("BAN", 1, "Failed logins alert info :  Found user : " + username);
+                        } else {
+                            Log.log("BAN", 1, "Failed logins alert info :  User does not exits : " + username);
+                        }
+                    }
+                    if (fire_event) {
+                        Log.log("BAN", 1, "Failed logins alert info : Run the alert!");
+                        AlertTools.runAlerts("ip_banned_logins", user, user_info4, user, null, null, com.crushftp.client.Common.dmz_mode);
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("BAN", 1, e);
+                }
+                try {
+                    Properties info = new Properties();
+                    info.put("alert_type", "hammering");
+                    info.put("alert_sub_type", "password");
+                    info.put("alert_timeout", String.valueOf(pban_timeout));
+                    info.put("alert_max", String.valueOf(phammer_attempts));
+                    info.put("alert_msg", user_info4.getProperty("user_name"));
+                    this.runAlerts("security_alert", info, user_info4, thisSession);
+                }
+                catch (Exception e) {
+                    Log.log("BAN", 1, e);
+                }
+                v = (Vector)ServerStatus.siVG("user_list").clone();
+                int x4 = v.size() - 1;
+                while (x4 >= 0) {
+                    try {
+                        p2 = (Properties)v.elementAt(x4);
+                        if (p2.getProperty("user_ip").equals(ip)) {
+                            ((Vector)p2.get("password_attempts")).removeAllElements();
+                        }
+                    }
+                    catch (Exception p2) {
+                        // empty catch block
+                    }
+                    --x4;
+                }
+                x4 = 0;
+                while (x4 < ServerStatus.siVG("recent_user_list").size()) {
+                    try {
+                        p2 = (Properties)ServerStatus.siVG("recent_user_list").elementAt(x4);
+                        if (p2.getProperty("user_ip").equals(ip)) {
+                            ((Vector)p2.get("password_attempts")).removeAllElements();
+                        }
+                    }
+                    catch (Exception p3) {
+                        // empty catch block
+                    }
+                    ++x4;
+                }
+            }
+            this.runAlerts("user_hammering", null);
+        } else if (arg.equals("report_scheduler")) {
+            this.rt.runScheduledReports(server_settings, this.server_info);
+        } else if (arg.equals("schedules")) {
+            try {
+                String last_m = this.server_info.getProperty("job_scheduler_last_run_mm", "");
+                SimpleDateFormat mm = new SimpleDateFormat("mm");
+                String current_m = mm.format(new Date());
+                if (!last_m.equals(current_m)) {
+                    this.server_info.put("job_scheduler_last_run_mm", current_m);
+                    Thread.sleep(3000L);
+                    Worker.startWorker(new Runnable(){
+
+                        @Override
+                        public void run() {
+                            JobScheduler.runSchedules(new Properties());
+                        }
+                    }, "Scanning for jobs that need to be run...(every minute) " + new Date());
+                }
+            }
+            catch (Exception e) {
+                System.out.println("" + new Date());
+                e.printStackTrace();
+                Log.log("SERVER", 0, e);
+            }
+        } else if (arg.equals("alerts")) {
+            if (this.server_info.get("recent_drives") != null) {
+                ((Properties)this.server_info.get("recent_drives")).clear();
+            }
+            this.runAlerts("disk", null);
+            this.runAlerts("variables", null);
+        } else if (arg.equals("new_version")) {
+            if (ServerStatus.SG("newversion") == null || ServerStatus.BG("newversion")) {
+                try {
+                    Thread.sleep(1000L);
+                }
+                catch (Exception e) {
+                    // empty catch block
+                }
+                this.doCheckForUpdate(false);
+                try {
+                    Thread.sleep(259200000L);
+                }
+                catch (Exception e) {}
+            }
+        } else {
+            if (arg.equals("stats_saver")) {
+                Thread.sleep(10000L);
+                Object e = this.stats_saver_lock;
+                synchronized (e) {
+                    long last_stats_time = Long.parseLong(this.server_info.getProperty("last_stats_time", "0"));
+                    if (System.currentTimeMillis() - last_stats_time > 30000L) {
+                        if (ServerBeat.current_master && !ServerStatus.BG("disable_stats")) {
+                            last_stats_time = System.currentTimeMillis();
+                            GregorianCalendar c = new GregorianCalendar();
+                            c.setTime(new Date());
+                            ((Calendar)c).add(5, ServerStatus.IG("stats_transfer_days") * -1);
+                            int last_transfer_rids_size = 1;
+                            while (last_transfer_rids_size > 0) {
+                                DVector transfer_rids = this.statTools.executeSqlQuery(ServerStatus.SG("stats_get_transfers_time"), new Object[]{c.getTime()}, false, new Properties(), 1000);
+                                last_transfer_rids_size = transfer_rids.size();
+                                Log.log("STATISTICS", 2, "Stats Transfer Cleanup: Deleting transfer meta " + transfer_rids.size() + " items.");
+                                Thread.currentThread().setName("ServerStatus:stats_saver:stats_get_transfers_time:" + last_transfer_rids_size + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
+                                StringBuffer transferRidsStr = new StringBuffer();
+                                int x = 0;
+                                while (x < transfer_rids.size()) {
+                                    Properties p = (Properties)transfer_rids.elementAt(x);
+                                    if (x > 0) {
+                                        transferRidsStr.append(",");
                                     }
-                                    if (!arg.equals("update_2_timer")) break block287;
-                                    try {
-                                        if (this.prefsProvider.getPrefsTime(null) == ServerStatus.siLG("currentFileDate") && this.last_logging_provider2.equalsIgnoreCase(ServerStatus.SG("logging_provider"))) break block276;
-                                        Thread.sleep(2000L);
-                                        Object kick_list = GenericServer.updateServerStatuses;
-                                        synchronized (kick_list) {
-                                            Properties previousObject = server_settings;
-                                            Vector pref_server_items = (Vector)server_settings.get("server_list");
-                                            String prevServeritemsStr = "";
-                                            int x = 0;
-                                            while (x < pref_server_items.size()) {
-                                                Properties the_server = (Properties)((Properties)pref_server_items.elementAt(x)).clone();
-                                                prevServeritemsStr = GenericServer.getPropertiesHash(the_server);
-                                                ++x;
-                                            }
-                                            prevServeritemsStr = Common.replace_str(prevServeritemsStr, "null", "");
-                                            this.init_setup(false);
-                                            Common.updateObjectLog(server_settings, previousObject, null);
-                                            pref_server_items = (Vector)server_settings.get("server_list");
-                                            String newServerItemsStr = "";
-                                            int x6 = 0;
-                                            while (x6 < pref_server_items.size()) {
-                                                Properties the_server = (Properties)((Properties)pref_server_items.elementAt(x6)).clone();
-                                                newServerItemsStr = GenericServer.getPropertiesHash(the_server);
-                                                ++x6;
-                                            }
-                                            newServerItemsStr = Common.replace_str(newServerItemsStr, "null", "");
-                                            boolean doServerBounce = false;
-                                            if (!newServerItemsStr.equals(prevServeritemsStr)) {
-                                                doServerBounce = true;
-                                            }
-                                            if (doServerBounce) {
-                                                this.stop_all_servers();
-                                            }
-                                            server_settings = previousObject;
-                                            pref_server_items = (Vector)server_settings.get("server_list");
-                                            int x7 = 0;
-                                            while (x7 < pref_server_items.size()) {
-                                                Properties the_server = (Properties)pref_server_items.elementAt(x7);
-                                                if (the_server.containsKey("encryptKeystorePasswords")) {
-                                                    the_server.remove("encryptKeystorePasswords");
-                                                    the_server.put("customKeystorePass", this.common_code.encode_pass(the_server.getProperty("customKeystorePass"), "DES", ""));
-                                                    the_server.put("customKeystoreCertPass", this.common_code.encode_pass(the_server.getProperty("customKeystoreCertPass"), "DES", ""));
-                                                }
-                                                ++x7;
-                                            }
-                                            this.setup_hammer_banning();
-                                            this.setup_ban_timer();
-                                            this.setup_discover_ip_refresh();
-                                            this.setup_log_rolling();
-                                            this.setup_http_cleaner();
-                                            this.setup_stats_saver();
-                                            this.setup_jobs_resumer();
-                                            this.setup_report_scheduler();
-                                            if (doServerBounce) {
-                                                this.start_all_servers();
-                                            }
-                                            this.server_info.put("currentFileDate", String.valueOf(this.prefsProvider.getPrefsTime(null)));
-                                            this.setupGlobalPrefs();
-                                        }
-                                    }
-                                    catch (Exception e) {
-                                        Log.log("SERVER", 0, "Prefs.XML was corrupt again.  Could not read changes made...");
-                                        Log.log("SERVER", 0, e);
-                                    }
+                                    transferRidsStr.append(p.getProperty("RID"));
+                                    ++x;
                                 }
-                                if (ServerStatus.siBG("refresh_users")) {
-                                    Vector v = (Vector)ServerStatus.siVG("user_list").clone();
-                                    int x = v.size() - 1;
-                                    while (x >= 0) {
+                                transfer_rids.close();
+                                if (transferRidsStr.length() > 0) {
+                                    this.statTools.executeSql(Common.replace_str(ServerStatus.SG("stats_delete_meta_transfers"), "%transfers%", transferRidsStr.toString()), new Object[0]);
+                                }
+                                Thread.sleep(1000L);
+                                if (transferRidsStr.toString().length() <= 0) continue;
+                                Thread.currentThread().setName("ServerStatus:stats_saver:stats_delete_transfers_time:" + last_transfer_rids_size + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
+                                String stats_delete_transfers_time = ServerStatus.SG("stats_delete_transfers_time");
+                                stats_delete_transfers_time = stats_delete_transfers_time.indexOf(" and RID ") < 0 ? String.valueOf(stats_delete_transfers_time) + " and RID IN (" + transferRidsStr.toString() + ")" : Common.replace_str(stats_delete_transfers_time, "%transfers%", transferRidsStr.toString());
+                                this.statTools.executeSql(stats_delete_transfers_time, new Object[]{c.getTime()});
+                            }
+                            c = new GregorianCalendar();
+                            c.setTime(new Date());
+                            ((Calendar)c).add(5, ServerStatus.IG("stats_session_days") * -1);
+                            int last_session_rids_size = 1;
+                            while (last_session_rids_size > 0) {
+                                DVector session_rids = this.statTools.executeSqlQuery(ServerStatus.SG("stats_get_sessions_time"), new Object[]{c.getTime()}, false, new Properties(), 1000);
+                                last_session_rids_size = session_rids.size();
+                                Log.log("STATISTICS", 2, "Stats Transfer Cleanup: Deleting sessions " + session_rids.size() + " items.");
+                                Thread.currentThread().setName("ServerStatus:stats_saver:stats_get_sessions_time:" + last_transfer_rids_size + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
+                                StringBuffer sessionRidsStr = new StringBuffer();
+                                int x = 0;
+                                while (x < session_rids.size()) {
+                                    Properties p = (Properties)session_rids.elementAt(x);
+                                    if (x > 0) {
+                                        sessionRidsStr.append(",");
+                                    }
+                                    sessionRidsStr.append(p.getProperty("RID"));
+                                    ++x;
+                                }
+                                session_rids.close();
+                                DVector transfer_rids = new DVector();
+                                if (sessionRidsStr.length() > 0) {
+                                    transfer_rids = this.statTools.executeSqlQuery(Common.replace_str(ServerStatus.SG("stats_get_transfers_sessions"), "%sessions%", sessionRidsStr.toString()), new Object[0], false, new Properties(), 1000);
+                                }
+                                Thread.currentThread().setName("ServerStatus:stats_saver:stats_get_transfers_sessions:" + transfer_rids.size() + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
+                                StringBuffer transferRidsStr = new StringBuffer();
+                                int x5 = 0;
+                                while (x5 < transfer_rids.size()) {
+                                    Properties p = (Properties)transfer_rids.elementAt(x5);
+                                    if (x5 > 0) {
+                                        transferRidsStr.append(",");
+                                    }
+                                    transferRidsStr.append(p.getProperty("RID"));
+                                    ++x5;
+                                }
+                                Thread.currentThread().setName("ServerStatus:stats_saver:stats_delete_meta_transfers:" + transfer_rids.size() + ":start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
+                                if (transferRidsStr.length() > 0) {
+                                    this.statTools.executeSql(Common.replace_str(ServerStatus.SG("stats_delete_meta_transfers"), "%transfers%", transferRidsStr.toString()), new Object[0]);
+                                }
+                                transfer_rids.close();
+                                Thread.sleep(1000L);
+                                Thread.currentThread().setName("ServerStatus:stats_saver:stats_delete_sessions_time:start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
+                                if (sessionRidsStr.toString().length() <= 0) continue;
+                                String stats_delete_sessions_time = ServerStatus.SG("stats_delete_sessions_time");
+                                stats_delete_sessions_time = stats_delete_sessions_time.indexOf(" and RID ") < 0 ? String.valueOf(stats_delete_sessions_time) + " and RID IN (" + sessionRidsStr.toString() + ")" : Common.replace_str(stats_delete_sessions_time, "%sessions%", sessionRidsStr.toString());
+                                this.statTools.executeSql(stats_delete_sessions_time, new Object[]{c.getTime()});
+                            }
+                        }
+                        this.checkCrushExpiration();
+                        if (ServerStatus.BG("allow_session_caching")) {
+                            SharedSession.flush();
+                        }
+                        this.server_info.put("last_stats_time", String.valueOf(System.currentTimeMillis()));
+                    }
+                    Thread.currentThread().setName("ServerStatus:stats_saver:DONE:start_time=" + new Date(last_stats_time) + ":elapsed=" + (System.currentTimeMillis() - last_stats_time) / 1000L + "secs");
+                }
+            }
+            if (arg.equals("ban_timer")) {
+                Vector ip_vec = (Vector)server_settings.get("ip_restrictions");
+                this.common_code.remove_expired_bans(ip_vec);
+                server_settings.put("ip_restrictions", ip_vec);
+                this.common_code.remove_expired_bans(ServerStatus.siVG("ip_restrictions_temp"));
+            } else if (arg.equals("cban_timer")) {
+                Vector<Properties> kick_list = new Vector<Properties>();
+                int x = 0;
+                while (x < ServerStatus.siVG("user_list").size()) {
+                    try {
+                        Properties user_info = (Properties)ServerStatus.siVG("user_list").elementAt(x);
+                        if (user_info != null) {
+                            int search_loc = -1;
+                            Vector ip_list = (Vector)server_settings.get("ip_restrictions");
+                            int loop = 0;
+                            while (loop < ip_list.size()) {
+                                Properties ip_data = (Properties)ip_list.elementAt(loop);
+                                if ((String.valueOf(ip_data.getProperty("start_ip")) + "," + ip_data.getProperty("stop_ip")).equals(user_info.get("user_ip") + "," + user_info.get("user_ip"))) {
+                                    search_loc = loop;
+                                    break;
+                                }
+                                ++loop;
+                            }
+                            if (search_loc < 0) {
+                                long time_now = new Date().getTime();
+                                int xx = 0;
+                                while (xx < ((Vector)user_info.get("failed_commands")).size()) {
+                                    long the_time = Long.parseLong("" + ((Vector)user_info.get("failed_commands")).elementAt(xx));
+                                    if (time_now - the_time > (long)(ServerStatus.IG("chammer_banning") * 1000)) {
+                                        ((Vector)user_info.get("failed_commands")).removeElementAt(xx);
+                                        continue;
+                                    }
+                                    ++xx;
+                                }
+                                if (((Vector)user_info.get("failed_commands")).size() >= ServerStatus.IG("chammer_attempts")) {
+                                    String ip = user_info.getProperty("user_ip");
+                                    if (!this.ban_ip(ip, ServerStatus.IG("cban_timeout"), false, "failed commands")) continue;
+                                    ((Vector)user_info.get("failed_commands")).removeAllElements();
+                                    try {
+                                        this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|---IP " + LOC.G("Banned") + "---:" + ip + " for failed commands.", "BAN");
+                                    }
+                                    catch (Exception transferRidsStr) {
+                                        // empty catch block
+                                    }
+                                    kick_list.addElement(user_info);
+                                    continue;
+                                }
+                                ++x;
+                                continue;
+                            }
+                            ++x;
+                            continue;
+                        }
+                        ++x;
+                    }
+                    catch (ArrayIndexOutOfBoundsException user_info) {
+                        // empty catch block
+                    }
+                }
+                int xxx = 0;
+                while (xxx < kick_list.size()) {
+                    try {
+                        this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|---" + LOC.G("Kicking sessions because of too many failed commands.") + "---", "KICK");
+                    }
+                    catch (Exception search_loc) {
+                        // empty catch block
+                    }
+                    Properties user_info = (Properties)kick_list.elementAt(xxx);
+                    this.kick(user_info);
+                    try {
+                        Properties info = new Properties();
+                        info.put("alert_type", "hammering");
+                        info.put("alert_sub_type", "command");
+                        info.put("alert_timeout", String.valueOf(ServerStatus.IG("cban_timeout")));
+                        info.put("alert_max", String.valueOf(ServerStatus.IG("chammer_attempts")));
+                        info.put("alert_msg", user_info.getProperty("user_name"));
+                        this.runAlerts("security_alert", info, user_info, null);
+                    }
+                    catch (Exception e) {
+                        Log.log("BAN", 1, e);
+                    }
+                    ++xxx;
+                }
+                Thread.sleep(5000L);
+            } else if (arg.equals("discover_ip_timer")) {
+                if (ServerStatus.BG("auto_ip_discovery")) {
+                    this.update_ip();
+                }
+                this.geoip.init(ServerStatus.SG("discovered_ip"));
+                Thread.sleep(20000L);
+            } else if (arg.equals("update_2_timer")) {
+                long low_memory_trigger_value3;
+                long low_memory_trigger_value2;
+                long low_memory_trigger_value1;
+                block274: {
+                    try {
+                        if (this.prefsProvider.getPrefsTime(null) == ServerStatus.siLG("currentFileDate") && this.last_logging_provider2.equalsIgnoreCase(ServerStatus.SG("logging_provider"))) break block274;
+                        Thread.sleep(2000L);
+                        Object kick_list = GenericServer.updateServerStatuses;
+                        synchronized (kick_list) {
+                            Properties previousObject = server_settings;
+                            Vector pref_server_items = (Vector)server_settings.get("server_list");
+                            String prevServeritemsStr = "";
+                            int x = 0;
+                            while (x < pref_server_items.size()) {
+                                Properties the_server = (Properties)((Properties)pref_server_items.elementAt(x)).clone();
+                                prevServeritemsStr = GenericServer.getPropertiesHash(the_server);
+                                ++x;
+                            }
+                            prevServeritemsStr = Common.replace_str(prevServeritemsStr, "null", "");
+                            this.init_setup(false);
+                            Common.updateObjectLog(server_settings, previousObject, null);
+                            pref_server_items = (Vector)server_settings.get("server_list");
+                            String newServerItemsStr = "";
+                            int x6 = 0;
+                            while (x6 < pref_server_items.size()) {
+                                Properties the_server = (Properties)((Properties)pref_server_items.elementAt(x6)).clone();
+                                newServerItemsStr = GenericServer.getPropertiesHash(the_server);
+                                ++x6;
+                            }
+                            newServerItemsStr = Common.replace_str(newServerItemsStr, "null", "");
+                            boolean doServerBounce = false;
+                            if (!newServerItemsStr.equals(prevServeritemsStr)) {
+                                doServerBounce = true;
+                            }
+                            if (doServerBounce) {
+                                this.stop_all_servers();
+                            }
+                            server_settings = previousObject;
+                            pref_server_items = (Vector)server_settings.get("server_list");
+                            int x7 = 0;
+                            while (x7 < pref_server_items.size()) {
+                                Properties the_server = (Properties)pref_server_items.elementAt(x7);
+                                if (the_server.containsKey("encryptKeystorePasswords")) {
+                                    the_server.remove("encryptKeystorePasswords");
+                                    the_server.put("customKeystorePass", this.common_code.encode_pass(the_server.getProperty("customKeystorePass"), "DES", ""));
+                                    the_server.put("customKeystoreCertPass", this.common_code.encode_pass(the_server.getProperty("customKeystoreCertPass"), "DES", ""));
+                                }
+                                ++x7;
+                            }
+                            this.setup_hammer_banning();
+                            this.setup_ban_timer();
+                            this.setup_discover_ip_refresh();
+                            this.setup_log_rolling();
+                            this.setup_http_cleaner();
+                            this.setup_stats_saver();
+                            this.setup_jobs_resumer();
+                            this.setup_report_scheduler();
+                            if (doServerBounce) {
+                                this.start_all_servers();
+                            }
+                            this.server_info.put("currentFileDate", String.valueOf(this.prefsProvider.getPrefsTime(null)));
+                            this.setupGlobalPrefs();
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("SERVER", 0, "Prefs.XML was corrupt again.  Could not read changes made...");
+                        Log.log("SERVER", 0, e);
+                    }
+                }
+                if (new File_S("./reload_ssl").exists()) {
+                    new File_S("./reload_ssl").delete();
+                    int x = this.main_servers.size() - 1;
+                    while (x >= 0) {
+                        GenericServer gs = (GenericServer)this.main_servers.elementAt(x);
+                        if (!(gs instanceof ServerBeat)) {
+                            if (gs.server_item.getProperty("serverType", "").equalsIgnoreCase("HTTPS") && gs.server_item.getProperty("enabled", "true").equals("true")) {
+                                this.start_this_server(x);
+                            } else if (gs.server_item.getProperty("serverType", "").equalsIgnoreCase("FTPS") && gs.server_item.getProperty("enabled", "true").equals("true")) {
+                                this.start_this_server(x);
+                            } else if (gs.server_item.getProperty("serverType", "").toUpperCase().indexOf("DMZ") >= 0 && gs.server_item.getProperty("enabled", "true").equals("true")) {
+                                DMZServerCommon.load_and_send_prefs(false, gs.server_item);
+                            }
+                        }
+                        --x;
+                    }
+                }
+                if (new File_S("./ports_restart").exists()) {
+                    new File_S("./ports_restart").delete();
+                    this.stop_all_servers();
+                    this.start_all_servers();
+                }
+                if (new File_S("./ports_stop").exists()) {
+                    new File_S("./ports_stop").delete();
+                    this.stop_all_servers();
+                }
+                if (new File_S("./ports_start").exists()) {
+                    new File_S("./ports_start").delete();
+                    this.start_all_servers();
+                }
+                if (new File_S("./restart_idle").exists()) {
+                    new File_S("./restart_idle").delete();
+                    AdminControls.restartIdle(new Properties(), "(CONNECT)");
+                }
+                if (new File_S("./shutdown_idle").exists()) {
+                    new File_S("./shutdown_idle").delete();
+                    AdminControls.shutdownIdle(new Properties(), "(CONNECT)");
+                }
+                if (new File_S("./stop_logins").exists()) {
+                    new File_S("./stop_logins").delete();
+                    AdminControls.stopLogins(new Properties(), "(CONNECT)");
+                }
+                if (new File_S("./" + System.getProperty("appname", "CrushFTP").toLowerCase() + "_restart").exists()) {
+                    new File_S("./" + System.getProperty("appname", "CrushFTP").toLowerCase() + "_restart").delete();
+                    this.restart_crushftp();
+                }
+                if (new File_S("./" + System.getProperty("appname", "CrushFTP").toLowerCase() + "_quit").exists()) {
+                    new File_S("./" + System.getProperty("appname", "CrushFTP").toLowerCase() + "_quit").delete();
+                    this.quit_server(true);
+                }
+                if (new File_S("./" + System.getProperty("appname", "CrushFTP").toLowerCase() + "_update").exists()) {
+                    new File_S("./" + System.getProperty("appname", "CrushFTP").toLowerCase() + "_update").delete();
+                    this.do_auto_update_early(false, false);
+                }
+                if (ServerStatus.siBG("refresh_users")) {
+                    Vector v = (Vector)ServerStatus.siVG("user_list").clone();
+                    int x = v.size() - 1;
+                    while (x >= 0) {
+                        try {
+                            Properties p = (Properties)v.elementAt(x);
+                            p.put("refresh_user", "true");
+                        }
+                        catch (Exception p) {
+                            // empty catch block
+                        }
+                        --x;
+                    }
+                    ServerStatus.siPUT("refresh_users", "false");
+                }
+                if (ServerStatus.siOG("waiting_quit_user_name") != null && System.getProperty("crushftp.security.stop_start", "true").equals("true")) {
+                    try {
+                        if (ServerStatus.siVG("user_list").indexOf((Properties)ServerStatus.siOG("waiting_quit_user_name")) < 0) {
+                            this.quit_server(false);
+                        }
+                    }
+                    catch (Exception v) {
+                        // empty catch block
+                    }
+                }
+                if (ServerStatus.siOG("waiting_restart_user_name") != null && System.getProperty("crushftp.security.stop_start", "true").equals("true")) {
+                    try {
+                        if (ServerStatus.siVG("user_list").indexOf((Properties)ServerStatus.siOG("waiting_restart_user_name")) < 0) {
+                            this.restart_crushftp();
+                        }
+                    }
+                    catch (Exception v) {
+                        // empty catch block
+                    }
+                }
+                if (ServerStatus.siBG("update_when_idle")) {
+                    try {
+                        if (!this.starting && ServerStatus.count_users_down() == 0 && ServerStatus.count_users_up() == 0 && ServerStatus.siVG("running_tasks").size() == 0) {
+                            this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********Server is Idle...updating******** " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str"), "QUIT_SERVER");
+                            ServerStatus.siPUT("allow_logins", "false");
+                            ServerStatus.siPUT("update_when_idle", "false");
+                            if (!com.crushftp.client.Common.dmz_mode) {
+                                String instance = "";
+                                Vector server_list = ServerStatus.VG("server_list");
+                                int x = 0;
+                                while (x < server_list.size()) {
+                                    Properties server_item = (Properties)server_list.elementAt(x);
+                                    if (server_item.getProperty("serverType", "").equalsIgnoreCase("DMZ") && server_item.getProperty("enabled", "true").equals("true")) {
+                                        instance = server_item.getProperty("server_item_name");
+                                        this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********Server is Idle...updating DMZ(" + instance + ")********", "QUIT_SERVER");
+                                        Properties request = new Properties();
+                                        request.put("command", "adminAction");
+                                        request.put("action", "stopAllServers");
+                                        request.put("instance", instance);
+                                        AdminControls.handleInstance(request, "(CONNECT)");
+                                        request = new Properties();
+                                        request.put("command", "updateNow");
+                                        request.put("single_thread", "true");
+                                        request.put("instance", instance);
+                                        AdminControls.handleInstance(request, "(CONNECT)", 120);
+                                    }
+                                    ++x;
+                                }
+                            }
+                            this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********Server is Idle...updating MAIN******** " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str"), "QUIT_SERVER");
+                            this.do_auto_update_early(false, false);
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("SERVER", 0, e);
+                    }
+                }
+                if (ServerStatus.siBG("restart_when_idle") && System.getProperty("crushftp.security.stop_start", "true").equals("true")) {
+                    try {
+                        if (!this.starting && ServerStatus.count_users_down() == 0 && ServerStatus.count_users_up() == 0 && ServerStatus.siVG("running_tasks").size() == 0) {
+                            this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********Server is Idle...restarting******** " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str"), "QUIT_SERVER");
+                            ServerStatus.siPUT("restart_when_idle", "false");
+                            this.restart_crushftp();
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("SERVER", 0, e);
+                    }
+                }
+                if (ServerStatus.siBG("shutdown_when_idle") && System.getProperty("crushftp.security.stop_start", "true").equals("true")) {
+                    try {
+                        if (!this.starting && ServerStatus.count_users_down() == 0 && ServerStatus.count_users_up() == 0 && ServerStatus.siVG("running_tasks").size() == 0) {
+                            this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********Server is Idle...shutting down******** " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str"), "QUIT_SERVER");
+                            ServerStatus.siPUT("shutdown_when_idle", "false");
+                            this.quit_server(false);
+                        }
+                    }
+                    catch (Exception e) {
+                        Log.log("SERVER", 0, e);
+                    }
+                }
+                this.setupGlobalPrefs();
+                if (this.loggingProvider1 != null) {
+                    this.loggingProvider1.checkLogPath();
+                }
+                if (this.loggingProvider2 != null) {
+                    this.loggingProvider2.checkLogPath();
+                }
+                if (!this.server_info.containsKey("last_job_cache_clean")) {
+                    this.server_info.put("last_job_cache_clean", String.valueOf(System.currentTimeMillis() - 10000L));
+                }
+                if (Long.parseLong(this.server_info.getProperty("last_job_cache_clean")) < System.currentTimeMillis() - 60000L * ServerStatus.LG("job_cache_update_interval_minutes")) {
+                    this.server_info.put("last_job_cache_clean", String.valueOf(System.currentTimeMillis()));
+                    Worker.startWorker(new Runnable(){
+
+                        @Override
+                        public void run() {
+                            JobScheduler.refreshJobsCache();
+                        }
+                    }, "last_job_cache_clean:" + JobScheduler.jobs_summary_cache_size + " items");
+                }
+                if (!this.server_info.containsKey("last_expired_accounts_check")) {
+                    this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis() - 60000L));
+                }
+                if (Long.parseLong(this.server_info.getProperty("last_expired_accounts_check")) < System.currentTimeMillis() - 3600000L || server_settings.getProperty("expired_accounts_notify_now").equals("true") && Long.parseLong(this.server_info.getProperty("last_expired_accounts_check")) < System.currentTimeMillis() - 60000L || server_settings.getProperty("expired_passwords_notify_now").equals("true") && Long.parseLong(this.server_info.getProperty("last_expired_accounts_check")) < System.currentTimeMillis() - 60000L) {
+                    this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis()));
+                    Worker.startWorker(new Runnable(){
+
+                        @Override
+                        public void run() {
+                            Log.log("SERVER", 2, "Checking for expired accounts...");
+                            String username = "";
+                            try {
+                                Vector sgs = (Vector)server_settings.get("server_groups");
+                                int x = 0;
+                                while (x < sgs.size()) {
+                                    String serverGroup = sgs.elementAt(x).toString();
+                                    Log.log("SERVER", 2, "Checking for expired accounts:" + serverGroup);
+                                    Vector v = new Vector();
+                                    UserTools.refreshUserList(serverGroup, v);
+                                    int xx = 0;
+                                    while (xx < v.size()) {
+                                        ServerStatus.this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis()));
+                                        username = v.elementAt(xx).toString();
                                         try {
-                                            Properties p = (Properties)v.elementAt(x);
-                                            p.put("refresh_user", "true");
-                                        }
-                                        catch (Exception p) {
-                                            // empty catch block
-                                        }
-                                        --x;
-                                    }
-                                    ServerStatus.siPUT("refresh_users", "false");
-                                }
-                                if (ServerStatus.siOG("waiting_quit_user_name") != null) {
-                                    try {
-                                        if (ServerStatus.siVG("user_list").indexOf((Properties)ServerStatus.siOG("waiting_quit_user_name")) < 0) {
-                                            this.quit_server();
-                                        }
-                                    }
-                                    catch (Exception v) {
-                                        // empty catch block
-                                    }
-                                }
-                                if (ServerStatus.siOG("waiting_restart_user_name") != null) {
-                                    try {
-                                        if (ServerStatus.siVG("user_list").indexOf((Properties)ServerStatus.siOG("waiting_restart_user_name")) < 0) {
-                                            this.restart_crushftp();
-                                        }
-                                    }
-                                    catch (Exception v) {
-                                        // empty catch block
-                                    }
-                                }
-                                if (ServerStatus.siBG("restart_when_idle")) {
-                                    try {
-                                        if (!this.starting && ServerStatus.count_users_down() == 0 && ServerStatus.count_users_up() == 0 && ServerStatus.siVG("running_tasks").size() == 0) {
-                                            this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********Server is Idle...restarting******** " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str"), "QUIT_SERVER");
-                                            ServerStatus.siPUT("restart_when_idle", "false");
-                                            this.restart_crushftp();
-                                        }
-                                    }
-                                    catch (Exception v) {
-                                        // empty catch block
-                                    }
-                                }
-                                if (ServerStatus.siBG("shutdown_when_idle")) {
-                                    try {
-                                        if (!this.starting && ServerStatus.count_users_down() == 0 && ServerStatus.count_users_up() == 0 && ServerStatus.siVG("running_tasks").size() == 0) {
-                                            this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********Server is Idle...shutting down******** " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str"), "QUIT_SERVER");
-                                            ServerStatus.siPUT("shutdown_when_idle", "false");
-                                            this.quit_server();
-                                        }
-                                    }
-                                    catch (Exception v) {
-                                        // empty catch block
-                                    }
-                                }
-                                this.setupGlobalPrefs();
-                                if (this.loggingProvider1 != null) {
-                                    this.loggingProvider1.checkLogPath();
-                                }
-                                if (this.loggingProvider2 != null) {
-                                    this.loggingProvider2.checkLogPath();
-                                }
-                                if (!this.server_info.containsKey("last_expired_accounts_check")) {
-                                    this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis() - 60000L));
-                                }
-                                if (Long.parseLong(this.server_info.getProperty("last_expired_accounts_check")) < System.currentTimeMillis() - 3600000L || server_settings.getProperty("expired_accounts_notify_now").equals("true") && Long.parseLong(this.server_info.getProperty("last_expired_accounts_check")) < System.currentTimeMillis() - 60000L || server_settings.getProperty("expired_passwords_notify_now").equals("true") && Long.parseLong(this.server_info.getProperty("last_expired_accounts_check")) < System.currentTimeMillis() - 60000L) {
-                                    this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis()));
-                                    Worker.startWorker(new Runnable(){
-
-                                        @Override
-                                        public void run() {
-                                            Log.log("SERVER", 2, "Checking for expired accounts...");
-                                            String username = "";
-                                            try {
-                                                Vector sgs = (Vector)server_settings.get("server_groups");
-                                                int x = 0;
-                                                while (x < sgs.size()) {
-                                                    String serverGroup = sgs.elementAt(x).toString();
-                                                    Log.log("SERVER", 2, "Checking for expired accounts:" + serverGroup);
-                                                    Vector v = new Vector();
-                                                    UserTools.refreshUserList(serverGroup, v);
-                                                    int xx = 0;
-                                                    while (xx < v.size()) {
-                                                        ServerStatus.this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis()));
-                                                        username = v.elementAt(xx).toString();
-                                                        try {
-                                                            Vector items;
-                                                            Properties info;
-                                                            Properties event;
-                                                            SimpleDateFormat sdf_compare;
-                                                            Vector items2;
-                                                            Properties info2;
-                                                            Properties event2;
-                                                            SimpleDateFormat midnight;
-                                                            int days;
-                                                            GregorianCalendar gc;
-                                                            Properties user = UserTools.ut.getUser(serverGroup, username, false);
-                                                            if (user != null) {
-                                                                Log.log("SERVER", 2, "Checking for expired accounts:" + serverGroup + ":" + username + ":" + user.getProperty("password_expire_advance_days_sent2", "") + ":" + user.getProperty("password_expire_advance_days_notify", ""));
-                                                            }
-                                                            if (!(user == null || user.getProperty("password_expire_advance_days_sent2", "").equals("true") || user.getProperty("password_expire_advance_days_notify", "").equals("") || user.getProperty("password_expire_advance_days_notify", "").equals("0"))) {
-                                                                gc = new GregorianCalendar();
-                                                                gc.setTime(new Date());
-                                                                days = Integer.parseInt(user.getProperty("password_expire_advance_days_notify"));
-                                                                gc.add(5, days);
-                                                                midnight = new SimpleDateFormat("MMddyy");
-                                                                gc.setTime(midnight.parse(midnight.format(gc.getTime())));
-                                                                gc.add(5, 1);
-                                                                gc.add(13, -1);
-                                                                if (ServerStatus.this.common_code.check_date_expired(user.getProperty("expire_password_when"), gc.getTime().getTime())) {
-                                                                    Log.log("SERVER", 0, "Notify expired password in advance days:" + serverGroup + "/" + username + ":days:" + days);
-                                                                    event2 = new Properties();
-                                                                    event2.put("event_plugin_list", user.getProperty("password_expire_notify_task"));
-                                                                    event2.put("name", "PasswordExpireNotify:" + username + ":" + user.getProperty("expire_password_when", ""));
-                                                                    info2 = new Properties();
-                                                                    info2.put("user", user);
-                                                                    info2.put("user_info", user);
-                                                                    items2 = new Vector();
-                                                                    ServerStatus.thisObj.events6.doEventPlugin(info2, event2, null, items2);
-                                                                    user.setProperty("password_expire_advance_days_sent2", "true");
-                                                                    UserTools.ut.put_in_user(serverGroup, username, "password_expire_advance_days_sent2", "true", true, true);
-                                                                }
-                                                            }
-                                                            if (user != null && user.getProperty("password_expire_advance_notify", "").equals("true")) {
-                                                                sdf_compare = new SimpleDateFormat("MMddyyyyHHmm", Locale.US);
-                                                                String current_time = sdf_compare.format(new Date());
-                                                                if (sdf_compare.format(ServerStatus.this.common_code.get_expired_date_format(user.getProperty("expire_password_when")).parse(user.getProperty("expire_password_when"))).equals(current_time)) {
-                                                                    Log.log("SERVER", 0, "Notify expired password:" + serverGroup + "/" + username);
-                                                                    event = new Properties();
-                                                                    event.put("id", Common.makeBoundary(10));
-                                                                    event.put("pluginName", "CrushTask");
-                                                                    event.put("event_action_list", "(run_plugin)");
-                                                                    event.put("subItem", "");
-                                                                    event.put("async", "true");
-                                                                    event.put("event_plugin_list", user.getProperty("password_expire_notify_task"));
-                                                                    event.put("name", "PasswordExpireNotify:" + serverGroup + ":" + username);
-                                                                    info = new Properties();
-                                                                    info.put("user", user);
-                                                                    info.put("user_info", user);
-                                                                    items = new Vector();
-                                                                    ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
-                                                                }
-                                                            }
-                                                            if (!(user == null || user.getProperty("account_expire_advance_days_sent", "").equals("true") || user.getProperty("account_expire_advance_days_notify", "").equals("") || user.getProperty("account_expire_advance_days_notify", "").equals("0"))) {
-                                                                gc = new GregorianCalendar();
-                                                                gc.setTime(new Date());
-                                                                days = Integer.parseInt(user.getProperty("account_expire_advance_days_notify"));
-                                                                gc.add(5, days);
-                                                                midnight = new SimpleDateFormat("MMddyy");
-                                                                gc.setTime(midnight.parse(midnight.format(gc.getTime())));
-                                                                gc.add(5, 1);
-                                                                gc.add(13, -1);
-                                                                if (!ServerStatus.this.common_code.check_date_expired_roll(user.getProperty("account_expire")) && ServerStatus.this.common_code.check_date_expired(user.getProperty("account_expire"), gc.getTime().getTime())) {
-                                                                    Log.log("SERVER", 0, "Notify expired account in advance days:" + serverGroup + "/" + username + ":days:" + days);
-                                                                    event2 = new Properties();
-                                                                    event2.put("id", Common.makeBoundary(10));
-                                                                    event2.put("pluginName", "CrushTask");
-                                                                    event2.put("event_action_list", "(run_plugin)");
-                                                                    event2.put("subItem", "");
-                                                                    event2.put("async", "true");
-                                                                    event2.put("event_plugin_list", user.getProperty("account_expire_notify_task"));
-                                                                    event2.put("name", "AccountExpireNotify:" + username + ":" + user.getProperty("account_expire", ""));
-                                                                    info2 = new Properties();
-                                                                    info2.put("user", user);
-                                                                    info2.put("user_info", user);
-                                                                    items2 = new Vector();
-                                                                    ServerStatus.thisObj.events6.doEventPlugin(info2, event2, null, items2);
-                                                                    user.setProperty("account_expire_advance_days_sent", "true");
-                                                                    UserTools.ut.put_in_user(serverGroup, username, "account_expire_advance_days_sent", "true", true, true);
-                                                                }
-                                                            }
-                                                            if (user != null && user.getProperty("account_expire_advance_notify", "").equals("true")) {
-                                                                sdf_compare = new SimpleDateFormat("MMddyyyyHHmm", Locale.US);
-                                                                String current_time = sdf_compare.format(new Date());
-                                                                if (sdf_compare.format(ServerStatus.this.common_code.get_expired_date_format(user.getProperty("account_expire")).parse(user.getProperty("account_expire"))).equals(current_time)) {
-                                                                    Log.log("SERVER", 0, "Notify expired account:" + serverGroup + "/" + username);
-                                                                    event = new Properties();
-                                                                    event.put("event_plugin_list", user.getProperty("account_expire_notify_task"));
-                                                                    event.put("name", "AccountExpireNotify:" + serverGroup + ":" + username);
-                                                                    info = new Properties();
-                                                                    info.put("user", user);
-                                                                    info.put("user_info", user);
-                                                                    items = new Vector();
-                                                                    ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
-                                                                }
-                                                            }
-                                                            if (user != null && user.getProperty("account_expire_delete", "").equals("true") && ServerStatus.this.common_code.check_date_expired_roll(user.getProperty("account_expire"))) {
-                                                                if (user.getProperty("account_expire_rolling_days", "").equals("0") || user.getProperty("account_expire_rolling_days", "").equals("account_expire_rolling_days") || !user.getProperty("account_expire_rolling_days", "").equals("") && Integer.parseInt(user.getProperty("account_expire_rolling_days")) < 0) {
-                                                                    Log.log("SERVER", 0, "Skipping delete of expired account:" + serverGroup + "/" + username + " because its a template with a negative expire days.");
-                                                                } else {
-                                                                    Log.log("SERVER", 0, "Deleting expired account:" + serverGroup + "/" + username);
-                                                                    UserTools.expireUserVFSTask(user, serverGroup, username);
-                                                                    Log.log("SERVER", 0, "Removing account:" + serverGroup + "/" + username);
-                                                                    UserTools.deleteUser(serverGroup, username);
-                                                                }
-                                                            }
-                                                            Thread.sleep(10L);
-                                                        }
-                                                        catch (Exception e) {
-                                                            Log.log("SERVER", 1, "Checking " + username + " for expiration...error:" + e.toString());
-                                                            Log.log("SERVER", 1, e);
-                                                        }
-                                                        ++xx;
-                                                    }
-                                                    ++x;
+                                            Vector items;
+                                            Properties info;
+                                            Properties event;
+                                            SimpleDateFormat sdf_compare;
+                                            Vector items2;
+                                            Properties info2;
+                                            Properties event2;
+                                            SimpleDateFormat midnight;
+                                            int days;
+                                            GregorianCalendar gc;
+                                            Properties user = UserTools.ut.getUser(serverGroup, username, false);
+                                            if (user != null) {
+                                                Log.log("SERVER", 2, "Checking for expired accounts:" + serverGroup + ":" + username + ":" + user.getProperty("password_expire_advance_days_sent2", "") + ":" + user.getProperty("password_expire_advance_days_notify", ""));
+                                            }
+                                            if (!(user == null || user.getProperty("password_expire_advance_days_sent2", "").equals("true") || user.getProperty("password_expire_advance_days_notify", "").equals("") || user.getProperty("password_expire_advance_days_notify", "").equals("0"))) {
+                                                gc = new GregorianCalendar();
+                                                gc.setTime(new Date());
+                                                days = Integer.parseInt(user.getProperty("password_expire_advance_days_notify"));
+                                                gc.add(5, days);
+                                                midnight = new SimpleDateFormat("MMddyy");
+                                                gc.setTime(midnight.parse(midnight.format(gc.getTime())));
+                                                gc.add(5, 1);
+                                                gc.add(13, -1);
+                                                if (ServerStatus.this.common_code.check_date_expired(user.getProperty("expire_password_when"), gc.getTime().getTime())) {
+                                                    Log.log("SERVER", 0, "Notify expired password in advance days:" + serverGroup + "/" + username + ":days:" + days);
+                                                    event2 = new Properties();
+                                                    event2.put("event_plugin_list", user.getProperty("password_expire_notify_task"));
+                                                    event2.put("name", "PasswordExpireNotify:" + username + ":" + user.getProperty("expire_password_when", ""));
+                                                    info2 = new Properties();
+                                                    info2.put("user", user);
+                                                    info2.put("user_info", user);
+                                                    items2 = new Vector();
+                                                    ServerStatus.thisObj.events6.doEventPlugin(info2, event2, null, items2);
+                                                    user.setProperty("password_expire_advance_days_sent2", "true");
+                                                    UserTools.ut.put_in_user(serverGroup, username, "password_expire_advance_days_sent2", "true", true, true);
                                                 }
                                             }
-                                            catch (Exception e) {
-                                                Log.log("SERVER", 1, "Checking " + username + " for expiration...error:" + e.toString());
-                                                Log.log("SERVER", 1, e);
+                                            if (user != null && user.getProperty("password_expire_advance_notify", "").equals("true")) {
+                                                sdf_compare = new SimpleDateFormat("MMddyyyyHHmm", Locale.US);
+                                                String current_time = sdf_compare.format(new Date());
+                                                if (sdf_compare.format(ServerStatus.this.common_code.get_expired_date_format(user.getProperty("expire_password_when")).parse(user.getProperty("expire_password_when"))).equals(current_time)) {
+                                                    Log.log("SERVER", 0, "Notify expired password:" + serverGroup + "/" + username);
+                                                    event = new Properties();
+                                                    event.put("id", Common.makeBoundary(10));
+                                                    event.put("pluginName", "CrushTask");
+                                                    event.put("event_action_list", "(run_plugin)");
+                                                    event.put("subItem", "");
+                                                    event.put("async", "true");
+                                                    event.put("event_plugin_list", user.getProperty("password_expire_notify_task"));
+                                                    event.put("name", "PasswordExpireNotify:" + serverGroup + ":" + username);
+                                                    info = new Properties();
+                                                    info.put("user", user);
+                                                    info.put("user_info", user);
+                                                    items = new Vector();
+                                                    ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
+                                                }
                                             }
-                                            Log.log("SERVER", 2, "Checking for expired accounts...done.");
-                                            ServerStatus.this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis()));
-                                        }
-                                    });
-                                }
-                                if (!this.server_info.containsKey("last_expired_shares_check")) {
-                                    this.server_info.put("last_expired_shares_check", "0");
-                                }
-                                if (!this.server_info.getProperty("last_expired_shares_check", "0").equals(this.expire_sdf.format(new Date()))) {
-                                    this.server_info.put("last_expired_shares_check", new SimpleDateFormat("MMddyy").format(new Date()));
-                                    Worker.startWorker(new Runnable(){
-
-                                        @Override
-                                        public void run() {
-                                            block12: {
-                                                Log.log("SERVER", 2, "Checking for upcoming share expirations...");
-                                                String username = "";
+                                            if (!(user == null || user.getProperty("account_expire_advance_days_sent", "").equals("true") || user.getProperty("account_expire_advance_days_notify", "").equals("") || user.getProperty("account_expire_advance_days_notify", "").equals("0"))) {
+                                                gc = new GregorianCalendar();
+                                                gc.setTime(new Date());
+                                                days = Integer.parseInt(user.getProperty("account_expire_advance_days_notify"));
+                                                gc.add(5, days);
+                                                midnight = new SimpleDateFormat("MMddyy");
+                                                gc.setTime(midnight.parse(midnight.format(gc.getTime())));
+                                                gc.add(5, 1);
+                                                gc.add(13, -1);
+                                                if (!ServerStatus.this.common_code.check_date_expired_roll(user.getProperty("account_expire")) && ServerStatus.this.common_code.check_date_expired(user.getProperty("account_expire"), gc.getTime().getTime())) {
+                                                    Log.log("SERVER", 0, "Notify expired account in advance days:" + serverGroup + "/" + username + ":days:" + days);
+                                                    event2 = new Properties();
+                                                    event2.put("id", Common.makeBoundary(10));
+                                                    event2.put("pluginName", "CrushTask");
+                                                    event2.put("event_action_list", "(run_plugin)");
+                                                    event2.put("subItem", "");
+                                                    event2.put("async", "true");
+                                                    event2.put("event_plugin_list", user.getProperty("account_expire_notify_task"));
+                                                    event2.put("name", "AccountExpireNotify:" + username + ":" + user.getProperty("account_expire", ""));
+                                                    info2 = new Properties();
+                                                    info2.put("user", user);
+                                                    info2.put("user_info", user);
+                                                    items2 = new Vector();
+                                                    ServerStatus.thisObj.events6.doEventPlugin(info2, event2, null, items2);
+                                                    user.setProperty("account_expire_advance_days_sent", "true");
+                                                    UserTools.ut.put_in_user(serverGroup, username, "account_expire_advance_days_sent", "true", true, true);
+                                                }
+                                            }
+                                            if (user != null && user.getProperty("account_expire_advance_notify", "").equals("true")) {
+                                                sdf_compare = new SimpleDateFormat("MMddyyyyHHmm", Locale.US);
+                                                String current_time = sdf_compare.format(new Date());
+                                                if (sdf_compare.format(ServerStatus.this.common_code.get_expired_date_format(user.getProperty("account_expire")).parse(user.getProperty("account_expire"))).equals(current_time)) {
+                                                    Log.log("SERVER", 0, "Notify expired account:" + serverGroup + "/" + username);
+                                                    event = new Properties();
+                                                    event.put("event_plugin_list", user.getProperty("account_expire_notify_task"));
+                                                    event.put("name", "AccountExpireNotify:" + serverGroup + ":" + username);
+                                                    info = new Properties();
+                                                    info.put("user", user);
+                                                    info.put("user_info", user);
+                                                    items = new Vector();
+                                                    ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
+                                                }
+                                            }
+                                            if (user != null && user.getProperty("account_expire_delete", "").equals("true") && ServerStatus.this.common_code.check_date_expired_roll(user.getProperty("account_expire"))) {
+                                                if (user.getProperty("account_expire_rolling_days", "").equals("0") || user.getProperty("account_expire_rolling_days", "").equals("account_expire_rolling_days") || !user.getProperty("account_expire_rolling_days", "").equals("") && Integer.parseInt(user.getProperty("account_expire_rolling_days")) < 0) {
+                                                    Log.log("SERVER", 0, "Skipping delete of expired account:" + serverGroup + "/" + username + " because its a template with a negative expire days.");
+                                                } else {
+                                                    Log.log("SERVER", 0, "Deleting expired account:" + serverGroup + "/" + username);
+                                                    UserTools.expireUserVFSTask(user, serverGroup, username);
+                                                    Log.log("SERVER", 0, "Removing account:" + serverGroup + "/" + username);
+                                                    UserTools.deleteUser(serverGroup, username);
+                                                }
+                                            }
+                                            if (ServerStatus.BG("reverse_events") && user.get("events") != null) {
                                                 try {
-                                                    String tempAccountsPath = ServerStatus.SG("temp_accounts_path");
-                                                    File_U[] accounts = (File_U[])new File_U(String.valueOf(tempAccountsPath) + "accounts/").listFiles();
-                                                    boolean found = false;
-                                                    if (accounts == null) break block12;
-                                                    int x = 0;
-                                                    while (!found && x < accounts.length) {
-                                                        try {
-                                                            File_U f = accounts[x];
-                                                            Log.log("SERVER", 2, "Temp:" + f.getName());
-                                                            if (f.getName().indexOf(",,") >= 0 && f.isDirectory()) {
-                                                                String[] tokens = f.getName().split(",,");
-                                                                Properties pp = new Properties();
-                                                                int xx = 0;
-                                                                while (xx < tokens.length) {
-                                                                    String key = tokens[xx].substring(0, tokens[xx].indexOf("="));
-                                                                    String val = tokens[xx].substring(tokens[xx].indexOf("=") + 1);
-                                                                    pp.put(key.toUpperCase(), val);
-                                                                    ++xx;
-                                                                }
-                                                                if (ServerStatus.thisObj.common_code.check_date_expired_roll(pp.getProperty("EX"))) {
-                                                                    Log.log("SERVER", 0, "Deleting share " + username + " due to expiration...");
-                                                                    if (!ServerStatus.SG("temp_accounts_account_expire_task").equals("")) {
-                                                                        Vector<Properties> items = new Vector<Properties>();
-                                                                        Properties item = new Properties();
-                                                                        Properties info = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
-                                                                        item.putAll((Map<?, ?>)info);
-                                                                        item.putAll((Map<?, ?>)pp);
-                                                                        item.put("url", f.toURI().toURL().toExternalForm());
-                                                                        item.put("the_file_name", f.getName());
-                                                                        item.put("the_file_path", "/");
-                                                                        item.put("account_path", String.valueOf(f.getCanonicalPath().replace('\\', '/')) + "/");
-                                                                        item.put("storage_path", String.valueOf(new File_U(String.valueOf(f.getCanonicalPath()) + "/../../storage/" + pp.getProperty("U") + pp.getProperty("P")).getCanonicalPath().replace('\\', '/')) + "/");
-                                                                        item.put("the_file_size", String.valueOf(f.length()));
-                                                                        item.put("type", f.isDirectory() ? "DIR" : "FILE");
-                                                                        items.addElement(item);
-                                                                        Properties event = new Properties();
-                                                                        event.put("event_plugin_list", ServerStatus.SG("temp_accounts_account_expire_task"));
-                                                                        event.put("name", "TempAccountEvent:" + pp.getProperty("U"));
-                                                                        ServerStatus.thisObj.events6.doEventPlugin(null, event, null, items);
-                                                                    }
-                                                                    Common.recurseDelete_U(String.valueOf(f.getCanonicalPath()) + "/../../storage/" + pp.getProperty("U") + pp.getProperty("P"), false);
-                                                                    Common.recurseDelete_U(f.getCanonicalPath(), false);
-                                                                } else {
-                                                                    Properties info = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
-                                                                    if (info != null && !info.getProperty("share_expire_notify_task_sent", "false").equals("true")) {
-                                                                        GregorianCalendar gc1 = new GregorianCalendar();
-                                                                        GregorianCalendar gc2 = new GregorianCalendar();
-                                                                        gc1.setTime(new Date());
-                                                                        gc2.setTime(new Date());
-                                                                        gc1.add(5, ServerStatus.IG("expire_share_notify_days") + 1);
-                                                                        gc2.add(5, ServerStatus.IG("expire_share_notify_days"));
-                                                                        SimpleDateFormat midnight = new SimpleDateFormat("MMddyy");
-                                                                        gc1.setTime(midnight.parse(midnight.format(gc1.getTime())));
-                                                                        gc1.add(5, 1);
-                                                                        gc1.add(13, -1);
-                                                                        gc2.setTime(midnight.parse(midnight.format(gc2.getTime())));
-                                                                        gc2.add(5, 1);
-                                                                        gc2.add(13, -1);
-                                                                        if (ServerStatus.thisObj.common_code.check_date_expired(pp.getProperty("EX"), gc1.getTime().getTime()) && !ServerStatus.thisObj.common_code.check_date_expired(pp.getProperty("EX"), gc2.getTime().getTime())) {
-                                                                            Log.log("SERVER", 0, "Notify expiring share account:" + username);
-                                                                            Properties event = new Properties();
-                                                                            event.put("id", Common.makeBoundary(10));
-                                                                            event.put("pluginName", "CrushTask");
-                                                                            event.put("event_action_list", "(run_plugin)");
-                                                                            event.put("subItem", "");
-                                                                            event.put("async", "true");
-                                                                            event.put("event_plugin_list", ServerStatus.SG("share_expire_notify_task"));
-                                                                            event.put("name", "ShareExpireNotify:" + username);
-                                                                            Vector items = new Vector();
-                                                                            ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
-                                                                        }
-                                                                    }
-                                                                }
+                                                    Vector events = (Vector)user.get("events");
+                                                    Vector<Properties> invalid_events = new Vector<Properties>();
+                                                    Properties user_flatten = null;
+                                                    SessionCrush tempSession = null;
+                                                    int xxx = 0;
+                                                    while (xxx < events.size()) {
+                                                        Properties event3 = (Properties)events.elementAt(xxx);
+                                                        if (event3.getProperty("name", "").startsWith("subscribe_") && event3.getProperty("event_user_action_list", "").contains("r_")) {
+                                                            String item_path;
+                                                            VFS vfs;
+                                                            String path = Common.url_decode(Common.replace_str(event3.getProperty("name", "").substring("subscribe".length()), "_", "/"));
+                                                            if (user_flatten == null) {
+                                                                user_flatten = UserTools.ut.getUser(serverGroup, username, true);
+                                                            }
+                                                            Properties item = null;
+                                                            if (tempSession == null) {
+                                                                tempSession = new SessionCrush(null, 1, "127.0.0.1", 0, "0.0.0.0", serverGroup, new Properties());
+                                                                tempSession.verify_user(username, Common.makeBoundary(), true, false);
+                                                            }
+                                                            if ((item = (vfs = UserTools.ut.get_full_VFS(serverGroup, username, user_flatten)).get_item(item_path = Common.replace_str(String.valueOf(SessionCrush.getRootDir(null, vfs, user, false)) + path, "//", "/"))) == null) {
+                                                                Log.log("EVENT", 1, "Event subscribes cleanup: Remove invalid event: " + event3.getProperty("name", ""));
+                                                                invalid_events.add(event3);
                                                             }
                                                         }
-                                                        catch (Exception e) {
-                                                            Log.log("SERVER", 1, e);
-                                                        }
-                                                        ++x;
+                                                        ++xxx;
+                                                    }
+                                                    if (invalid_events.size() > 0) {
+                                                        events.removeAll(invalid_events);
+                                                        user.put("events", events);
+                                                        UserTools.writeUser(serverGroup, username, user);
                                                     }
                                                 }
                                                 catch (Exception e) {
-                                                    Log.log("SERVER", 1, "Checking " + username + " for expiration...error:" + e.toString());
+                                                    Log.log("SERVER", 1, "Checking event subscribes for user: " + username + " Error:" + e.toString());
                                                     Log.log("SERVER", 1, e);
                                                 }
                                             }
-                                            Log.log("SERVER", 2, "Checking for expired accounts...done.");
-                                            ServerStatus.this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis()));
+                                            Thread.sleep(10L);
                                         }
-                                    });
-                                }
-                                this.server_info.put("memcache_objects", String.valueOf(FileClient.dirCachePerm.size()));
-                                if (!this.server_info.containsKey("last_search_index_interval")) {
-                                    this.server_info.put("last_search_index_interval", "0");
-                                    Thread.sleep(1000L);
-                                }
-                                if (ServerStatus.IG("search_index_interval") > 0 && Long.parseLong(this.server_info.getProperty("last_search_index_interval")) < System.currentTimeMillis() - 60000L * ServerStatus.LG("search_index_interval")) {
-                                    this.server_info.put("last_search_index_interval", String.valueOf(System.currentTimeMillis()));
-                                    Worker.startWorker(new Runnable(){
-
-                                        /*
-                                         * WARNING - Removed try catching itself - possible behaviour change.
-                                         */
-                                        @Override
-                                        public void run() {
-                                            try {
-                                                Object object = FileClient.dirCachePermTemp_lock;
-                                                synchronized (object) {
-                                                    String[] usernames = ServerStatus.SG("search_index_usernames").split(",");
-                                                    FileClient.dirCachePermTemp = new Properties();
-                                                    if (FileClient.dirCachePerm != null && FileClient.dirCachePerm.size() == 0) {
-                                                        FileClient.dirCachePerm = FileClient.dirCachePermTemp;
-                                                    }
-                                                    int x = 0;
-                                                    while (x < usernames.length) {
-                                                        if (!usernames[x].trim().equals("")) {
-                                                            Vector server_groups = (Vector)server_settings.get("server_groups");
-                                                            int xx = 0;
-                                                            while (xx < server_groups.size()) {
-                                                                VFS uVFS = UserTools.ut.getVFS(server_groups.elementAt(xx).toString(), usernames[x].trim());
-                                                                Properties pp = uVFS.get_item("/");
-                                                                SearchHandler.buildEntry(pp, uVFS, "new", null);
-                                                                uVFS.disconnect();
-                                                                uVFS.free();
-                                                                ServerStatus.this.server_info.put("last_search_index_interval", String.valueOf(System.currentTimeMillis()));
-                                                                ++xx;
-                                                            }
-                                                        }
-                                                        ++x;
-                                                    }
-                                                    FileClient.dirCachePerm = FileClient.dirCachePermTemp;
-                                                    FileClient.dirCachePermTemp = null;
-                                                    ServerStatus.this.server_info.put("last_search_index_interval", String.valueOf(System.currentTimeMillis()));
-                                                }
-                                            }
-                                            catch (Exception e) {
-                                                Log.log("SEARCH", 0, e);
-                                            }
-                                            ServerStatus.this.server_info.put("last_search_index_interval", String.valueOf(System.currentTimeMillis()));
+                                        catch (Exception e) {
+                                            Log.log("SERVER", 1, "Checking " + username + " for expiration...error:" + e.toString());
+                                            Log.log("SERVER", 1, e);
                                         }
-                                    });
-                                }
-                                if (!this.server_info.containsKey("last_secondary_login_via_email_check")) {
-                                    this.server_info.put("last_secondary_login_via_email_check", "0");
-                                }
-                                if (ServerStatus.BG("secondary_login_via_email") && Long.parseLong(this.server_info.getProperty("last_secondary_login_via_email_check")) < System.currentTimeMillis() - 60000L * ServerStatus.LG("secondary_login_via_email_cache_interval")) {
-                                    this.server_info.put("last_secondary_login_via_email_check", String.valueOf(System.currentTimeMillis()));
-                                    if (this.server_info.getProperty("checking_email_cache", "false").equals("false")) {
-                                        Worker.startWorker(new Runnable(){
-
-                                            @Override
-                                            public void run() {
-                                                ServerStatus.this.server_info.put("checking_email_cache", "true");
-                                                try {
-                                                    UserTools.cacheEmailUsernames();
-                                                }
-                                                catch (Exception e) {
-                                                    Log.log("SERVER", 0, e);
-                                                }
-                                                ServerStatus.this.server_info.put("checking_email_cache", "false");
-                                                ServerStatus.this.server_info.put("last_secondary_login_via_email_check", String.valueOf(System.currentTimeMillis()));
-                                            }
-                                        });
+                                        ++xx;
                                     }
-                                    this.server_info.put("last_secondary_login_via_email_check", String.valueOf(System.currentTimeMillis()));
+                                    ++x;
                                 }
-                                if (!this.server_info.containsKey("last_expired_sync_check")) {
-                                    this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
-                                }
-                                if (Long.parseLong(this.server_info.getProperty("last_expired_sync_check")) < System.currentTimeMillis() - 3600000L) {
-                                    this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
-                                    if (ServerStatus.IG("sync_history_days") > 0) {
-                                        final Properties status = new Properties();
-                                        Worker.startWorker(new Runnable(){
-
-                                            @Override
-                                            public void run() {
-                                                try {
-                                                    GregorianCalendar c = new GregorianCalendar();
-                                                    c.setTime(new Date());
-                                                    ((Calendar)c).add(5, ServerStatus.IG("sync_history_days") * -1);
-                                                    SyncTools.purgeExpired(c.getTime().getTime());
-                                                }
-                                                catch (Exception e) {
-                                                    Log.log("SYNC", 0, e);
-                                                }
-                                                status.put("done", "done");
-                                                ServerStatus.this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
-                                            }
-                                        });
-                                        Worker.startWorker(new Runnable(){
-
-                                            @Override
-                                            public void run() {
-                                                try {
-                                                    while (status.size() == 0) {
-                                                        ServerStatus.this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
-                                                        Thread.sleep(10000L);
-                                                        ServerStatus.this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
-                                                    }
-                                                }
-                                                catch (Exception exception) {
-                                                    // empty catch block
-                                                }
-                                            }
-                                        });
-                                    }
-                                }
-                                if (!this.server_info.containsKey("last_server_info_history")) {
-                                    this.server_info.put("last_server_info_history", String.valueOf(System.currentTimeMillis()));
-                                }
-                                if (!this.server_info.containsKey("last_server_info_history_delete")) {
-                                    this.server_info.put("last_server_info_history_delete", "0");
-                                }
-                                if (Long.parseLong(this.server_info.getProperty("last_server_info_history")) < System.currentTimeMillis() - 40000L) {
-                                    this.server_info.put("last_server_info_history", String.valueOf(System.currentTimeMillis()));
-                                    char mm = new SimpleDateFormat("mm").format(new Date()).charAt(1);
-                                    if (mm == '0' || mm == '5') {
-                                        Worker.startWorker(new Runnable(){
-
-                                            @Override
-                                            public void run() {
-                                                SimpleDateFormat yyMMdd = new SimpleDateFormat("yyMMdd");
-                                                try {
-                                                    Properties request = new Properties();
-                                                    request.put("params", "current_download_speed,current_upload_speed,logged_in_users,ram_free,ram_max,server_cpu,os_cpu,open_files,connected_unique_ips");
-                                                    request.put("priorIntervals", "300");
-                                                    Object getDashboardItems = AdminControls.getDashboardItems(request, "(CONNECT)");
-                                                    String getStatHistory = AdminControls.getStatHistory(request);
-                                                    Vector getJobsSummary = AdminControls.getJobsSummary(request, "(CONNECT)");
-                                                    Properties history_object = new Properties();
-                                                    history_object.put("getDashboardItems", getDashboardItems);
-                                                    history_object.put("getJobsSummary", getJobsSummary);
-                                                    history_object.put("getStatHistory", getStatHistory);
-                                                    SimpleDateFormat HHmm = new SimpleDateFormat("HHmm");
-                                                    String archived_history = String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/archived_history/" + yyMMdd.format(new Date()) + "/";
-                                                    new File_S(archived_history).mkdirs();
-                                                    ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(String.valueOf(archived_history) + HHmm.format(new Date()) + ".history_obj"));
-                                                    oos.writeObject(history_object);
-                                                    oos.close();
-                                                }
-                                                catch (Exception e) {
-                                                    Log.log("SERVER", 0, e);
-                                                }
-                                                if (Long.parseLong(ServerStatus.this.server_info.getProperty("last_server_info_history_delete")) < System.currentTimeMillis() - 14400000L) {
-                                                    ServerStatus.this.server_info.put("last_server_info_history_delete", String.valueOf(System.currentTimeMillis()));
-                                                    try {
-                                                        GregorianCalendar c = new GregorianCalendar();
-                                                        c.setTime(new Date());
-                                                        ((Calendar)c).add(5, ServerStatus.IG("server_info_history_days") * -1);
-                                                        int min_date = Integer.parseInt(yyMMdd.format(c.getTime()));
-                                                        String archived_history = String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/archived_history/";
-                                                        File[] dirs = new File_S(archived_history).listFiles();
-                                                        int x = 0;
-                                                        while (dirs != null && x < dirs.length) {
-                                                            if (dirs[x].getName().length() == 6) {
-                                                                try {
-                                                                    if (Integer.parseInt(dirs[x].getName()) < min_date) {
-                                                                        Common.recurseDelete(dirs[x].getPath(), false);
-                                                                    }
-                                                                }
-                                                                catch (Exception e) {
-                                                                    Log.log("SERVER", 2, e);
-                                                                }
-                                                            }
-                                                            ++x;
-                                                        }
-                                                    }
-                                                    catch (Exception e) {
-                                                        Log.log("SERVER", 0, e);
-                                                    }
-                                                }
-                                                try {
-                                                    Thread.sleep(21000L);
-                                                }
-                                                catch (InterruptedException interruptedException) {
-                                                    // empty catch block
-                                                }
-                                                ServerStatus.this.server_info.put("last_server_info_history", String.valueOf(System.currentTimeMillis()));
-                                            }
-                                        });
-                                    }
-                                }
-                                String memory_threads = "Server Memory Stats: Max=" + com.crushftp.client.Common.format_bytes_short2(ServerStatus.siLG("ram_max")) + ", Free=" + com.crushftp.client.Common.format_bytes_short2(ServerStatus.siLG("ram_free")) + ", Threads:" + Worker.busyWorkers.size() + ", " + System.getProperty("java.version") + ":" + System.getProperty("sun.arch.data.model") + " bit," + Runtime.getRuntime().availableProcessors() + "cores  OS:" + System.getProperties().getProperty("os.name") + " CPU usage Server/OS:" + ServerStatus.siSG("server_cpu") + "/" + ServerStatus.siSG("os_cpu") + " OpenFiles:" + ServerStatus.siSG("open_files") + "/" + ServerStatus.siSG("max_open_files") + " :" + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str");
-                                if (!this.server_info.containsKey("last_memory_check")) {
-                                    this.server_info.put("last_memory_check", String.valueOf(System.currentTimeMillis()));
-                                }
-                                if (Long.parseLong(this.server_info.getProperty("last_memory_check")) < System.currentTimeMillis() - 1000L * ServerStatus.LG("memory_log_interval")) {
-                                    this.server_info.put("last_memory_check", String.valueOf(System.currentTimeMillis()));
-                                    Log.log("SERVER", 0, memory_threads);
-                                }
-                                if ((low_memory_trigger_value1 = ServerStatus.LG("low_memory_trigger_value1")) > 99L) {
-                                    low_memory_trigger_value1 = 40L;
-                                }
-                                if ((low_memory_trigger_value2 = ServerStatus.LG("low_memory_trigger_value2")) > 99L) {
-                                    low_memory_trigger_value2 = 30L;
-                                }
-                                if ((low_memory_trigger_value3 = ServerStatus.LG("low_memory_trigger_value3")) > 99L) {
-                                    low_memory_trigger_value3 = 20L;
-                                }
-                                if ((float)ServerStatus.siLG("ram_free") / (float)ServerStatus.siLG("ram_max") < (float)low_memory_trigger_value3 / 100.0f) {
-                                    Log.log("SERVER", 0, "LOW_MEMORY:" + memory_threads);
-                                    this.server_info.put("low_memory", "Critically low on memory!<br/>Crash is imminent! Less than " + low_memory_trigger_value3 + "%!<br/>" + this.logDateFormat.format(new Date()) + "|" + memory_threads);
-                                    info = new Properties();
-                                    info.put("alert_type", "low_memory");
-                                    info.put("alert_ram_free", String.valueOf(ServerStatus.siLG("ram_free")));
-                                    info.put("alert_ram_max", String.valueOf(ServerStatus.siLG("ram_max")));
-                                    info.put("alert_memory_threads", memory_threads);
-                                    info.put("alert_timeout", "0");
-                                    info.put("alert_max", "0");
-                                    info.put("alert_msg", "");
-                                    this.runAlerts("low_memory", info, null, null);
-                                    System.gc();
-                                } else if ((float)ServerStatus.siLG("ram_free") / (float)ServerStatus.siLG("ram_max") < (float)low_memory_trigger_value2 / 100.0f) {
-                                    Log.log("SERVER", 0, "LOW_MEMORY:" + memory_threads);
-                                    this.server_info.put("low_memory", "Very low on memory! Less than " + low_memory_trigger_value2 + "%!<br/>" + this.logDateFormat.format(new Date()) + "|" + memory_threads);
-                                    info = new Properties();
-                                    info.put("alert_type", "low_memory");
-                                    info.put("alert_ram_free", String.valueOf(ServerStatus.siLG("ram_free")));
-                                    info.put("alert_ram_max", String.valueOf(ServerStatus.siLG("ram_max")));
-                                    info.put("alert_memory_threads", memory_threads);
-                                    info.put("alert_timeout", "0");
-                                    info.put("alert_max", "0");
-                                    info.put("alert_msg", "");
-                                    this.runAlerts("low_memory", info, null, null);
-                                    System.gc();
-                                } else if ((float)ServerStatus.siLG("ram_free") / (float)ServerStatus.siLG("ram_max") < (float)low_memory_trigger_value1 / 100.0f) {
-                                    Log.log("SERVER", 0, "LOW_MEMORY:" + memory_threads);
-                                    this.server_info.put("low_memory", "Low on memory! Less than " + low_memory_trigger_value1 + "%!<br/>" + this.logDateFormat.format(new Date()) + "|" + memory_threads);
-                                    info = new Properties();
-                                    info.put("alert_type", "low_memory");
-                                    info.put("alert_ram_free", String.valueOf(ServerStatus.siLG("ram_free")));
-                                    info.put("alert_ram_max", String.valueOf(ServerStatus.siLG("ram_max")));
-                                    info.put("alert_memory_threads", memory_threads);
-                                    info.put("alert_timeout", "0");
-                                    info.put("alert_max", "0");
-                                    info.put("alert_msg", "");
-                                    this.runAlerts("low_memory", info, null, null);
-                                    System.gc();
-                                } else {
-                                    this.server_info.remove("low_memory");
-                                }
-                                if (!this.server_info.containsKey("last_vfs_check")) {
-                                    this.server_info.put("last_vfs_check", "0");
-                                }
-                                if (Long.parseLong(this.server_info.getProperty("last_vfs_check")) < System.currentTimeMillis() - 1000L * ServerStatus.LG("vfs_cache_interval")) {
-                                    this.server_info.put("last_vfs_check", String.valueOf(System.currentTimeMillis()));
-                                    if (ServerStatus.BG("vfs_cache_enabled")) {
-                                        this.fill_vfs_cache();
-                                    }
-                                }
-                                if (!this.server_info.containsKey("last_dump_threads")) {
-                                    this.server_info.put("last_dump_threads", String.valueOf(System.currentTimeMillis()));
-                                }
-                                if (ServerStatus.LG("dump_threads_log_interval") > 0L && Long.parseLong(this.server_info.getProperty("last_dump_threads")) < System.currentTimeMillis() - 1000L * ServerStatus.LG("dump_threads_log_interval")) {
-                                    this.server_info.put("last_dump_threads", String.valueOf(System.currentTimeMillis()));
-                                    System.out.println(new Date() + "THREAD DUMP");
-                                    System.out.println(com.crushftp.client.Common.dumpStack(String.valueOf(version_info_str) + sub_version_info_str));
-                                }
-                                Worker.startWorker(new Runnable(){
-
-                                    /*
-                                     * WARNING - Removed try catching itself - possible behaviour change.
-                                     * Unable to fully structure code
-                                     */
-                                    @Override
-                                    public void run() {
-                                        alert_tmp_f = new Vector<E>();
-                                        var2_2 = com.crushftp.client.Common.System2.get("alerts_queue");
-                                        synchronized (var2_2) {
-                                            alert_tmp_f.addAll((Vector)com.crushftp.client.Common.System2.get("alerts_queue"));
-                                            ((Vector)com.crushftp.client.Common.System2.get("alerts_queue")).clear();
-                                            // MONITOREXIT @DISABLED, blocks:[0, 1] lbl8 : MonitorExitStatement: MONITOREXIT : var2_2
-                                            if (true) ** GOTO lbl15
-                                        }
-                                        do {
-                                            alert = (Properties)alert_tmp_f.remove(0);
-                                            ServerStatus.thisObj.runAlerts(alert.getProperty("msg", ""), (SessionCrush)alert.get("session"));
-lbl15:
-                                            // 2 sources
-
-                                        } while (alert_tmp_f.size() > 0);
-                                    }
-                                });
-                                break block275;
-                            }
-                            if (!arg.equals("vfs_replication_pinger")) break block288;
-                            if (!this.server_info.containsKey("replicated_vfs_ping_interval")) {
-                                this.server_info.put("replicated_vfs_ping_interval", String.valueOf(System.currentTimeMillis()));
-                            }
-                            if (ServerStatus.LG("replicated_vfs_ping_interval") > 0L && Long.parseLong(this.server_info.getProperty("replicated_vfs_ping_interval")) < System.currentTimeMillis() - 1000L * ServerStatus.LG("replicated_vfs_ping_interval")) {
-                                this.server_info.put("replicated_vfs_ping_interval", String.valueOf(System.currentTimeMillis()));
-                                if (!ServerStatus.SG("replicated_vfs_root_url").equals("")) {
-                                    try {
-                                        Properties vItem = new Properties();
-                                        Properties virtual = new Properties();
-                                        VFS uVFS = VFS.getVFS(virtual);
-                                        vItem.put("url", ServerStatus.SG("replicated_vfs_root_url"));
-                                        vItem.put("type", "DIR");
-                                        Properties item = new Properties();
-                                        item.put("vItem", vItem);
-                                        Vector<Properties> vItems = new Vector<Properties>();
-                                        Vector<MemoryClient> clients = new Vector<MemoryClient>();
-                                        clients.addElement(new MemoryClient("MEMORY:///", "", null));
-                                        vItems.addElement(vItem);
-                                        uVFS.addReplicatedVFSAndClient(item, vItems, clients, true);
-                                        new GenericClientMulti("PROXY", com.crushftp.client.Common.log, vItem, vItems, clients, true).close();
-                                        uVFS.disconnect();
-                                    }
-                                    catch (Exception e) {
-                                        Log.log("SERVER", 1, e);
-                                    }
-                                }
-                                this.server_info.put("replicated_vfs_ping_interval", String.valueOf(System.currentTimeMillis()));
-                            }
-                            break block275;
-                        }
-                        if (!arg.equals("http_cleaner")) break block289;
-                        if (ServerStatus.BG("encryption_pass_needed") && new String(com.crushftp.client.Common.encryption_password).equals("crushftp")) {
-                            this.append_log("WARNING: Encryption password needed for the server!  Please login to admin console to provide it.", "RUN_SERVER");
-                        }
-                        long sessions = 0L;
-                        long http_keys = 0L;
-                        long http_keys_expired1 = 0L;
-                        long http_keys_expired2 = 0L;
-                        long http_activity_keys = 0L;
-                        long http_activity_keys_expired = 0L;
-                        try {
-                            Enumeration keys = SharedSession.find("crushftp.sessions").keys();
-                            while (keys.hasMoreElements()) {
-                                String id = keys.nextElement().toString();
-                                ++http_activity_keys;
-                                Object o = SharedSession.find("crushftp.sessions").get(id);
-                                long time = 0L;
-                                long timeout = 60L * ServerStatus.LG("http_session_timeout");
-                                if (o instanceof SessionCrush) {
-                                    time = Long.parseLong(((SessionCrush)o).getProperty("last_activity", "0"));
-                                    if (((SessionCrush)o).user != null) {
-                                        long timeout2 = Long.parseLong(((SessionCrush)o).user.getProperty("max_idle_time", "10"));
-                                        if (timeout2 < 0L) {
-                                            timeout = timeout2 * -1L;
-                                        } else if (timeout2 != 0L && timeout2 < timeout) {
-                                            timeout = 60L * timeout2;
-                                        }
-                                    }
-                                }
-                                if (new Date().getTime() - time <= 1000L * timeout) continue;
-                                boolean allow_removal = true;
-                                Enumeration e = SharedSession.find("crushftp.usernames").keys();
-                                while (e.hasMoreElements() && allow_removal) {
-                                    String key2 = e.nextElement().toString();
-                                    if (key2.indexOf("_" + id + "_") < 0) continue;
-                                    Enumeration<Object> tunnel_keys = ServerSessionTunnel3.running_tunnels.keys();
-                                    while (tunnel_keys.hasMoreElements() && allow_removal) {
-                                        String tunnel_id = tunnel_keys.nextElement().toString();
-                                        if (!tunnel_id.startsWith(String.valueOf(key2) + "_")) continue;
-                                        StreamController sc = (StreamController)ServerSessionTunnel3.running_tunnels.get(tunnel_id);
-                                        if (System.currentTimeMillis() - sc.last_receive_activity > 60000L) {
-                                            Log.log("TUNNEL", 0, "Current tunnel ID list:" + ServerSessionTunnel3.running_tunnels);
-                                            Log.log("TUNNEL", 0, "Tunnel is dead and the session has timed out, closing it:" + tunnel_id + " inactive time:" + (System.currentTimeMillis() - sc.last_receive_activity));
-                                            sc.startStopTunnel(false);
-                                            continue;
-                                        }
-                                        allow_removal = false;
-                                    }
-                                    ++http_keys_expired1;
-                                    SharedSession.find("crushftp.usernames").remove(key2);
-                                    Tunnel2.stopTunnel(key2);
-                                    if (!(o instanceof SessionCrush) || ((SessionCrush)o).uVFS == null) continue;
-                                    ((SessionCrush)o).uVFS.disconnect();
-                                }
-                                if (!allow_removal) continue;
-                                ++http_activity_keys_expired;
-                                if (o instanceof SessionCrush) {
-                                    this.remove_user(((SessionCrush)o).user_info);
-                                }
-                                SharedSession.find("crushftp.sessions").remove(id);
-                            }
-                        }
-                        catch (Exception e) {
-                            Log.log("SERVER", 1, e);
-                        }
-                        try {
-                            long timeout = 60L * ServerStatus.LG("http_session_timeout");
-                            Vector v = (Vector)ServerStatus.siVG("user_list").clone();
-                            int x = v.size() - 1;
-                            while (x >= 0) {
-                                Properties user_info = (Properties)v.elementAt(x);
-                                SessionCrush thisSession = (SessionCrush)user_info.get("session");
-                                if ((thisSession == null || SharedSession.find("crushftp.sessions").get(thisSession.getId()) == null) && (System.currentTimeMillis() - Long.parseLong(user_info.getProperty("last_activity", "0"))) / 1000L > timeout) {
-                                    this.kick(user_info);
-                                }
-                                --x;
-                            }
-                        }
-                        catch (Exception e) {
-                            Log.log("SERVER", 1, e);
-                        }
-                        try {
-                            Enumeration<Object> keys = ServerStatus.siPG("domain_cross_reference").keys();
-                            while (keys.hasMoreElements()) {
-                                String key = keys.nextElement().toString();
-                                String val = ServerStatus.siPG("domain_cross_reference").getProperty(key);
-                                if (System.currentTimeMillis() - Long.parseLong(val.split(":")[0]) <= 300000L) continue;
-                                ServerStatus.siPG("domain_cross_reference").remove(key);
-                            }
-                        }
-                        catch (Exception e) {
-                            Log.log("SERVER", 1, e);
-                        }
-                        try {
-                            Enumeration e = SharedSession.find("crushftp.usernames").keys();
-                            while (e.hasMoreElements()) {
-                                String key2 = e.nextElement().toString();
-                                ++http_keys;
-                                String id = key2.substring(key2.indexOf("_") + 1, key2.lastIndexOf("_"));
-                                if (SharedSession.find("crushftp.sessions").containsKey(id)) continue;
-                                ++http_keys_expired2;
-                                SharedSession.find("crushftp.usernames").remove(key2);
-                            }
-                        }
-                        catch (Exception e) {
-                            Log.log("SERVER", 1, e);
-                        }
-                        Log.log("SERVER", 1, "Cleaning up sessions:" + sessions + " sessions tracked, " + http_activity_keys + " activity items tracked, " + http_keys + " sessions tracked, " + http_activity_keys_expired + " activities expired, " + http_keys_expired1 + " sessions expired in first pass, and " + http_keys_expired2 + " expired in second pass.");
-                        try {
-                            Properties resetTokens = ServerStatus.siPG("resetTokens");
-                            if (resetTokens == null) {
-                                resetTokens = new Properties();
-                            }
-                            ServerStatus.thisObj.server_info.put("resetTokens", resetTokens);
-                            Enumeration<Object> e = resetTokens.keys();
-                            while (e.hasMoreElements()) {
-                                String key2 = e.nextElement().toString();
-                                Properties reset = (Properties)resetTokens.get(key2);
-                                long generated = Long.parseLong(reset.getProperty("generated"));
-                                if (System.currentTimeMillis() <= generated + (long)(60000 * ServerStatus.IG("reset_token_timeout"))) continue;
-                                resetTokens.remove(key2);
-                            }
-                        }
-                        catch (Exception e) {
-                            Log.log("SERVER", 1, e);
-                        }
-                        Enumeration<Object> tunnel_keys = ServerSessionTunnel3.running_tunnels.keys();
-                        while (tunnel_keys.hasMoreElements()) {
-                            String tunnel_id = tunnel_keys.nextElement().toString();
-                            StreamController sc = (StreamController)ServerSessionTunnel3.running_tunnels.get(tunnel_id);
-                            if (System.currentTimeMillis() - sc.last_receive_activity <= 60000L) continue;
-                            Log.log("TUNNEL", 0, "Current tunnel ID list:" + ServerSessionTunnel3.running_tunnels);
-                            Log.log("TUNNEL", 0, "Tunnel is dead, closing it:" + tunnel_id + " inactive time:" + (System.currentTimeMillis() - sc.last_receive_activity));
-                            ServerSessionTunnel3.running_tunnels.remove(tunnel_id);
-                            sc.startStopTunnel(false);
-                        }
-                        try {
-                            Vector v = (Vector)ServerStatus.siVG("user_list").clone();
-                            int x = v.size() - 1;
-                            while (x >= 0) {
-                                Properties user_info = (Properties)v.elementAt(x);
-                                SessionCrush thisSession = (SessionCrush)user_info.get("session");
-                                if (thisSession != null && thisSession.uVFS != null && thisSession.uVFS.cacheList != null) {
-                                    Properties cache = thisSession.uVFS.cacheList;
-                                    Enumeration<Object> keys = cache.keys();
-                                    while (keys.hasMoreElements()) {
-                                        Properties h;
-                                        String key = "" + keys.nextElement();
-                                        Object o2 = cache.get(key);
-                                        if (!(o2 instanceof Properties) || (h = (Properties)o2) == null || System.currentTimeMillis() - Long.parseLong(h.getProperty("time")) <= 60000L) continue;
-                                        cache.remove(key);
-                                        cache.remove(String.valueOf(key) + "...count");
-                                    }
-                                }
-                                --x;
-                            }
-                            break block275;
-                        }
-                        catch (Exception e) {
-                            Log.log("SERVER", 2, e);
-                        }
-                        break block275;
-                    }
-                    if (arg.equals("events_thread")) {
-                        Object sessions = this.eventLock;
-                        synchronized (sessions) {
-                            try {
-                                this.events6.checkEventsNow();
                             }
                             catch (Exception e) {
-                                Log.log("EVENT", 0, e);
+                                Log.log("SERVER", 1, "Checking " + username + " for expiration...error:" + e.toString());
+                                Log.log("SERVER", 1, e);
+                            }
+                            Log.log("SERVER", 2, "Checking for expired accounts...done.");
+                            ServerStatus.this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis()));
+                        }
+                    });
+                }
+                if (!this.server_info.containsKey("last_expired_shares_check")) {
+                    this.server_info.put("last_expired_shares_check", "0");
+                }
+                if (!this.server_info.getProperty("last_expired_shares_check", "0").equals(this.expire_sdf.format(new Date()))) {
+                    this.server_info.put("last_expired_shares_check", new SimpleDateFormat("MMddyy").format(new Date()));
+                    Worker.startWorker(new Runnable(){
+
+                        @Override
+                        public void run() {
+                            block12: {
+                                Log.log("SERVER", 2, "Checking for upcoming share expirations...");
+                                String username = "";
+                                try {
+                                    String tempAccountsPath = ServerStatus.SG("temp_accounts_path");
+                                    File_U[] accounts = (File_U[])new File_U(String.valueOf(tempAccountsPath) + "accounts/").listFiles();
+                                    boolean found = false;
+                                    if (accounts == null) break block12;
+                                    int x = 0;
+                                    while (!found && x < accounts.length) {
+                                        try {
+                                            File_U f = accounts[x];
+                                            Log.log("SERVER", 2, "Temp:" + f.getName());
+                                            if (f.getName().indexOf(",,") >= 0 && f.isDirectory()) {
+                                                String[] tokens = f.getName().split(",,");
+                                                Properties pp = new Properties();
+                                                int xx = 0;
+                                                while (xx < tokens.length) {
+                                                    String key = tokens[xx].substring(0, tokens[xx].indexOf("="));
+                                                    String val = tokens[xx].substring(tokens[xx].indexOf("=") + 1);
+                                                    pp.put(key.toUpperCase(), val);
+                                                    ++xx;
+                                                }
+                                                if (ServerStatus.thisObj.common_code.check_date_expired_roll(pp.getProperty("EX"))) {
+                                                    Log.log("SERVER", 0, "Deleting share " + username + " due to expiration...");
+                                                    if (!ServerStatus.SG("temp_accounts_account_expire_task").equals("")) {
+                                                        Vector<Properties> items = new Vector<Properties>();
+                                                        Properties item = new Properties();
+                                                        Properties info = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
+                                                        item.putAll((Map<?, ?>)info);
+                                                        item.putAll((Map<?, ?>)pp);
+                                                        item.put("url", f.toURI().toURL().toExternalForm());
+                                                        item.put("the_file_name", f.getName());
+                                                        item.put("the_file_path", "/");
+                                                        item.put("account_path", String.valueOf(f.getCanonicalPath().replace('\\', '/')) + "/");
+                                                        item.put("storage_path", String.valueOf(new File_U(String.valueOf(f.getCanonicalPath()) + "/../../storage/" + pp.getProperty("U") + pp.getProperty("P")).getCanonicalPath().replace('\\', '/')) + "/");
+                                                        item.put("the_file_size", String.valueOf(f.length()));
+                                                        item.put("type", f.isDirectory() ? "DIR" : "FILE");
+                                                        items.addElement(item);
+                                                        Properties event = new Properties();
+                                                        event.put("event_plugin_list", ServerStatus.SG("temp_accounts_account_expire_task"));
+                                                        event.put("name", "TempAccountEvent:" + pp.getProperty("U"));
+                                                        ServerStatus.thisObj.events6.doEventPlugin(null, event, null, items);
+                                                    }
+                                                    Common.recurseDelete_U(String.valueOf(f.getCanonicalPath()) + "/../../storage/" + pp.getProperty("U") + pp.getProperty("P"), false);
+                                                    Common.recurseDelete_U(f.getCanonicalPath(), false);
+                                                } else {
+                                                    Properties info = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
+                                                    if (info != null && !info.getProperty("share_expire_notify_task_sent", "false").equals("true")) {
+                                                        GregorianCalendar gc1 = new GregorianCalendar();
+                                                        GregorianCalendar gc2 = new GregorianCalendar();
+                                                        gc1.setTime(new Date());
+                                                        gc2.setTime(new Date());
+                                                        gc1.add(5, ServerStatus.IG("expire_share_notify_days") + 1);
+                                                        gc2.add(5, ServerStatus.IG("expire_share_notify_days"));
+                                                        SimpleDateFormat midnight = new SimpleDateFormat("MMddyy");
+                                                        gc1.setTime(midnight.parse(midnight.format(gc1.getTime())));
+                                                        gc1.add(5, 1);
+                                                        gc1.add(13, -1);
+                                                        gc2.setTime(midnight.parse(midnight.format(gc2.getTime())));
+                                                        gc2.add(5, 1);
+                                                        gc2.add(13, -1);
+                                                        if (ServerStatus.thisObj.common_code.check_date_expired(pp.getProperty("EX"), gc1.getTime().getTime()) && !ServerStatus.thisObj.common_code.check_date_expired(pp.getProperty("EX"), gc2.getTime().getTime())) {
+                                                            Log.log("SERVER", 0, "Notify expiring share account:" + username);
+                                                            Properties event = new Properties();
+                                                            event.put("id", Common.makeBoundary(10));
+                                                            event.put("pluginName", "CrushTask");
+                                                            event.put("event_action_list", "(run_plugin)");
+                                                            event.put("subItem", "");
+                                                            event.put("async", "true");
+                                                            event.put("event_plugin_list", ServerStatus.SG("share_expire_notify_task"));
+                                                            event.put("name", "ShareExpireNotify:" + username);
+                                                            Vector items = new Vector();
+                                                            ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        catch (Exception e) {
+                                            Log.log("SERVER", 1, e);
+                                        }
+                                        ++x;
+                                    }
+                                }
+                                catch (Exception e) {
+                                    Log.log("SERVER", 1, "Checking " + username + " for expiration...error:" + e.toString());
+                                    Log.log("SERVER", 1, e);
+                                }
+                            }
+                            Log.log("SERVER", 2, "Checking for expired accounts...done.");
+                            ServerStatus.this.server_info.put("last_expired_accounts_check", String.valueOf(System.currentTimeMillis()));
+                        }
+                    });
+                }
+                this.server_info.put("memcache_objects", String.valueOf(FileClient.dirCachePerm.size()));
+                if (!this.server_info.containsKey("last_search_index_interval")) {
+                    this.server_info.put("last_search_index_interval", "0");
+                    Thread.sleep(1000L);
+                }
+                if (ServerStatus.IG("search_index_interval") > 0 && Long.parseLong(this.server_info.getProperty("last_search_index_interval")) < System.currentTimeMillis() - 60000L * ServerStatus.LG("search_index_interval")) {
+                    this.server_info.put("last_search_index_interval", String.valueOf(System.currentTimeMillis()));
+                    Worker.startWorker(new Runnable(){
+
+                        /*
+                         * WARNING - Removed try catching itself - possible behaviour change.
+                         */
+                        @Override
+                        public void run() {
+                            try {
+                                Object object = FileClient.dirCachePermTemp_lock;
+                                synchronized (object) {
+                                    String[] usernames = ServerStatus.SG("search_index_usernames").split(",");
+                                    FileClient.dirCachePermTemp = new Properties();
+                                    if (FileClient.dirCachePerm != null && FileClient.dirCachePerm.size() == 0) {
+                                        FileClient.dirCachePerm = FileClient.dirCachePermTemp;
+                                    }
+                                    int x = 0;
+                                    while (x < usernames.length) {
+                                        if (!usernames[x].trim().equals("")) {
+                                            Vector server_groups = (Vector)server_settings.get("server_groups");
+                                            int xx = 0;
+                                            while (xx < server_groups.size()) {
+                                                VFS uVFS = UserTools.ut.getVFS(server_groups.elementAt(xx).toString(), usernames[x].trim());
+                                                Properties pp = uVFS.get_item("/");
+                                                SearchHandler.buildEntry(pp, uVFS, "new", null);
+                                                uVFS.disconnect();
+                                                uVFS.free();
+                                                ServerStatus.this.server_info.put("last_search_index_interval", String.valueOf(System.currentTimeMillis()));
+                                                ++xx;
+                                            }
+                                        }
+                                        ++x;
+                                    }
+                                    FileClient.dirCachePerm = FileClient.dirCachePermTemp;
+                                    FileClient.dirCachePermTemp = null;
+                                    ServerStatus.this.server_info.put("last_search_index_interval", String.valueOf(System.currentTimeMillis()));
+                                }
+                            }
+                            catch (Exception e) {
+                                Log.log("SEARCH", 0, e);
+                            }
+                            ServerStatus.this.server_info.put("last_search_index_interval", String.valueOf(System.currentTimeMillis()));
+                        }
+                    });
+                }
+                if (!this.server_info.containsKey("last_secondary_login_via_email_check")) {
+                    this.server_info.put("last_secondary_login_via_email_check", "0");
+                }
+                if (ServerStatus.BG("secondary_login_via_email") && Long.parseLong(this.server_info.getProperty("last_secondary_login_via_email_check")) < System.currentTimeMillis() - 60000L * ServerStatus.LG("secondary_login_via_email_cache_interval")) {
+                    this.server_info.put("last_secondary_login_via_email_check", String.valueOf(System.currentTimeMillis()));
+                    if (this.server_info.getProperty("checking_email_cache", "false").equals("false")) {
+                        Worker.startWorker(new Runnable(){
+
+                            @Override
+                            public void run() {
+                                ServerStatus.this.server_info.put("checking_email_cache", "true");
+                                try {
+                                    UserTools.cacheEmailUsernames();
+                                }
+                                catch (Exception e) {
+                                    Log.log("SERVER", 0, e);
+                                }
+                                ServerStatus.this.server_info.put("checking_email_cache", "false");
+                                ServerStatus.this.server_info.put("last_secondary_login_via_email_check", String.valueOf(System.currentTimeMillis()));
+                            }
+                        });
+                    }
+                    this.server_info.put("last_secondary_login_via_email_check", String.valueOf(System.currentTimeMillis()));
+                }
+                if (!this.server_info.containsKey("last_expired_sync_check")) {
+                    this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
+                }
+                if (Long.parseLong(this.server_info.getProperty("last_expired_sync_check")) < System.currentTimeMillis() - 3600000L) {
+                    this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
+                    if (ServerStatus.IG("sync_history_days") > 0) {
+                        final Properties status = new Properties();
+                        Worker.startWorker(new Runnable(){
+
+                            @Override
+                            public void run() {
+                                try {
+                                    GregorianCalendar c = new GregorianCalendar();
+                                    c.setTime(new Date());
+                                    ((Calendar)c).add(5, ServerStatus.IG("sync_history_days") * -1);
+                                    SyncTools.purgeExpired(c.getTime().getTime());
+                                }
+                                catch (Exception e) {
+                                    Log.log("SYNC", 0, e);
+                                }
+                                status.put("done", "done");
+                                ServerStatus.this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
+                            }
+                        });
+                        Worker.startWorker(new Runnable(){
+
+                            @Override
+                            public void run() {
+                                try {
+                                    while (status.size() == 0) {
+                                        ServerStatus.this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
+                                        Thread.sleep(10000L);
+                                        ServerStatus.this.server_info.put("last_expired_sync_check", String.valueOf(System.currentTimeMillis()));
+                                    }
+                                }
+                                catch (Exception exception) {
+                                    // empty catch block
+                                }
+                            }
+                        });
+                    }
+                }
+                if (!this.server_info.containsKey("last_server_info_history")) {
+                    this.server_info.put("last_server_info_history", String.valueOf(System.currentTimeMillis()));
+                }
+                if (!this.server_info.containsKey("last_server_info_history_delete")) {
+                    this.server_info.put("last_server_info_history_delete", "0");
+                }
+                if (Long.parseLong(this.server_info.getProperty("last_server_info_history")) < System.currentTimeMillis() - 40000L) {
+                    this.server_info.put("last_server_info_history", String.valueOf(System.currentTimeMillis()));
+                    char mm = new SimpleDateFormat("mm").format(new Date()).charAt(1);
+                    if (mm == '0' || mm == '5') {
+                        Worker.startWorker(new Runnable(){
+
+                            @Override
+                            public void run() {
+                                SimpleDateFormat yyMMdd = new SimpleDateFormat("yyMMdd");
+                                try {
+                                    Properties request = new Properties();
+                                    request.put("params", "current_download_speed,current_upload_speed,logged_in_users,ram_free,ram_max,server_cpu,os_cpu,open_files,connected_unique_ips");
+                                    request.put("priorIntervals", "300");
+                                    Object getDashboardItems = AdminControls.getDashboardItems(request, "(CONNECT)");
+                                    String getStatHistory = AdminControls.getStatHistory(request);
+                                    Vector getJobsSummary = AdminControls.getJobsSummary(request, "(CONNECT)");
+                                    Properties history_object = new Properties();
+                                    history_object.put("getDashboardItems", getDashboardItems);
+                                    history_object.put("getJobsSummary", getJobsSummary);
+                                    history_object.put("getStatHistory", getStatHistory);
+                                    SimpleDateFormat HHmm = new SimpleDateFormat("HHmm");
+                                    String archived_history = String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/archived_history/" + yyMMdd.format(new Date()) + "/";
+                                    new File_S(archived_history).mkdirs();
+                                    ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(String.valueOf(archived_history) + HHmm.format(new Date()) + ".history_obj"));
+                                    oos.writeObject(history_object);
+                                    oos.close();
+                                }
+                                catch (Exception e) {
+                                    Log.log("SERVER", 0, e);
+                                }
+                                if (Long.parseLong(ServerStatus.this.server_info.getProperty("last_server_info_history_delete")) < System.currentTimeMillis() - 14400000L) {
+                                    ServerStatus.this.server_info.put("last_server_info_history_delete", String.valueOf(System.currentTimeMillis()));
+                                    try {
+                                        GregorianCalendar c = new GregorianCalendar();
+                                        c.setTime(new Date());
+                                        ((Calendar)c).add(5, ServerStatus.IG("server_info_history_days") * -1);
+                                        int min_date = Integer.parseInt(yyMMdd.format(c.getTime()));
+                                        String archived_history = String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/archived_history/";
+                                        File[] dirs = new File_S(archived_history).listFiles();
+                                        int x = 0;
+                                        while (dirs != null && x < dirs.length) {
+                                            if (dirs[x].getName().length() == 6) {
+                                                try {
+                                                    if (Integer.parseInt(dirs[x].getName()) < min_date) {
+                                                        Common.recurseDelete(dirs[x].getPath(), false);
+                                                    }
+                                                }
+                                                catch (Exception e) {
+                                                    Log.log("SERVER", 2, e);
+                                                }
+                                            }
+                                            ++x;
+                                        }
+                                    }
+                                    catch (Exception e) {
+                                        Log.log("SERVER", 0, e);
+                                    }
+                                }
+                                try {
+                                    Thread.sleep(21000L);
+                                }
+                                catch (InterruptedException interruptedException) {
+                                    // empty catch block
+                                }
+                                ServerStatus.this.server_info.put("last_server_info_history", String.valueOf(System.currentTimeMillis()));
+                            }
+                        });
+                    }
+                }
+                long last_stats_db_size = com.crushftp.client.Common.recurseSize("./statsDB", 0L);
+                long last_sessions_obj_size = com.crushftp.client.Common.recurseSize("./sessions.obj", 0L);
+                ServerStatus.siPUT("last_stats_db_size", String.valueOf(last_stats_db_size));
+                ServerStatus.siPUT("last_sessions_obj_size", String.valueOf(last_sessions_obj_size));
+                ServerStatus.siPUT("used_threads", String.valueOf(Worker.busyWorkers.size()));
+                ServerStatus.siPUT("max_threads", String.valueOf(ServerStatus.IG("max_threads")));
+                ServerStatus.updateMemoryStats();
+                final String memory_threads = "Server Memory Stats: Max=" + com.crushftp.client.Common.format_bytes_short2(ServerStatus.siLG("ram_max")) + ", Free=" + com.crushftp.client.Common.format_bytes_short2(ServerStatus.siLG("ram_free")) + ", Threads:" + Worker.busyWorkers.size() + ", " + System.getProperty("java.version") + ":" + System.getProperty("sun.arch.data.model") + " bit," + Runtime.getRuntime().availableProcessors() + "cores  OS:" + System.getProperties().getProperty("os.name") + " CPU usage Server/OS:" + ServerStatus.siSG("server_cpu") + "/" + ServerStatus.siSG("os_cpu") + " OpenFiles:" + ServerStatus.siSG("open_files") + "/" + ServerStatus.siSG("max_open_files") + ", statsDB size=" + com.crushftp.client.Common.format_bytes_short(last_stats_db_size) + ", sessions.obj size=" + com.crushftp.client.Common.format_bytes_short(last_sessions_obj_size) + " :" + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str");
+                if (!this.server_info.containsKey("last_memory_check")) {
+                    this.server_info.put("last_memory_check", String.valueOf(System.currentTimeMillis()));
+                }
+                if (Long.parseLong(this.server_info.getProperty("last_memory_check")) < System.currentTimeMillis() - 1000L * ServerStatus.LG("memory_log_interval")) {
+                    this.server_info.put("last_memory_check", String.valueOf(System.currentTimeMillis()));
+                    Log.log("SERVER", 0, memory_threads);
+                }
+                if ((low_memory_trigger_value1 = ServerStatus.LG("low_memory_trigger_value1")) > 99L) {
+                    low_memory_trigger_value1 = 40L;
+                }
+                if ((low_memory_trigger_value2 = ServerStatus.LG("low_memory_trigger_value2")) > 99L) {
+                    low_memory_trigger_value2 = 30L;
+                }
+                if ((low_memory_trigger_value3 = ServerStatus.LG("low_memory_trigger_value3")) > 99L) {
+                    low_memory_trigger_value3 = 20L;
+                }
+                final long f_low_memory_trigger_value3 = low_memory_trigger_value3;
+                if ((float)ServerStatus.siLG("ram_free") / (float)ServerStatus.siLG("ram_max") < (float)low_memory_trigger_value3 / 100.0f) {
+                    Worker.startWorker(new Runnable(){
+
+                        @Override
+                        public void run() {
+                            System.gc();
+                            System.gc();
+                            try {
+                                Thread.sleep(3000L);
+                            }
+                            catch (InterruptedException interruptedException) {
+                                // empty catch block
+                            }
+                            System.gc();
+                            ServerStatus.updateMemoryStats();
+                            if ((float)ServerStatus.siLG("ram_free") / (float)ServerStatus.siLG("ram_max") < (float)f_low_memory_trigger_value3 / 100.0f) {
+                                Log.log("SERVER", 0, "LOW_MEMORY:" + memory_threads);
+                                ServerStatus.this.server_info.put("low_memory", "Critically low on memory!<br/>Crash is imminent! Less than " + f_low_memory_trigger_value3 + "%!<br/>" + ServerStatus.this.logDateFormat.format(new Date()) + "|" + memory_threads);
+                                Properties info = new Properties();
+                                info.put("alert_type", "low_memory");
+                                info.put("alert_ram_free", String.valueOf(ServerStatus.siLG("ram_free")));
+                                info.put("alert_ram_max", String.valueOf(ServerStatus.siLG("ram_max")));
+                                info.put("alert_memory_threads", memory_threads);
+                                info.put("alert_timeout", "0");
+                                info.put("alert_max", "0");
+                                info.put("alert_msg", "");
+                                ServerStatus.this.runAlerts("low_memory", info, null, null);
+                                ServerStatus.this.runAlerts("low_memory3", info, null, null);
+                                System.gc();
                             }
                         }
+                    });
+                } else if ((float)ServerStatus.siLG("ram_free") / (float)ServerStatus.siLG("ram_max") < (float)low_memory_trigger_value2 / 100.0f) {
+                    Log.log("SERVER", 0, "LOW_MEMORY:" + memory_threads);
+                    this.server_info.put("low_memory", "Very low on memory! Less than " + low_memory_trigger_value2 + "%!<br/>" + this.logDateFormat.format(new Date()) + "|" + memory_threads);
+                    Properties info = new Properties();
+                    info.put("alert_type", "low_memory");
+                    info.put("alert_ram_free", String.valueOf(ServerStatus.siLG("ram_free")));
+                    info.put("alert_ram_max", String.valueOf(ServerStatus.siLG("ram_max")));
+                    info.put("alert_memory_threads", memory_threads);
+                    info.put("alert_timeout", "0");
+                    info.put("alert_max", "0");
+                    info.put("alert_msg", "");
+                    this.runAlerts("low_memory", info, null, null);
+                    this.runAlerts("low_memory2", info, null, null);
+                    System.gc();
+                } else if ((float)ServerStatus.siLG("ram_free") / (float)ServerStatus.siLG("ram_max") < (float)low_memory_trigger_value1 / 100.0f) {
+                    Log.log("SERVER", 0, "LOW_MEMORY:" + memory_threads);
+                    this.server_info.put("low_memory", "Low on memory! Less than " + low_memory_trigger_value1 + "%!<br/>" + this.logDateFormat.format(new Date()) + "|" + memory_threads);
+                    Properties info = new Properties();
+                    info.put("alert_type", "low_memory");
+                    info.put("alert_ram_free", String.valueOf(ServerStatus.siLG("ram_free")));
+                    info.put("alert_ram_max", String.valueOf(ServerStatus.siLG("ram_max")));
+                    info.put("alert_memory_threads", memory_threads);
+                    info.put("alert_timeout", "0");
+                    info.put("alert_max", "0");
+                    info.put("alert_msg", "");
+                    this.runAlerts("low_memory", info, null, null);
+                    this.runAlerts("low_memory1", info, null, null);
+                    System.gc();
+                } else {
+                    this.server_info.remove("low_memory");
+                }
+                if (!this.server_info.containsKey("last_vfs_check")) {
+                    this.server_info.put("last_vfs_check", "0");
+                }
+                if (Long.parseLong(this.server_info.getProperty("last_vfs_check")) < System.currentTimeMillis() - 1000L * ServerStatus.LG("vfs_cache_interval")) {
+                    this.server_info.put("last_vfs_check", String.valueOf(System.currentTimeMillis()));
+                    if (ServerStatus.BG("vfs_cache_enabled")) {
+                        this.fill_vfs_cache();
                     }
-                    if (!arg.equals("log_rolling")) break block290;
+                }
+                if (!this.server_info.containsKey("last_quota_check")) {
+                    this.server_info.put("last_quota_check", String.valueOf(System.currentTimeMillis() - 1000L * ServerStatus.LG("quota_async_cache_interval") + 60000L));
+                }
+                if (Long.parseLong(this.server_info.getProperty("last_quota_check")) < System.currentTimeMillis() - 1000L * ServerStatus.LG("quota_async_cache_interval")) {
+                    this.server_info.put("last_quota_check", String.valueOf(System.currentTimeMillis()));
+                    if (ServerStatus.BG("quota_async")) {
+                        try {
+                            Worker.startWorker(new QuotaWorker());
+                        }
+                        catch (IOException info) {
+                            // empty catch block
+                        }
+                    }
+                }
+                if (!this.server_info.containsKey("last_dump_threads")) {
+                    this.server_info.put("last_dump_threads", String.valueOf(System.currentTimeMillis()));
+                }
+                if (ServerStatus.LG("dump_threads_log_interval") > 0L && Long.parseLong(this.server_info.getProperty("last_dump_threads")) < System.currentTimeMillis() - 1000L * ServerStatus.LG("dump_threads_log_interval")) {
+                    this.server_info.put("last_dump_threads", String.valueOf(System.currentTimeMillis()));
+                    System.out.println(new Date() + "THREAD DUMP");
+                    System.out.println(com.crushftp.client.Common.dumpStack(String.valueOf(version_info_str) + sub_version_info_str));
+                }
+                Worker.startWorker(new Runnable(){
+
+                    /*
+                     * WARNING - Removed try catching itself - possible behaviour change.
+                     * Unable to fully structure code
+                     */
+                    @Override
+                    public void run() {
+                        alert_tmp_f = new Vector<E>();
+                        var2_2 = com.crushftp.client.Common.System2.get("alerts_queue");
+                        synchronized (var2_2) {
+                            alert_tmp_f.addAll((Vector)com.crushftp.client.Common.System2.get("alerts_queue"));
+                            ((Vector)com.crushftp.client.Common.System2.get("alerts_queue")).clear();
+                            // MONITOREXIT @DISABLED, blocks:[0, 1] lbl8 : MonitorExitStatement: MONITOREXIT : var2_2
+                            if (true) ** GOTO lbl15
+                        }
+                        do {
+                            alert = (Properties)alert_tmp_f.remove(0);
+                            ServerStatus.thisObj.runAlerts(alert.getProperty("msg", ""), (SessionCrush)alert.get("session"));
+lbl15:
+                            // 2 sources
+
+                        } while (alert_tmp_f.size() > 0);
+                    }
+                });
+                if (!this.server_info.containsKey("last_put_in_user_flush")) {
+                    this.server_info.put("last_put_in_user_flush", String.valueOf(System.currentTimeMillis()));
+                }
+                if (Long.parseLong(this.server_info.getProperty("last_put_in_user_flush")) < System.currentTimeMillis() - 60000L) {
+                    this.server_info.put("last_put_in_user_flush", String.valueOf(System.currentTimeMillis()));
+                    Worker.startWorker(new Runnable(){
+
+                        @Override
+                        public void run() {
+                            ServerStatus.this.server_info.put("last_put_in_user_flush", String.valueOf(System.currentTimeMillis()));
+                            UserTools.ut.put_in_user_flush();
+                        }
+                    });
+                }
+            } else if (arg.equals("vfs_replication_pinger")) {
+                if (!this.server_info.containsKey("replicated_vfs_ping_interval")) {
+                    this.server_info.put("replicated_vfs_ping_interval", String.valueOf(System.currentTimeMillis()));
+                }
+                if (ServerStatus.LG("replicated_vfs_ping_interval") > 0L && Long.parseLong(this.server_info.getProperty("replicated_vfs_ping_interval")) < System.currentTimeMillis() - 1000L * ServerStatus.LG("replicated_vfs_ping_interval")) {
+                    this.server_info.put("replicated_vfs_ping_interval", String.valueOf(System.currentTimeMillis()));
+                    if (!ServerStatus.SG("replicated_vfs_root_url").equals("")) {
+                        try {
+                            Properties vItem = new Properties();
+                            Properties virtual = new Properties();
+                            VFS uVFS = VFS.getVFS(virtual);
+                            vItem.put("url", ServerStatus.SG("replicated_vfs_root_url"));
+                            vItem.put("type", "DIR");
+                            Properties item = new Properties();
+                            item.put("vItem", vItem);
+                            Vector<Properties> vItems = new Vector<Properties>();
+                            Vector<MemoryClient> clients = new Vector<MemoryClient>();
+                            clients.addElement(new MemoryClient("MEMORY:///", "", null));
+                            vItems.addElement(vItem);
+                            uVFS.addReplicatedVFSAndClient(item, vItems, clients, true);
+                            new GenericClientMulti("PROXY", com.crushftp.client.Common.log, vItem, vItems, clients, true).close();
+                            uVFS.disconnect();
+                        }
+                        catch (Exception e) {
+                            Log.log("SERVER", 1, e);
+                        }
+                    }
+                    this.server_info.put("replicated_vfs_ping_interval", String.valueOf(System.currentTimeMillis()));
+                }
+            } else if (arg.equals("http_cleaner")) {
+                if (ServerStatus.BG("encryption_pass_needed") && new String(com.crushftp.client.Common.encryption_password).equals("crushftp")) {
+                    this.append_log("WARNING: Encryption password needed for the server!  Please login to admin console to provide it.", "RUN_SERVER");
+                }
+                long sessions = 0L;
+                long http_keys = 0L;
+                long http_keys_expired1 = 0L;
+                long http_keys_expired2 = 0L;
+                long http_activity_keys = 0L;
+                long http_activity_keys_expired = 0L;
+                try {
+                    Enumeration keys = SharedSession.find("crushftp.sessions").keys();
+                    while (keys.hasMoreElements()) {
+                        String id = keys.nextElement().toString();
+                        ++http_activity_keys;
+                        Object o = SharedSession.find("crushftp.sessions").get(id);
+                        long time = 0L;
+                        long timeout = 60L * ServerStatus.LG("http_session_timeout");
+                        if (o instanceof SessionCrush) {
+                            time = Long.parseLong(((SessionCrush)o).getProperty("last_activity", "0"));
+                            if (((SessionCrush)o).user != null) {
+                                long timeout2 = Long.parseLong(((SessionCrush)o).user.getProperty("max_idle_time", "10"));
+                                if (timeout2 < 0L) {
+                                    timeout = timeout2 * -1L;
+                                } else if (timeout2 != 0L && timeout2 < timeout) {
+                                    timeout = 60L * timeout2;
+                                }
+                            }
+                            Properties ui = ((SessionCrush)o).user_info;
+                            if (Log.log("SERVER", 2, "")) {
+                                Log.log("SERVER", 2, "Checking session:" + id + " ui present:" + (ui != null));
+                            }
+                            if (System.currentTimeMillis() - time > 1000L && ui != null && ui.getProperty("webdav_login", "").equals("true")) {
+                                timeout = ServerStatus.IG("webdav_timeout_secs");
+                                if (Log.log("SERVER", 2, "")) {
+                                    Log.log("SERVER", 2, "Detected HTTP WebDAV session:" + id + " timeout set to:" + timeout + " secs");
+                                }
+                            }
+                        }
+                        if (new Date().getTime() - time <= 1000L * timeout) continue;
+                        boolean allow_removal = true;
+                        Enumeration e = SharedSession.find("crushftp.usernames").keys();
+                        while (e.hasMoreElements() && allow_removal) {
+                            String key2 = e.nextElement().toString();
+                            if (key2.indexOf("_" + id + "_") < 0) continue;
+                            Enumeration<Object> tunnel_keys = ServerSessionTunnel3.running_tunnels.keys();
+                            while (tunnel_keys.hasMoreElements() && allow_removal) {
+                                String tunnel_id = tunnel_keys.nextElement().toString();
+                                if (!tunnel_id.startsWith(String.valueOf(key2) + "_")) continue;
+                                StreamController sc = (StreamController)ServerSessionTunnel3.running_tunnels.get(tunnel_id);
+                                if (System.currentTimeMillis() - sc.last_receive_activity > 60000L) {
+                                    Log.log("TUNNEL", 0, "Current tunnel ID list:" + ServerSessionTunnel3.running_tunnels);
+                                    Log.log("TUNNEL", 0, "Tunnel is dead and the session has timed out, closing it:" + tunnel_id + " inactive time:" + (System.currentTimeMillis() - sc.last_receive_activity));
+                                    sc.startStopTunnel(false);
+                                    continue;
+                                }
+                                allow_removal = false;
+                            }
+                            ++http_keys_expired1;
+                            SharedSession.find("crushftp.usernames").remove(key2);
+                            Tunnel2.stopTunnel(key2);
+                            if (!(o instanceof SessionCrush) || ((SessionCrush)o).uVFS == null) continue;
+                            ((SessionCrush)o).uVFS.disconnect();
+                        }
+                        if (!allow_removal) continue;
+                        ++http_activity_keys_expired;
+                        if (o instanceof SessionCrush) {
+                            this.remove_user(((SessionCrush)o).user_info);
+                        }
+                        SharedSession.find("crushftp.sessions").remove(id);
+                        if (!Log.log("SERVER", 2, "")) continue;
+                        Log.log("SERVER", 2, "Removing HTTP session:" + id);
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 1, e);
+                }
+                try {
+                    long timeout = 60L * ServerStatus.LG("http_session_timeout");
+                    Vector v = (Vector)ServerStatus.siVG("user_list").clone();
+                    int x = v.size() - 1;
+                    while (x >= 0) {
+                        Properties user_info = (Properties)v.elementAt(x);
+                        SessionCrush thisSession = (SessionCrush)user_info.get("session");
+                        if ((thisSession == null || SharedSession.find("crushftp.sessions").get(thisSession.getId()) == null) && (System.currentTimeMillis() - Long.parseLong(user_info.getProperty("last_activity", "0"))) / 1000L > timeout) {
+                            this.kick(user_info);
+                        }
+                        --x;
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 1, e);
+                }
+                try {
+                    Enumeration<Object> keys = ServerStatus.siPG("domain_cross_reference").keys();
+                    while (keys.hasMoreElements()) {
+                        String key = keys.nextElement().toString();
+                        String val = ServerStatus.siPG("domain_cross_reference").getProperty(key);
+                        if (System.currentTimeMillis() - Long.parseLong(val.split(":")[0]) <= 300000L) continue;
+                        ServerStatus.siPG("domain_cross_reference").remove(key);
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 1, e);
+                }
+                try {
+                    Enumeration e = SharedSession.find("crushftp.usernames").keys();
+                    while (e.hasMoreElements()) {
+                        String key2 = e.nextElement().toString();
+                        ++http_keys;
+                        String id = key2.substring(key2.indexOf("_") + 1, key2.lastIndexOf("_"));
+                        if (SharedSession.find("crushftp.sessions").containsKey(id)) continue;
+                        ++http_keys_expired2;
+                        SharedSession.find("crushftp.usernames").remove(key2);
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 1, e);
+                }
+                Log.log("SERVER", 1, "Cleaning up sessions:" + sessions + " sessions tracked, " + http_activity_keys + " activity items tracked, " + http_keys + " sessions tracked, " + http_activity_keys_expired + " activities expired, " + http_keys_expired1 + " sessions expired in first pass, and " + http_keys_expired2 + " expired in second pass.");
+                try {
+                    Properties resetTokens = ServerStatus.siPG("resetTokens");
+                    if (resetTokens == null) {
+                        resetTokens = new Properties();
+                    }
+                    ServerStatus.thisObj.server_info.put("resetTokens", resetTokens);
+                    Enumeration<Object> e = resetTokens.keys();
+                    while (e.hasMoreElements()) {
+                        String key2 = e.nextElement().toString();
+                        Properties reset = (Properties)resetTokens.get(key2);
+                        long generated = Long.parseLong(reset.getProperty("generated"));
+                        if (System.currentTimeMillis() <= generated + (long)(60000 * ServerStatus.IG("reset_token_timeout"))) continue;
+                        resetTokens.remove(key2);
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 1, e);
+                }
+                Enumeration<Object> tunnel_keys = ServerSessionTunnel3.running_tunnels.keys();
+                while (tunnel_keys.hasMoreElements()) {
+                    String tunnel_id = tunnel_keys.nextElement().toString();
+                    StreamController sc = (StreamController)ServerSessionTunnel3.running_tunnels.get(tunnel_id);
+                    if (System.currentTimeMillis() - sc.last_receive_activity <= 60000L) continue;
+                    Log.log("TUNNEL", 0, "Current tunnel ID list:" + ServerSessionTunnel3.running_tunnels);
+                    Log.log("TUNNEL", 0, "Tunnel is dead, closing it:" + tunnel_id + " inactive time:" + (System.currentTimeMillis() - sc.last_receive_activity));
+                    ServerSessionTunnel3.running_tunnels.remove(tunnel_id);
+                    sc.startStopTunnel(false);
+                }
+                try {
+                    Vector v = (Vector)ServerStatus.siVG("user_list").clone();
+                    int x = v.size() - 1;
+                    while (x >= 0) {
+                        Properties user_info = (Properties)v.elementAt(x);
+                        SessionCrush thisSession = (SessionCrush)user_info.get("session");
+                        if (thisSession != null && thisSession.uVFS != null && thisSession.uVFS.cacheList != null) {
+                            Properties cache = thisSession.uVFS.cacheList;
+                            Enumeration<Object> keys = cache.keys();
+                            while (keys.hasMoreElements()) {
+                                Properties h;
+                                String key = "" + keys.nextElement();
+                                Object o2 = cache.get(key);
+                                if (!(o2 instanceof Properties) || (h = (Properties)o2) == null || System.currentTimeMillis() - Long.parseLong(h.getProperty("time")) <= 60000L) continue;
+                                cache.remove(key);
+                                cache.remove(String.valueOf(key) + "...count");
+                            }
+                        }
+                        --x;
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 2, e);
+                }
+            } else {
+                if (arg.equals("events_thread")) {
+                    Object sessions = this.eventLock;
+                    synchronized (sessions) {
+                        try {
+                            this.events6.checkEventsNow();
+                        }
+                        catch (Exception e) {
+                            Log.log("EVENT", 0, e);
+                        }
+                    }
+                }
+                if (arg.equals("log_rolling")) {
                     Log.log("SERVER", 3, "Log Rolling:Checking is log rolling enabled? roll_log=" + ServerStatus.BG("roll_log"));
                     if (ServerStatus.BG("roll_log") && this.loggingProvider1 != null) {
                         this.loggingProvider1.checkForLogRoll();
@@ -3275,395 +3586,427 @@ lbl15:
                             @Override
                             public void run() {
                                 Thread.currentThread().setName("Checking for expired logs and cleaning them up...");
-                                ServerStatus.this.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
-                                Log.log("SERVER", 2, "Checking for expired session logs and job logs...");
-                                try {
-                                    File_S[] log_dates;
-                                    if (ServerStatus.SG("user_log_location").indexOf("session_logs") < 0) {
-                                        server_settings.put("user_log_location", String.valueOf(ServerStatus.SG("user_log_location")) + "session_logs/");
-                                    }
-                                    if ((log_dates = (File_S[])new File_S(String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/session_logs/").listFiles()) != null) {
-                                        Log.log("SERVER", 2, "Found log_dates items:" + log_dates.length);
-                                    }
-                                    int x = 0;
-                                    while (log_dates != null && x < log_dates.length) {
-                                        Thread.sleep(1L);
-                                        ServerStatus.this.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
-                                        if (log_dates[x].isDirectory()) {
-                                            File_S[] logs = (File_S[])new File_S(String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/session_logs/" + log_dates[x].getName() + "/").listFiles();
-                                            int xx = 0;
-                                            while (logs != null && xx < logs.length) {
-                                                Thread.sleep(1L);
-                                                ServerStatus.this.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
-                                                if (logs[xx].isFile() && (logs[xx].getName().toUpperCase().endsWith(".LOG") || logs[xx].getName().toUpperCase().startsWith(".")) && (System.currentTimeMillis() - logs[xx].lastModified() > 86400000L * ServerStatus.LG("recent_user_log_days") || logs[xx].getName().toUpperCase().startsWith(".")) && !logs[xx].delete()) {
-                                                    Log.log("SERVER", 2, "0:Log file delete failed:" + logs[xx]);
-                                                }
-                                                ++xx;
-                                            }
-                                            if (!(logs != null && logs.length >= 10 || (logs = (File_S[])new File_S(String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/session_logs/" + log_dates[x].getName() + "/").listFiles()) != null && logs.length != 0 || log_dates[x].delete())) {
-                                                Log.log("SERVER", 2, "1:Log folder delete failed:" + log_dates[x]);
-                                            }
-                                        } else if (log_dates[x].isFile() && (log_dates[x].getName().toUpperCase().endsWith(".LOG") || log_dates[x].getName().toUpperCase().startsWith(".")) && System.currentTimeMillis() - log_dates[x].lastModified() > 86400000L * ServerStatus.LG("recent_user_log_days")) {
-                                            ServerStatus.this.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
-                                            if (!log_dates[x].delete()) {
-                                                Log.log("SERVER", 2, "2:Log folder delete failed:" + log_dates[x]);
-                                            }
-                                        }
-                                        ++x;
-                                    }
-                                    ServerStatus.this.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
-                                    Vector logs = new Vector();
-                                    Common.getAllFileListing(logs, String.valueOf(new File_S(String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/logs/jobs/").getPath()) + "/", 9, false);
-                                    int x2 = 0;
-                                    while (logs != null && x2 < logs.size()) {
-                                        Thread.sleep(1L);
-                                        ServerStatus.this.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
-                                        File_S log = (File_S)logs.elementAt(x2);
-                                        if (log.isFile() && log.getName().toUpperCase().endsWith(".LOG")) {
-                                            if (log.getName().toUpperCase().startsWith("_") && System.currentTimeMillis() - log.lastModified() > 86400000L * ServerStatus.LG("recent_temp_job_log_days")) {
-                                                log.delete();
-                                            } else if (!log.getName().toUpperCase().startsWith("_") && System.currentTimeMillis() - log.lastModified() > 86400000L * ServerStatus.LG("recent_job_log_days")) {
-                                                log.delete();
-                                            }
-                                        }
-                                        ++x2;
-                                    }
-                                }
-                                catch (Exception e) {
-                                    Log.log("SERVER", 0, e);
-                                }
-                                ServerStatus.this.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
+                                ServerStatus.expired_log_cleanup();
                             }
                         });
                     }
-                    break block275;
+                } else if (arg.equals("monitor_folders") || arg.equals("monitor_folders_instant")) {
+                    this.doFolderMonitor(arg);
+                } else if (arg.equals("log_handler")) {
+                    this.doLogFlush();
+                } else if (arg.equals("extra_update_timer")) {
+                    this.doExtraUpdateActions();
+                } else if (arg.equals("gui_timer")) {
+                    this.doGuiTimerUpdates();
                 }
-                if (!arg.equals("monitor_folders") && !arg.equals("monitor_folders_instant")) break block291;
-                Thread.sleep(1000L);
-                Vector monitored_folders = ServerStatus.VG("monitored_folders");
-                Vector filelist = new Vector();
-                if (System.getProperty("crushftp.singleuser", "false").equals("true")) {
-                    return;
-                }
-                int x = 0;
-                while (x < monitored_folders.size()) {
-                    block292: {
-                        long multiplier;
-                        long timeAmount;
-                        int scan_depth;
-                        File_U rFolder;
-                        Properties p;
-                        block294: {
-                            block293: {
-                                p = (Properties)monitored_folders.elementAt(x);
-                                if (!p.getProperty("enabled", "true").equals("true") || p.getProperty("folder") == null || !(rFolder = new File_U(p.getProperty("folder"))).exists()) break block292;
-                                filelist = new Vector();
-                                scan_depth = 1;
-                                if (p.getProperty("monitor_sub_folders", "true").equals("true")) {
-                                    scan_depth = 99;
-                                }
-                                timeAmount = Long.parseLong(p.getProperty("time_units_no"));
-                                multiplier = 1000L;
-                                multiplier = p.getProperty("time_units").equals("0") ? 60000L : (p.getProperty("time_units").equals("1") ? 3600000L : 86400000L);
-                                if (!arg.equals("monitor_folders_instant") || timeAmount >= 0L) break block293;
-                                timeAmount *= -1L;
-                                multiplier = 1000L;
-                                break block294;
-                            }
-                            if (arg.equals("monitor_folders_instant") && timeAmount >= 0L) break block292;
+            }
+        }
+    }
+
+    public static void expired_log_cleanup() {
+        ServerStatus.thisObj.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
+        Log.log("SERVER", 2, "Checking for expired session logs and job logs...");
+        try {
+            File_S[] log_dates;
+            if (ServerStatus.SG("user_log_location").indexOf("session_logs") < 0) {
+                server_settings.put("user_log_location", String.valueOf(ServerStatus.SG("user_log_location")) + "session_logs/");
+            }
+            if ((log_dates = (File_S[])new File_S(String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/session_logs/").listFiles()) != null) {
+                Log.log("SERVER", 2, "Found log_dates items:" + log_dates.length);
+            }
+            int x = 0;
+            while (log_dates != null && x < log_dates.length) {
+                Thread.sleep(1L);
+                ServerStatus.thisObj.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
+                if (log_dates[x].isDirectory()) {
+                    File_S[] logs = (File_S[])new File_S(String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/session_logs/" + log_dates[x].getName() + "/").listFiles();
+                    int xx = 0;
+                    while (logs != null && xx < logs.length) {
+                        Thread.sleep(1L);
+                        ServerStatus.thisObj.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
+                        if (logs[xx].isFile() && (logs[xx].getName().toUpperCase().endsWith(".LOG") || logs[xx].getName().toUpperCase().startsWith(".")) && (System.currentTimeMillis() - logs[xx].lastModified() > 86400000L * ServerStatus.LG("recent_user_log_days") || logs[xx].getName().toUpperCase().startsWith(".")) && !logs[xx].delete()) {
+                            Log.log("SERVER", 2, "0:Log file delete failed:" + logs[xx]);
                         }
-                        Common.getAllFileListing_U(filelist, p.getProperty("folder"), scan_depth, true);
-                        Vector<File_U> foundItems = new Vector<File_U>();
-                        int i = 0;
-                        while (i < filelist.size()) {
-                            File_U currFilePointer;
-                            if (p.getProperty("enabled", "true").equals("true") && !(currFilePointer = (File_U)filelist.elementAt(i)).getCanonicalPath().equals(rFolder.getCanonicalPath())) {
-                                long lastMod = currFilePointer.lastModified() + multiplier * timeAmount;
-                                if (System.currentTimeMillis() - lastMod > 0L) {
-                                    if (Common.machine_is_windows()) {
-                                        if (p.getProperty("folder_match", "*").indexOf("\\") > 0 && p.getProperty("folder_match", "*").indexOf("\\\\") < 0) {
-                                            p.put("folder_match", p.getProperty("folder_match", "*").replace("\\", "\\\\"));
+                        ++xx;
+                    }
+                    if (!(logs != null && logs.length >= 10 || (logs = (File_S[])new File_S(String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("user_log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/session_logs/" + log_dates[x].getName() + "/").listFiles()) != null && logs.length != 0 || log_dates[x].delete())) {
+                        Log.log("SERVER", 2, "1:Log folder delete failed:" + log_dates[x]);
+                    }
+                } else if (log_dates[x].isFile() && (log_dates[x].getName().toUpperCase().endsWith(".LOG") || log_dates[x].getName().toUpperCase().startsWith(".")) && System.currentTimeMillis() - log_dates[x].lastModified() > 86400000L * ServerStatus.LG("recent_user_log_days")) {
+                    ServerStatus.thisObj.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
+                    if (!log_dates[x].delete()) {
+                        Log.log("SERVER", 2, "2:Log folder delete failed:" + log_dates[x]);
+                    }
+                }
+                ++x;
+            }
+            ServerStatus.thisObj.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
+            Vector logs = new Vector();
+            Common.getAllFileListing(logs, String.valueOf(new File_S(String.valueOf(new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("log_location"), null, null, null)).getCanonicalFile().getParentFile().getPath()) + "/logs/jobs/").getPath()) + "/", 9, false);
+            int x2 = 0;
+            while (logs != null && x2 < logs.size()) {
+                Thread.sleep(1L);
+                ServerStatus.thisObj.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
+                File_S log = (File_S)logs.elementAt(x2);
+                if (log.isFile() && log.getName().toUpperCase().endsWith(".LOG")) {
+                    if (log.getName().toUpperCase().startsWith("_") && System.currentTimeMillis() - log.lastModified() > 86400000L * ServerStatus.LG("recent_temp_job_log_days")) {
+                        log.delete();
+                    } else if (!log.getName().toUpperCase().startsWith("_") && System.currentTimeMillis() - log.lastModified() > 86400000L * ServerStatus.LG("recent_job_log_days")) {
+                        log.delete();
+                    }
+                }
+                ++x2;
+            }
+        }
+        catch (Exception e) {
+            Log.log("SERVER", 0, e);
+        }
+        ServerStatus.thisObj.server_info.put("last_expired_log_check", String.valueOf(System.currentTimeMillis()));
+    }
+
+    public void doFolderMonitor(String arg) throws Exception {
+        Thread.sleep(1000L);
+        Vector monitored_folders = ServerStatus.VG("monitored_folders");
+        Vector filelist = new Vector();
+        if (System.getProperty("crushftp.singleuser", "false").equals("true")) {
+            return;
+        }
+        int x = 0;
+        while (x < monitored_folders.size()) {
+            block50: {
+                long multiplier;
+                long timeAmount;
+                int scan_depth;
+                File_U rFolder;
+                Properties p;
+                block52: {
+                    block51: {
+                        p = (Properties)monitored_folders.elementAt(x);
+                        if (!p.getProperty("enabled", "true").equals("true") || p.getProperty("folder") == null || !(rFolder = new File_U(p.getProperty("folder"))).exists()) break block50;
+                        filelist = new Vector();
+                        scan_depth = 1;
+                        if (p.getProperty("monitor_sub_folders", "true").equals("true")) {
+                            scan_depth = 99;
+                        }
+                        timeAmount = Long.parseLong(p.getProperty("time_units_no"));
+                        multiplier = 1000L;
+                        multiplier = p.getProperty("time_units").equals("0") ? 60000L : (p.getProperty("time_units").equals("1") ? 3600000L : 86400000L);
+                        if (!arg.equals("monitor_folders_instant") || timeAmount >= 0L) break block51;
+                        timeAmount *= -1L;
+                        multiplier = 1000L;
+                        break block52;
+                    }
+                    if (arg.equals("monitor_folders_instant") && timeAmount >= 0L) break block50;
+                }
+                Common.getAllFileListing_U(filelist, p.getProperty("folder"), scan_depth, true);
+                Vector<File_U> foundItems = new Vector<File_U>();
+                int i = 0;
+                while (i < filelist.size()) {
+                    File_U currFilePointer;
+                    if (p.getProperty("enabled", "true").equals("true") && !(currFilePointer = (File_U)filelist.elementAt(i)).getCanonicalPath().equals(rFolder.getCanonicalPath())) {
+                        long lastMod = currFilePointer.lastModified() + multiplier * timeAmount;
+                        if (System.currentTimeMillis() - lastMod > 0L) {
+                            if (Common.machine_is_windows()) {
+                                if (p.getProperty("folder_match", "*").indexOf("\\") > 0 && p.getProperty("folder_match", "*").indexOf("\\\\") < 0) {
+                                    p.put("folder_match", p.getProperty("folder_match", "*").replace("\\", "\\\\"));
+                                }
+                                if (p.getProperty("folder_not_match", "*").indexOf("\\") > 0 && p.getProperty("folder_not_match", "*").indexOf("\\\\") < 0) {
+                                    p.put("folder_not_match", p.getProperty("folder_not_match", "*").replace("\\", "\\\\"));
+                                }
+                                if (p.getProperty("folder_not_match_name", "*").indexOf("\\") > 0 && p.getProperty("folder_not_match_name", "*").indexOf("\\\\") < 0) {
+                                    p.put("folder_not_match_name", p.getProperty("folder_not_match_name", "*").replace("\\", "\\\\"));
+                                }
+                                if (p.getProperty("folder_match", "*").indexOf("\\") < 0 && p.getProperty("folder_match", "*").indexOf("/") >= 0) {
+                                    p.put("folder_match", p.getProperty("folder_match", "*").replace("/", "\\\\"));
+                                }
+                                if (p.getProperty("folder_not_match", "*").indexOf("\\") < 0 && p.getProperty("folder_not_match", "*").indexOf("/") >= 0) {
+                                    p.put("folder_not_match", p.getProperty("folder_not_match", "*").replace("/", "\\\\"));
+                                }
+                                if (p.getProperty("folder_not_match_name", "*").indexOf("\\") < 0 && p.getProperty("folder_not_match_name", "*").indexOf("/") >= 0) {
+                                    p.put("folder_not_match_name", p.getProperty("folder_not_match_name", "*").replace("/", "\\\\"));
+                                }
+                            }
+                            if (!(!com.crushftp.client.Common.do_searches(p.getProperty("folder_match", "*"), currFilePointer.getAbsolutePath(), false, 0) || !p.getProperty("folder_not_match", "").equals("") && com.crushftp.client.Common.do_searches(p.getProperty("folder_not_match", ""), currFilePointer.getAbsolutePath(), false, 0) || !p.getProperty("folder_not_match_name", "").equals("") && com.crushftp.client.Common.do_searches(p.getProperty("folder_not_match_name", ""), currFilePointer.getName(), false, 0))) {
+                                Vector emptyFolder;
+                                Log.log("SERVER", 2, "Folder Monitor Match:" + p.getProperty("folder_match", "") + "  vs.  " + currFilePointer.getAbsolutePath());
+                                Log.log("SERVER", 2, "Folder Monitor Not Match:" + p.getProperty("folder_not_match", "") + "  vs.  " + currFilePointer.getAbsolutePath());
+                                if (p.getProperty("delete").equals("true")) {
+                                    if (currFilePointer.isFile() && p.getProperty("monitor_files", "true").equals("true")) {
+                                        if (p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete")) {
+                                            Log.log("SERVER", 0, "FolderMonitor:Deleting file " + currFilePointer.getAbsolutePath());
+                                            currFilePointer.delete();
+                                        } else {
+                                            foundItems.addElement(currFilePointer);
                                         }
-                                        if (p.getProperty("folder_not_match", "*").indexOf("\\") > 0 && p.getProperty("folder_not_match", "*").indexOf("\\\\") < 0) {
-                                            p.put("folder_not_match", p.getProperty("folder_not_match", "*").replace("\\", "\\\\"));
+                                    } else if (currFilePointer.isDirectory() && (p.getProperty("monitor_empty_folders", "false").equals("true") || p.getProperty("monitor_non_empty_folders", "false").equals("true"))) {
+                                        Log.log("SERVER", 2, "FolderMonitor:Checking to see if folder is OK to delete: " + currFilePointer.getAbsolutePath());
+                                        emptyFolder = new Vector();
+                                        Common.getAllFileListing_U(emptyFolder, String.valueOf(currFilePointer.getCanonicalPath()) + "/", 99, true);
+                                        boolean empty = true;
+                                        int xx = 0;
+                                        while (xx < emptyFolder.size()) {
+                                            File_U ef = (File_U)emptyFolder.elementAt(xx);
+                                            if (!ef.getName().startsWith(".") && (ef.isFile() && p.getProperty("empty_count_files", "true").equals("true") || ef.isDirectory() && p.getProperty("empty_count_folders", "false").equals("true"))) {
+                                                empty = false;
+                                                break;
+                                            }
+                                            ++xx;
                                         }
-                                        if (p.getProperty("folder_not_match_name", "*").indexOf("\\") > 0 && p.getProperty("folder_not_match_name", "*").indexOf("\\\\") < 0) {
-                                            p.put("folder_not_match_name", p.getProperty("folder_not_match_name", "*").replace("\\", "\\\\"));
-                                        }
-                                        if (p.getProperty("folder_match", "*").indexOf("\\") < 0 && p.getProperty("folder_match", "*").indexOf("/") >= 0) {
-                                            p.put("folder_match", p.getProperty("folder_match", "*").replace("/", "\\\\"));
-                                        }
-                                        if (p.getProperty("folder_not_match", "*").indexOf("\\") < 0 && p.getProperty("folder_not_match", "*").indexOf("/") >= 0) {
-                                            p.put("folder_not_match", p.getProperty("folder_not_match", "*").replace("/", "\\\\"));
-                                        }
-                                        if (p.getProperty("folder_not_match_name", "*").indexOf("\\") < 0 && p.getProperty("folder_not_match_name", "*").indexOf("/") >= 0) {
-                                            p.put("folder_not_match_name", p.getProperty("folder_not_match_name", "*").replace("/", "\\\\"));
-                                        }
-                                    }
-                                    if (!(!com.crushftp.client.Common.do_searches(p.getProperty("folder_match", "*"), currFilePointer.getAbsolutePath(), false, 0) || !p.getProperty("folder_not_match", "").equals("") && com.crushftp.client.Common.do_searches(p.getProperty("folder_not_match", ""), currFilePointer.getAbsolutePath(), false, 0) || !p.getProperty("folder_not_match_name", "").equals("") && com.crushftp.client.Common.do_searches(p.getProperty("folder_not_match_name", ""), currFilePointer.getName(), false, 0))) {
-                                        Vector emptyFolder;
-                                        Log.log("SERVER", 2, "Folder Monitor Match:" + p.getProperty("folder_match", "") + "  vs.  " + currFilePointer.getAbsolutePath());
-                                        Log.log("SERVER", 2, "Folder Monitor Not Match:" + p.getProperty("folder_not_match", "") + "  vs.  " + currFilePointer.getAbsolutePath());
-                                        if (p.getProperty("delete").equals("true")) {
-                                            if (currFilePointer.isFile() && p.getProperty("monitor_files", "true").equals("true")) {
-                                                if (p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete")) {
-                                                    Log.log("SERVER", 0, "FolderMonitor:Deleting file " + currFilePointer.getAbsolutePath());
-                                                    currFilePointer.delete();
-                                                } else {
-                                                    foundItems.addElement(currFilePointer);
-                                                }
-                                            } else if (currFilePointer.isDirectory() && (p.getProperty("monitor_empty_folders", "false").equals("true") || p.getProperty("monitor_non_empty_folders", "false").equals("true"))) {
-                                                Log.log("SERVER", 2, "FolderMonitor:Checking to see if folder is OK to delete: " + currFilePointer.getAbsolutePath());
-                                                emptyFolder = new Vector();
-                                                Common.getAllFileListing_U(emptyFolder, String.valueOf(currFilePointer.getCanonicalPath()) + "/", 99, true);
-                                                boolean empty = true;
-                                                int xx = 0;
-                                                while (xx < emptyFolder.size()) {
-                                                    File_U ef = (File_U)emptyFolder.elementAt(xx);
-                                                    if (!ef.getName().startsWith(".") && (ef.isFile() && p.getProperty("empty_count_files", "true").equals("true") || ef.isDirectory() && p.getProperty("empty_count_folders", "false").equals("true"))) {
-                                                        empty = false;
-                                                        break;
-                                                    }
-                                                    ++xx;
-                                                }
-                                                if (empty || p.getProperty("monitor_non_empty_folders", "false").equals("true")) {
-                                                    String action;
-                                                    String string = action = p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete") ? "delete" : "archive";
-                                                    if (!currFilePointer.getCanonicalPath().equals(rFolder.getCanonicalPath())) {
-                                                        Log.log("SERVER", 0, "FolderMonitor:" + action + " folder " + currFilePointer.getAbsolutePath());
-                                                        Vector filelist2 = new Vector();
-                                                        Common.getAllFileListing_U(filelist2, String.valueOf(currFilePointer.getCanonicalPath()) + "/", 99, true);
-                                                        while (filelist2.size() > 0) {
-                                                            File_U f2 = (File_U)filelist2.remove(filelist2.size() - 1);
-                                                            long lastMod2 = f2.lastModified() + multiplier * timeAmount;
-                                                            if (System.currentTimeMillis() - lastMod2 > 0L || f2.isDirectory()) {
-                                                                if (!(!p.getProperty("folder_not_match", "").equals("") && com.crushftp.client.Common.do_searches(p.getProperty("folder_not_match", ""), f2.getCanonicalPath(), false, 0) || !p.getProperty("folder_not_match_name", "").equals("") && com.crushftp.client.Common.do_searches(p.getProperty("folder_not_match_name", ""), f2.getName(), false, 0))) {
-                                                                    Log.log("SERVER", 0, "FolderMonitor:" + action + " item " + f2.getAbsolutePath());
-                                                                    if (p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete")) {
-                                                                        f2.delete();
-                                                                        continue;
-                                                                    }
-                                                                    foundItems.addElement(f2);
-                                                                    continue;
-                                                                }
-                                                                Log.log("SERVER", 0, "FolderMonitor:Skipping item " + f2.getAbsolutePath() + " because of 'not match'.");
+                                        if (empty || p.getProperty("monitor_non_empty_folders", "false").equals("true")) {
+                                            String action;
+                                            String string = action = p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete") ? "delete" : "archive";
+                                            if (!currFilePointer.getCanonicalPath().equals(rFolder.getCanonicalPath())) {
+                                                Log.log("SERVER", 0, "FolderMonitor:" + action + " folder " + currFilePointer.getAbsolutePath());
+                                                Vector filelist2 = new Vector();
+                                                Common.getAllFileListing_U(filelist2, String.valueOf(currFilePointer.getCanonicalPath()) + "/", 99, true);
+                                                while (filelist2.size() > 0) {
+                                                    File_U f2 = (File_U)filelist2.remove(filelist2.size() - 1);
+                                                    long lastMod2 = f2.lastModified() + multiplier * timeAmount;
+                                                    if (System.currentTimeMillis() - lastMod2 > 0L || f2.isDirectory()) {
+                                                        if (!(!p.getProperty("folder_not_match", "").equals("") && com.crushftp.client.Common.do_searches(p.getProperty("folder_not_match", ""), f2.getCanonicalPath(), false, 0) || !p.getProperty("folder_not_match_name", "").equals("") && com.crushftp.client.Common.do_searches(p.getProperty("folder_not_match_name", ""), f2.getName(), false, 0))) {
+                                                            Log.log("SERVER", 0, "FolderMonitor:" + action + " item " + f2.getAbsolutePath());
+                                                            if (p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete")) {
+                                                                f2.delete();
                                                                 continue;
                                                             }
-                                                            Log.log("SERVER", 2, "FolderMonitor:Skipping item " + f2.getAbsolutePath() + " because of date being too new on this subitem.");
+                                                            foundItems.addElement(f2);
+                                                            continue;
                                                         }
+                                                        Log.log("SERVER", 0, "FolderMonitor:Skipping item " + f2.getAbsolutePath() + " because of 'not match'.");
+                                                        continue;
                                                     }
-                                                }
-                                            }
-                                        } else if (currFilePointer.isFile() && p.getProperty("monitor_files", "true").equals("true")) {
-                                            String srcFold = currFilePointer.getCanonicalPath();
-                                            String destFold = String.valueOf(p.getProperty("zippath")) + currFilePointer.getCanonicalPath().substring(rFolder.getCanonicalPath().length());
-                                            int count = 0;
-                                            while (new File_U(destFold).exists() && count++ < 99) {
-                                                destFold = String.valueOf(destFold) + count;
-                                            }
-                                            if (count >= 99) {
-                                                destFold = String.valueOf(destFold) + Common.makeBoundary(4);
-                                            }
-                                            if (p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete")) {
-                                                boolean moved;
-                                                Log.log("SERVER", 0, "FolderMonitor:Moving file " + srcFold + " to " + destFold);
-                                                new File_U(destFold).getCanonicalFile().getParentFile().mkdirs();
-                                                boolean bl = moved = ServerStatus.BG("posix") ? false : new File_U(srcFold).renameTo(new File_U(destFold));
-                                                if (!moved) {
-                                                    Common.recurseCopy_U(srcFold, destFold, true);
-                                                    Common.updateOSXInfo_U(destFold, "-R");
-                                                    currFilePointer.delete();
-                                                }
-                                            } else {
-                                                foundItems.addElement(currFilePointer);
-                                            }
-                                        } else if (currFilePointer.isDirectory() && (p.getProperty("monitor_empty_folders", "false").equals("true") || p.getProperty("monitor_non_empty_folders", "false").equals("true"))) {
-                                            Log.log("SERVER", 2, "FolderMonitor:Checking to see if folder is OK to move: " + currFilePointer.getAbsolutePath());
-                                            emptyFolder = new Vector();
-                                            Common.getAllFileListing_U(emptyFolder, String.valueOf(currFilePointer.getCanonicalPath()) + "/", 99, true);
-                                            boolean empty = true;
-                                            int xx = 0;
-                                            while (xx < emptyFolder.size()) {
-                                                File_U ef = (File_U)emptyFolder.elementAt(xx);
-                                                if (!ef.getName().startsWith(".") && ef.isFile()) {
-                                                    empty = false;
-                                                    break;
-                                                }
-                                                ++xx;
-                                            }
-                                            Log.log("SERVER", 2, "FolderMonitor:Checking to see if folder is OK to move: " + currFilePointer.getAbsolutePath() + " : empty=" + empty + " items=" + emptyFolder.size());
-                                            if (empty || p.getProperty("monitor_non_empty_folders", "false").equals("true")) {
-                                                String srcFold = currFilePointer.getAbsolutePath();
-                                                String destFold = String.valueOf(p.getProperty("zippath")) + currFilePointer.getCanonicalPath().substring(rFolder.getCanonicalPath().length()) + "/";
-                                                int count = 0;
-                                                while (new File_U(destFold).exists() && count++ < 99) {
-                                                    destFold = String.valueOf(destFold) + count;
-                                                }
-                                                if (count >= 99) {
-                                                    destFold = String.valueOf(destFold) + Common.makeBoundary(4);
-                                                }
-                                                if (p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete")) {
-                                                    boolean moved;
-                                                    Log.log("SERVER", 0, "FolderMonitor:empty=" + empty + ":Moving folder " + srcFold + " to " + destFold);
-                                                    new File_U(destFold).getCanonicalFile().getParentFile().mkdirs();
-                                                    boolean bl = moved = ServerStatus.BG("posix") ? false : new File_U(srcFold).renameTo(new File_U(destFold));
-                                                    if (!moved) {
-                                                        Common.recurseCopy_U(srcFold, destFold, true);
-                                                        Common.updateOSXInfo_U(destFold, "-R");
-                                                        Common.recurseDelete_U(String.valueOf(currFilePointer.getCanonicalPath()) + "/", false);
-                                                    }
-                                                } else {
-                                                    foundItems.addElement(currFilePointer);
+                                                    Log.log("SERVER", 2, "FolderMonitor:Skipping item " + f2.getAbsolutePath() + " because of date being too new on this subitem.");
                                                 }
                                             }
                                         }
                                     }
+                                } else if (currFilePointer.isFile() && p.getProperty("monitor_files", "true").equals("true")) {
+                                    String srcFold = currFilePointer.getCanonicalPath();
+                                    String destFold = String.valueOf(p.getProperty("zippath")) + currFilePointer.getCanonicalPath().substring(rFolder.getCanonicalPath().length());
+                                    int count = 0;
+                                    while (new File_U(destFold).exists() && count++ < 99) {
+                                        destFold = String.valueOf(destFold) + count;
+                                    }
+                                    if (count >= 99) {
+                                        destFold = String.valueOf(destFold) + Common.makeBoundary(4);
+                                    }
+                                    if (p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete")) {
+                                        boolean moved;
+                                        Log.log("SERVER", 0, "FolderMonitor:Moving file " + srcFold + " to " + destFold);
+                                        new File_U(destFold).getCanonicalFile().getParentFile().mkdirs();
+                                        boolean bl = moved = ServerStatus.BG("posix") ? false : new File_U(srcFold).renameTo(new File_U(destFold));
+                                        if (!moved) {
+                                            Common.recurseCopy_U(srcFold, destFold, true);
+                                            Common.updateOSXInfo_U(destFold, "-R");
+                                            currFilePointer.delete();
+                                        }
+                                    } else {
+                                        foundItems.addElement(currFilePointer);
+                                    }
+                                } else if (currFilePointer.isDirectory() && (p.getProperty("monitor_empty_folders", "false").equals("true") || p.getProperty("monitor_non_empty_folders", "false").equals("true"))) {
+                                    Log.log("SERVER", 2, "FolderMonitor:Checking to see if folder is OK to move: " + currFilePointer.getAbsolutePath());
+                                    emptyFolder = new Vector();
+                                    Common.getAllFileListing_U(emptyFolder, String.valueOf(currFilePointer.getCanonicalPath()) + "/", 99, true);
+                                    boolean empty = true;
+                                    int xx = 0;
+                                    while (xx < emptyFolder.size()) {
+                                        File_U ef = (File_U)emptyFolder.elementAt(xx);
+                                        if (!ef.getName().startsWith(".") && ef.isFile()) {
+                                            empty = false;
+                                            break;
+                                        }
+                                        ++xx;
+                                    }
+                                    Log.log("SERVER", 2, "FolderMonitor:Checking to see if folder is OK to move: " + currFilePointer.getAbsolutePath() + " : empty=" + empty + " items=" + emptyFolder.size());
+                                    if (empty || p.getProperty("monitor_non_empty_folders", "false").equals("true")) {
+                                        String srcFold = currFilePointer.getAbsolutePath();
+                                        String destFold = String.valueOf(p.getProperty("zippath")) + currFilePointer.getCanonicalPath().substring(rFolder.getCanonicalPath().length()) + "/";
+                                        int count = 0;
+                                        while (new File_U(destFold).exists() && count++ < 99) {
+                                            destFold = String.valueOf(destFold) + count;
+                                        }
+                                        if (count >= 99) {
+                                            destFold = String.valueOf(destFold) + Common.makeBoundary(4);
+                                        }
+                                        if (p.getProperty("folderMonitorAction", "Archive or Delete").equals("Archive or Delete")) {
+                                            boolean moved;
+                                            Log.log("SERVER", 0, "FolderMonitor:empty=" + empty + ":Moving folder " + srcFold + " to " + destFold);
+                                            new File_U(destFold).getCanonicalFile().getParentFile().mkdirs();
+                                            boolean bl = moved = ServerStatus.BG("posix") ? false : new File_U(srcFold).renameTo(new File_U(destFold));
+                                            if (!moved) {
+                                                Common.recurseCopy_U(srcFold, destFold, true);
+                                                Common.updateOSXInfo_U(destFold, "-R");
+                                                Common.recurseDelete_U(String.valueOf(currFilePointer.getCanonicalPath()) + "/", false);
+                                            }
+                                        } else {
+                                            foundItems.addElement(currFilePointer);
+                                        }
+                                    }
                                 }
                             }
-                            ++i;
-                        }
-                        if (foundItems.size() > 0) {
-                            Vector<Properties> items = new Vector<Properties>();
-                            int xx = 0;
-                            while (xx < foundItems.size()) {
-                                File_U f = (File_U)foundItems.elementAt(xx);
-                                Properties item = new Properties();
-                                item.put("url", f.toURI().toURL().toExternalForm());
-                                item.put("the_file_name", f.getName());
-                                item.put("name", f.getName());
-                                item.put("modified", String.valueOf(f.lastModified()));
-                                item.put("the_file_path", Common.all_but_last(f.getCanonicalPath()).substring(rFolder.getCanonicalPath().length()).replace('\\', '/'));
-                                item.put("path", Common.all_but_last(f.getCanonicalPath()).substring(rFolder.getCanonicalPath().length()).replace('\\', '/'));
-                                item.put("the_file_size", String.valueOf(f.length()));
-                                item.put("size", String.valueOf(f.length()));
-                                item.put("type", f.isDirectory() ? "DIR" : "FILE");
-                                items.addElement(item);
-                                ++xx;
-                            }
-                            Properties event = new Properties();
-                            event.put("event_plugin_list", p.getProperty("folderMonitorAction", "Archive or Delete"));
-                            event.put("name", "FolderMonitorEvent:" + p.getProperty("folder"));
-                            this.events6.doEventPlugin(null, event, null, items);
                         }
                     }
-                    ++x;
+                    ++i;
                 }
-                break block275;
+                if (foundItems.size() > 0) {
+                    Vector<Properties> items = new Vector<Properties>();
+                    int xx = 0;
+                    while (xx < foundItems.size()) {
+                        File_U f = (File_U)foundItems.elementAt(xx);
+                        Properties item = new Properties();
+                        item.put("url", f.toURI().toURL().toExternalForm());
+                        item.put("the_file_name", f.getName());
+                        item.put("name", f.getName());
+                        item.put("modified", String.valueOf(f.lastModified()));
+                        item.put("the_file_path", Common.all_but_last(f.getCanonicalPath()).substring(rFolder.getCanonicalPath().length()).replace('\\', '/'));
+                        item.put("path", Common.all_but_last(f.getCanonicalPath()).substring(rFolder.getCanonicalPath().length()).replace('\\', '/'));
+                        item.put("the_file_size", String.valueOf(f.length()));
+                        item.put("size", String.valueOf(f.length()));
+                        item.put("type", f.isDirectory() ? "DIR" : "FILE");
+                        items.addElement(item);
+                        ++xx;
+                    }
+                    Properties event = new Properties();
+                    event.put("event_plugin_list", p.getProperty("folderMonitorAction", "Archive or Delete"));
+                    event.put("name", "FolderMonitorEvent:" + p.getProperty("folder"));
+                    this.events6.doEventPlugin(null, event, null, items);
+                }
             }
-            ServerStatus.siPUT("total_server_bytes_transfered", "" + (this.total_server_bytes_sent + this.total_server_bytes_received));
-            ServerStatus.siPUT("total_server_bytes_sent", "" + this.total_server_bytes_sent);
-            ServerStatus.siPUT("total_server_bytes_received", "" + this.total_server_bytes_received);
-            ServerStatus.siPUT("thread_pool_available", String.valueOf(Worker.availableWorkers.size()));
-            ServerStatus.siPUT("thread_pool_busy", String.valueOf(Worker.busyWorkers.size()));
-            ServerStatus.siPUT("thread_pool_busy_max", String.valueOf(Integer.parseInt(System.getProperty("crushftp.max_threads", "800"))));
-            ServerStatus.siPUT("ram_max", String.valueOf(Runtime.getRuntime().maxMemory()));
-            ServerStatus.siPUT("ram_free", String.valueOf(Runtime.getRuntime().maxMemory() - Runtime.getRuntime().totalMemory() + Runtime.getRuntime().freeMemory()));
-            ServerStatus.siPUT("ram_used", String.valueOf(ServerStatus.siLG("ram_max") - ServerStatus.siLG("ram_free")));
-            ServerStatus.siPUT("dmz_mode", String.valueOf(com.crushftp.client.Common.dmz_mode));
-            String cpu_usage = com.crushftp.client.Common.getCpuUsage();
+            ++x;
+        }
+    }
+
+    public void doGuiTimerUpdates() {
+        ServerStatus.siPUT("total_server_bytes_transfered", "" + (this.total_server_bytes_sent + this.total_server_bytes_received));
+        ServerStatus.siPUT("total_server_bytes_sent", "" + this.total_server_bytes_sent);
+        ServerStatus.siPUT("total_server_bytes_received", "" + this.total_server_bytes_received);
+        ServerStatus.siPUT("thread_pool_available", String.valueOf(Worker.availableWorkers.size()));
+        ServerStatus.siPUT("thread_pool_busy", String.valueOf(Worker.busyWorkers.size()));
+        ServerStatus.updateMemoryStats();
+        ServerStatus.siPUT("dmz_mode", String.valueOf(com.crushftp.client.Common.dmz_mode));
+        String cpu_usage = com.crushftp.client.Common.getCpuUsage();
+        if (!cpu_usage.equals("")) {
+            ServerStatus.siPUT("server_cpu", String.valueOf((int)Float.parseFloat(cpu_usage.split(":")[0])));
+            ServerStatus.siPUT("os_cpu", String.valueOf((int)Float.parseFloat(cpu_usage.split(":")[1])));
+            if (cpu_usage.split(":").length > 2) {
+                ServerStatus.siPUT("open_files", cpu_usage.split(":")[2]);
+            }
+            if (cpu_usage.split(":").length > 3) {
+                ServerStatus.siPUT("max_open_files", cpu_usage.split(":")[3]);
+            }
+        } else {
             ServerStatus.siPUT("server_cpu", "0");
             ServerStatus.siPUT("os_cpu", "0");
             ServerStatus.siPUT("open_files", "0");
             ServerStatus.siPUT("max_open_files", "0");
-            if (!cpu_usage.equals("")) {
-                ServerStatus.siPUT("server_cpu", cpu_usage.split(":")[0]);
-                ServerStatus.siPUT("os_cpu", cpu_usage.split(":")[1]);
-                if (cpu_usage.split(":").length > 2) {
-                    ServerStatus.siPUT("open_files", cpu_usage.split(":")[2]);
+        }
+        ServerStatus.calc_server_speeds(null, null);
+        Vector<Properties> server_list_vec = null;
+        try {
+            server_list_vec = (Vector<Properties>)server_settings.get("server_list");
+        }
+        catch (Exception e) {
+            Properties the_item = (Properties)server_settings.get("server_list");
+            server_list_vec = new Vector<Properties>();
+            server_list_vec.addElement(the_item);
+        }
+        int x = 0;
+        while (x < this.main_servers.size()) {
+            GenericServer the_server = (GenericServer)this.main_servers.elementAt(x);
+            the_server.updateStatus();
+            ++x;
+        }
+        while (ServerStatus.siVG("recent_user_list").size() > ServerStatus.IG("recent_user_count")) {
+            ServerStatus.siVG("recent_user_list").removeElementAt(0);
+        }
+        ServerStatus.siPUT("total_logins", String.valueOf(ServerStatus.siIG("failed_logins") + ServerStatus.siIG("successful_logins")));
+        ServerStatus.siPUT("users_connected", String.valueOf(this.getTotalConnectedUsers()));
+        ServerStatus.siPUT("current_datetime_millis", String.valueOf(System.currentTimeMillis()));
+        ServerStatus.siPUT("current_datetime_ddmmyyhhmmss", new SimpleDateFormat("MMddyyyyHHmmss", Locale.US).format(new Date()));
+        this.update_history("logged_in_users");
+        this.update_history("current_download_speed");
+        this.update_history("current_upload_speed");
+        this.update_history("ram_max");
+        this.update_history("ram_free");
+        this.update_history("server_cpu");
+        this.update_history("os_cpu");
+        this.update_history("open_files");
+        this.update_history("incoming_transfers");
+        this.update_history("outgoing_transfers");
+        this.update_history("connected_unique_ips");
+        Properties p = new Properties();
+        p.put("server_settings", server_settings);
+        p.put("server_info", this.server_info);
+        p.put("action", "update_server_status");
+        this.runPlugins(p);
+    }
+
+    public static void updateMemoryStats() {
+        ServerStatus.siPUT("ram_max", String.valueOf(Runtime.getRuntime().maxMemory()));
+        ServerStatus.siPUT("ram_free", String.valueOf(Runtime.getRuntime().maxMemory() - Runtime.getRuntime().totalMemory() + Runtime.getRuntime().freeMemory()));
+        ServerStatus.siPUT("ram_used", String.valueOf(ServerStatus.siLG("ram_max") - ServerStatus.siLG("ram_free")));
+        ServerStatus.siPUT("ram_used_percent", String.valueOf((int)((float)ServerStatus.siLG("ram_used") / (float)ServerStatus.siLG("ram_max") * 100.0f)));
+        System.getProperties().put("crushftp.ram_used_percent", ServerStatus.siSG("ram_used_percent"));
+    }
+
+    public void doExtraUpdateActions() {
+        Properties pp;
+        int x = 0;
+        while (x < this.previewWorkers.size()) {
+            PreviewWorker preview = (PreviewWorker)this.previewWorkers.elementAt(x);
+            preview.run(null);
+            ++x;
+        }
+        if (ServerStatus.BG("s3crush_replicated")) {
+            if (!System.getProperties().containsKey("crushftp.s3_replicated")) {
+                System.getProperties().put("crushftp.s3_replicated", new Vector());
+            }
+            Vector v = (Vector)System.getProperties().get("crushftp.s3_replicated");
+            while (v.size() > 0) {
+                pp = (Properties)v.remove(0);
+                pp.put("need_response", "false");
+                SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.s3CrushClient.writeFs", "info", pp);
+            }
+        }
+        if (ServerStatus.BG("glaciercrush_replicated")) {
+            if (!System.getProperties().containsKey("crushftp.glacier_replicated")) {
+                System.getProperties().put("crushftp.glacier_replicated", new Vector());
+            }
+            Vector v = (Vector)System.getProperties().get("crushftp.glacier_replicated");
+            while (v.size() > 0) {
+                pp = (Properties)v.remove(0);
+                pp.put("need_response", "false");
+                SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.glacierCrushClient.writeFs", "info", pp);
+            }
+        }
+        this.monitor_thread_dump_port();
+    }
+
+    public void doLogFlush() {
+        if (com.crushftp.client.Common.log != null && (this.loggingProvider1 != null || this.loggingProvider2 != null)) {
+            while (com.crushftp.client.Common.log.size() > 0) {
+                Object o = com.crushftp.client.Common.log.remove(0);
+                String s = "";
+                String tag = "";
+                if (o instanceof String) {
+                    tag = "PROXY";
+                    s = o.toString();
+                } else {
+                    Properties p = (Properties)o;
+                    s = p.getProperty("data");
+                    tag = p.getProperty("tag");
+                    if (ServerStatus.IG("log_debug_level") < Integer.parseInt(p.getProperty("level", "0"))) continue;
                 }
-                if (cpu_usage.split(":").length > 3) {
-                    ServerStatus.siPUT("max_open_files", cpu_usage.split(":")[3]);
+                if (!System.getProperty("appname", "CrushFTP").equals("CrushFTP")) {
+                    s = Common.replace_str(s, "com.crushftp.", "com." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".");
+                    s = Common.replace_str(s, "crushftp.", "com." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".");
                 }
-            }
-            if (com.crushftp.client.Common.log != null && (this.loggingProvider1 != null || this.loggingProvider2 != null)) {
-                while (com.crushftp.client.Common.log.size() > 0) {
-                    Object o = com.crushftp.client.Common.log.remove(0);
-                    String s = "";
-                    String tag = "";
-                    if (o instanceof String) {
-                        tag = "PROXY";
-                        s = o.toString();
-                    } else {
-                        Properties p = (Properties)o;
-                        s = p.getProperty("data");
-                        tag = p.getProperty("tag");
-                        if (ServerStatus.IG("log_debug_level") < Integer.parseInt(p.getProperty("level", "0"))) continue;
-                    }
-                    if (this.loggingProvider1 != null) {
-                        this.loggingProvider1.append_log(s, tag, true);
-                    }
-                    if (this.loggingProvider2 == null) continue;
-                    this.loggingProvider2.append_log(s, tag, true);
+                if (this.loggingProvider1 != null) {
+                    this.loggingProvider1.append_log(s, tag, true);
                 }
+                if (this.loggingProvider2 == null) continue;
+                this.loggingProvider2.append_log(s, tag, true);
             }
-            ServerStatus.calc_server_speeds(null, null);
-            Vector<Properties> server_list_vec = null;
-            try {
-                server_list_vec = (Vector<Properties>)server_settings.get("server_list");
-            }
-            catch (Exception e) {
-                Properties the_item = (Properties)server_settings.get("server_list");
-                server_list_vec = new Vector<Properties>();
-                server_list_vec.addElement(the_item);
-            }
-            int x = 0;
-            while (x < this.main_servers.size()) {
-                GenericServer the_server = (GenericServer)this.main_servers.elementAt(x);
-                the_server.updateStatus();
-                ++x;
-            }
-            while (ServerStatus.siVG("recent_user_list").size() > ServerStatus.IG("recent_user_count")) {
-                ServerStatus.siVG("recent_user_list").removeElementAt(0);
-            }
-            ServerStatus.siPUT("total_logins", String.valueOf(ServerStatus.siIG("failed_logins") + ServerStatus.siIG("successful_logins")));
-            ServerStatus.siPUT("users_connected", String.valueOf(this.getTotalConnectedUsers()));
-            ServerStatus.siPUT("current_datetime_millis", String.valueOf(System.currentTimeMillis()));
-            SimpleDateFormat mmddyyhhmmss = new SimpleDateFormat("MMddyyyyHHmmss", Locale.US);
-            ServerStatus.siPUT("current_datetime_ddmmyyhhmmss", mmddyyhhmmss.format(new Date()));
-            int x8 = 0;
-            while (x8 < this.previewWorkers.size()) {
-                PreviewWorker preview = (PreviewWorker)this.previewWorkers.elementAt(x8);
-                preview.run(null);
-                ++x8;
-            }
-            if (ServerStatus.BG("s3crush_replicated")) {
-                if (!System.getProperties().containsKey("crushftp.s3_replicated")) {
-                    System.getProperties().put("crushftp.s3_replicated", new Vector());
-                }
-                Vector v = (Vector)System.getProperties().get("crushftp.s3_replicated");
-                while (v.size() > 0) {
-                    pp = (Properties)v.remove(0);
-                    pp.put("need_response", "false");
-                    SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.s3CrushClient.writeFs", "info", pp);
-                }
-            }
-            if (ServerStatus.BG("glaciercrush_replicated")) {
-                if (!System.getProperties().containsKey("crushftp.glacier_replicated")) {
-                    System.getProperties().put("crushftp.glacier_replicated", new Vector());
-                }
-                Vector v = (Vector)System.getProperties().get("crushftp.glacier_replicated");
-                while (v.size() > 0) {
-                    pp = (Properties)v.remove(0);
-                    pp.put("need_response", "false");
-                    SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.glacierCrushClient.writeFs", "info", pp);
-                }
-            }
-            this.update_history("logged_in_users");
-            this.update_history("current_download_speed");
-            this.update_history("current_upload_speed");
-            this.update_history("ram_max");
-            this.update_history("ram_free");
-            this.update_history("server_cpu");
-            this.update_history("os_cpu");
-            this.update_history("open_files");
-            this.update_history("incoming_transfers");
-            this.update_history("outgoing_transfers");
-            this.update_history("connected_unique_ips");
-            Properties p = new Properties();
-            p.put("server_settings", server_settings);
-            p.put("server_info", this.server_info);
-            p.put("action", "update_server_status");
-            this.runPlugins(p);
         }
     }
 
@@ -3725,9 +4068,6 @@ lbl15:
         System.getProperties().put("crushftp.azure_upload_max_threads", String.valueOf(ServerStatus.SG("azure_upload_max_threads")));
         System.getProperties().put("crushftp.azure_share_list_threads_count", String.valueOf(ServerStatus.SG("azure_share_list_threads_count")));
         System.getProperties().put("crushftp.file.securedelete", String.valueOf(ServerStatus.SG("securedelete")));
-        this.server_info.put("replication_vfs_count", System.getProperties().getProperty("crushftp.replciation.vfs.count", "0"));
-        this.server_info.put("ram_pending_bytes_s3_upload", System.getProperties().getProperty("crushftp.ram_pending_bytes_s3_upload", "0"));
-        this.server_info.put("ram_pending_bytes_s3_download", String.valueOf(S3Client.ram_used_download));
         System.getProperties().put("crushftp.azure_upload_max_threads", String.valueOf(ServerStatus.SG("azure_upload_max_threads")));
         System.getProperties().put("crushftp.lowercase_all_s3_paths", String.valueOf(ServerStatus.BG("lowercase_all_s3_paths")));
         System.getProperties().put("crushftp.pgp_integrity_protect", String.valueOf(ServerStatus.BG("pgp_integrity_protect")));
@@ -3740,9 +4080,36 @@ lbl15:
         System.getProperties().put("crushftp.s3_use_contianer_credentials_relative_uri", String.valueOf(ServerStatus.BG("s3_use_contianer_credentials_relative_uri")));
         System.getProperties().put("crushftp.smtp_start_tls_allowed", String.valueOf(ServerStatus.BG("smtp_start_tls_allowed")));
         System.getProperties().put("crushftp.geoip_access_key", ServerStatus.SG("geoip_access_key"));
-        System.getProperties().put("crushftp.v10_beta", String.valueOf(ServerStatus.BG("v10_beta")));
+        System.getProperties().put("maverick.disableAutoFlush", String.valueOf(ServerStatus.BG("sftp_client_disableAutoFlush")));
+        System.getProperties().put("crushftp.sftpclient_ls_dot", String.valueOf(ServerStatus.BG("sftpclient_ls_dot")));
+        System.getProperties().put("crushftp.s3_global_cache", String.valueOf(ServerStatus.BG("s3_global_cache")));
+        System.getProperties().put("crushftp.dfs_default_enabled", String.valueOf(ServerStatus.BG("dfs_default_enabled")));
+        System.getProperties().put("crushftp.block_symlinks", String.valueOf(ServerStatus.BG("block_symlinks")));
+        System.getProperties().put("crushftp.ssh_client_key_exchanges", String.valueOf(ServerStatus.SG("ssh_client_key_exchanges")));
+        System.getProperties().put("crushftp.ssh_client_cipher_list", String.valueOf(ServerStatus.SG("ssh_client_cipher_list")));
+        System.getProperties().put("crushftp.ssh_client_mac_list", String.valueOf(ServerStatus.SG("ssh_client_mac_list")));
+        System.getProperties().put("crushftp.smb3_kerberos_kdc", String.valueOf(ServerStatus.SG("smb3_kerberos_kdc")));
+        System.getProperties().put("crushftp.smb3_kerberos_realm", String.valueOf(ServerStatus.SG("smb3_kerberos_realm")));
+        System.getProperties().put("crushftp.s3_ec2_imdsv2", String.valueOf(ServerStatus.SG("s3_ec2_imdsv2")));
+        System.getProperties().put("maverick.disableDirectoryCheck", String.valueOf(ServerStatus.BG("sftp_client_listing_disableDirectoryCheck")));
+        System.getProperties().put("crushftp.version_info_str", version_info_str);
+        System.getProperties().put("crushftp.v11_beta", String.valueOf(ServerStatus.BG("v11_beta")));
+        System.getProperties().put("crushftp.v10_beta", "true");
         com.crushftp.client.Common.System2.put("enterprise_level", String.valueOf(ServerStatus.siIG("enterprise_level")));
         DMZServerCommon.MAX_DMZ_SOCKET_IDLE_TIME = ServerStatus.IG("max_dmz_socket_idle_time");
+        this.server_info.put("replication_vfs_count", System.getProperties().getProperty("crushftp.replciation.vfs.count", "0"));
+        this.server_info.put("ram_pending_bytes_s3_upload", String.valueOf(S3Client.ram_used_upload));
+        this.server_info.put("ram_pending_bytes_s3_download", String.valueOf(S3Client.ram_used_download));
+        this.server_info.put("ram_pending_bytes_multisegment_upload", HTTPClient.ram_pending_bytes_multisegment.getProperty("upload", "0"));
+        this.server_info.put("ram_pending_bytes_multisegment_download", HTTPClient.ram_pending_bytes_multisegment.getProperty("download", "0"));
+        if (!ServerStatus.SG("jvm_timezone").equals("") && !ServerStatus.SG("jvm_timezone").equals("default")) {
+            try {
+                TimeZone.setDefault(TimeZone.getTimeZone(ServerStatus.SG("jvm_timezone")));
+            }
+            catch (Exception exception) {
+                // empty catch block
+            }
+        }
     }
 
     public void update_history(String key) {
@@ -3795,7 +4162,6 @@ lbl15:
                                 Common.runPlugin(pluginPref.getProperty("pluginName"), info, pluginPref.getProperty("subItem", ""));
                             }
                             catch (Exception e) {
-                                Log.log("SERVER", 1, e);
                                 if (e.getCause() == null) break block9;
                                 Log.log("SERVER", 1, e.getCause());
                             }
@@ -3993,8 +4359,12 @@ lbl15:
         return speed;
     }
 
-    public void quit_server() {
-        this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********" + LOC.G("CrushFTP Quit") + "******** " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str"), "QUIT_SERVER");
+    public void quit_server(boolean override_restricted) {
+        if (!System.getProperty("crushftp.security.stop_start", "true").equals("true") && !override_restricted) {
+            Log.log("SERVER", 0, "###CRUSHFTP RESTRICTED MODE IN USE, SHUTDOWN BLOCKED!");
+            return;
+        }
+        this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|********" + System.getProperty("appname", "CrushFTP") + " " + LOC.G("Quit") + "******** " + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str"), "QUIT_SERVER");
         try {
             this.loggingProvider2.shutdown();
         }
@@ -4044,15 +4414,25 @@ lbl15:
         }
     }
 
-    public void do_auto_update_early(final boolean webOnly) throws Exception {
+    public void do_auto_update_early(final boolean webOnly, final boolean single_thread) throws Exception {
+        ServerStatus.siPUT("update_when_idle", "false");
+        final Properties status = new Properties();
         try {
             Worker.startWorker(new Runnable(){
 
                 @Override
                 public void run() {
                     try {
-                        if (ServerStatus.this.updateHandler.doSilentUpdate(true, version_info_str, webOnly) && !webOnly) {
-                            ServerStatus.this.restart_crushftp();
+                        if (ServerStatus.this.updateHandler.doSilentUpdate(true, version_info_str, webOnly)) {
+                            status.put("status", "completed");
+                            if (single_thread) {
+                                Thread.sleep(5000L);
+                            }
+                            if (!webOnly) {
+                                ServerStatus.this.restart_crushftp();
+                            }
+                        } else {
+                            status.put("status", "failed");
                         }
                     }
                     catch (Exception e) {
@@ -4064,6 +4444,13 @@ lbl15:
         catch (Exception e) {
             Log.log("SERVER", 1, e);
             throw e;
+        }
+        if (single_thread) {
+            int x = 0;
+            while (x < 240 && status.size() == 0) {
+                Thread.sleep(500L);
+                ++x;
+            }
         }
     }
 
@@ -4084,6 +4471,10 @@ lbl15:
     }
 
     public void restart_crushftp() {
+        if (!System.getProperty("crushftp.security.stop_start", "true").equals("true")) {
+            Log.log("SERVER", 0, "###CRUSHFTP RESTRICTED MODE IN USE, RESTART BLOCKED!  YOU MUST RESTART MANUALLY!");
+            return;
+        }
         this.save_server_settings(false);
         this.starting = true;
         this.stop_all_servers();
@@ -4091,19 +4482,19 @@ lbl15:
         try {
             Thread.sleep(1000L);
             if (Common.machine_is_windows()) {
-                Runtime.getRuntime().exec("sc start CrushFTPRestart".split(" "));
+                Runtime.getRuntime().exec(("sc start " + System.getProperty("appname", "CrushFTP") + "Restart").split(" "));
             } else if (Common.machine_is_x()) {
-                Runtime.getRuntime().exec(new String[]{"launchctl", "start", "com.crushftp.CrushFTPUpdate"});
+                Runtime.getRuntime().exec(new String[]{"launchctl", "start", "com." + System.getProperty("appname", "CrushFTP").toLowerCase() + "." + System.getProperty("appname", "CrushFTP") + "Update"});
             } else if (!ServerStatus.SG("restart_script").trim().equals("")) {
                 Runtime.getRuntime().exec(ServerStatus.SG("restart_script").split(";"));
             } else {
-                Runtime.getRuntime().exec(new String[]{"/usr/sbin/service", "crushftp", "restart"});
+                Runtime.getRuntime().exec(new String[]{"/usr/sbin/service", System.getProperty("appname", "CrushFTP").toLowerCase(), "restart"});
             }
         }
         catch (Exception ee) {
             ee.printStackTrace();
         }
-        this.quit_server();
+        this.quit_server(false);
     }
 
     public boolean kick(String the_user, boolean logit) {
@@ -4285,7 +4676,7 @@ lbl15:
             try {
                 String new_ip_text = user_info.getProperty("user_ip");
                 new_ip_text = new_ip_text.substring(new_ip_text.indexOf("/") + 1, new_ip_text.length());
-                if (!this.ban_ip(new_ip_text, timeout, onlyRealBan, reason)) break block4;
+                if (!this.ban_ip(new_ip_text, timeout, onlyRealBan, String.valueOf(reason) + ":" + user_info.getProperty("user_name"))) break block4;
                 try {
                     this.append_log(String.valueOf(this.logDateFormat.format(new Date())) + "|---" + LOC.G("User Banned") + "---:" + user_info.getProperty("user_number") + "-" + user_info.getProperty("user_name") + "  " + new_ip_text, "BAN");
                 }
@@ -4322,7 +4713,7 @@ lbl15:
         /*
          * This method has failed to decompile.  When submitting a bug report, please provide this stack trace, and (if you hold appropriate legal rights) the relevant class file.
          * 
-         * org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [5[TRYBLOCK], 4[TRYBLOCK]], but top level block is 36[WHILELOOP]
+         * org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [7[TRYBLOCK]], but top level block is 42[WHILELOOP]
          *     at org.benf.cfr.reader.bytecode.analysis.opgraph.Op04StructuredStatement.processEndingBlocks(Op04StructuredStatement.java:435)
          *     at org.benf.cfr.reader.bytecode.analysis.opgraph.Op04StructuredStatement.buildNestedBlocks(Op04StructuredStatement.java:484)
          *     at org.benf.cfr.reader.bytecode.analysis.opgraph.Op03SimpleStatement.createInitialStructuredBlock(Op03SimpleStatement.java:736)
@@ -4409,6 +4800,9 @@ lbl15:
 
     public static String change_vars_to_values_static(String in_str, Properties user, Properties user_info, SessionCrush the_session) {
         try {
+            if (in_str.indexOf(37) < 0 && in_str.indexOf(123) < 0 && in_str.indexOf(125) < 0 && in_str.indexOf(60) < 0) {
+                return in_str;
+            }
             String r1 = "%";
             String r2 = "%";
             int r = 0;
@@ -4671,8 +5065,17 @@ lbl15:
                 if (in_str.indexOf(String.valueOf(r1) + "free_memory" + r2) >= 0) {
                     in_str = Common.replace_str(in_str, String.valueOf(r1) + "free_memory" + r2, "" + Runtime.getRuntime().freeMemory() / 1024L);
                 }
+                if (in_str.indexOf(String.valueOf(r1) + "thread_dump" + r2) >= 0) {
+                    in_str = Common.replace_str(in_str, String.valueOf(r1) + "thread_dump" + r2, com.crushftp.client.Common.dumpStack("THREAD_DUMP"));
+                }
+                if (in_str.indexOf(String.valueOf(r1) + "heap_dump" + r2) >= 0) {
+                    in_str = Common.replace_str(in_str, String.valueOf(r1) + "heap_dump" + r2, new HeapDumper().dump());
+                }
                 if (in_str.indexOf(String.valueOf(r1) + "plus" + r2) >= 0) {
                     in_str = Common.replace_str(in_str, String.valueOf(r1) + "plus" + r2, "+");
+                }
+                if (in_str.indexOf(String.valueOf(r1) + "working_dir" + r2) >= 0) {
+                    in_str = Common.replace_str(in_str, String.valueOf(r1) + "working_dir" + r2, String.valueOf(new File("./").getCanonicalPath().replace('\\', '/')) + "/");
                 }
                 if (in_str.indexOf(String.valueOf(r1) + "global_") >= 0) {
                     if (com.crushftp.client.Common.System2.get("global_variables") == null) {
@@ -4686,12 +5089,35 @@ lbl15:
                         in_str = Common.replace_str(in_str, String.valueOf(r1) + key3 + r2, global_variables.getProperty(key3, ""));
                     }
                 }
+                if (the_session != null && the_session.server_item != null) {
+                    Enumeration<Object> keys = the_session.server_item.keys();
+                    while (keys.hasMoreElements()) {
+                        key = keys.nextElement().toString();
+                        if (in_str.indexOf(String.valueOf(r1) + key + r2) < 0) continue;
+                        in_str = Common.replace_str(in_str, String.valueOf(r1) + key + r2, the_session.server_item.getProperty(key, ""));
+                    }
+                }
                 while (in_str.indexOf(String.valueOf(r1) + "customData_") >= 0) {
                     String custom = in_str.substring(in_str.indexOf(String.valueOf(r1) + "customData_") + (String.valueOf(r1) + "customData_").length());
                     custom = custom.substring(0, custom.indexOf(r2));
                     Properties customData = (Properties)server_settings.get("customData");
                     String val = customData.getProperty(custom, "");
                     in_str = Common.replace_str(in_str, String.valueOf(r1) + "customData_" + custom + r2, val);
+                }
+                if (user != null && user.containsKey("ichain") && (in_str.indexOf("group") >= 0 || in_str.indexOf("inheritance") >= 0)) {
+                    Vector ichain = (Vector)user.get("ichain");
+                    int x = 0;
+                    while (x < ichain.size()) {
+                        in_str = Common.replace_str(in_str, String.valueOf(r1) + x + "group" + r2, "" + ichain.elementAt(x));
+                        in_str = Common.replace_str(in_str, String.valueOf(r1) + x + "inheritance" + r2, "" + ichain.elementAt(x));
+                        ++x;
+                    }
+                    x = ichain.size() - 1;
+                    while (x >= 0) {
+                        in_str = Common.replace_str(in_str, String.valueOf(r1) + "group" + x + r2, "" + ichain.elementAt(x));
+                        in_str = Common.replace_str(in_str, String.valueOf(r1) + "inheritance" + x + r2, "" + ichain.elementAt(x));
+                        --x;
+                    }
                 }
                 if (in_str.indexOf(String.valueOf(r1) + "ban" + r2) >= 0) {
                     in_str = Common.replace_str(in_str, String.valueOf(r1) + "ban" + r2, "");
@@ -4825,12 +5251,12 @@ lbl15:
     }
 
     public String strip_variables(String in_str, SessionCrush the_session) {
-        in_str = Common.replace_str(in_str, "<SPACE>", "");
-        in_str = Common.replace_str(in_str, "<URL>", "");
-        in_str = Common.replace_str(in_str, "<SPEAK>", "");
-        in_str = Common.replace_str(in_str, "<SOUND>", "");
-        in_str = Common.replace_str(in_str, "<LIST>", "");
-        in_str = Common.replace_str(in_str, "<INCLUDE>", "");
+        in_str = Common.replace_str(in_str, "<SPACE>", "INVALIDTEXTFOUND");
+        in_str = Common.replace_str(in_str, "<URL>", "INVALIDTEXTFOUND");
+        in_str = Common.replace_str(in_str, "<SPEAK>", "INVALIDTEXTFOUND");
+        in_str = Common.replace_str(in_str, "<SOUND>", "INVALIDTEXTFOUND");
+        in_str = Common.replace_str(in_str, "<LIST>", "INVALIDTEXTFOUND");
+        in_str = Common.replace_str(in_str, "<INCLUDE>", "INVALIDTEXTFOUND");
         return in_str;
     }
 
@@ -4945,745 +5371,15 @@ lbl15:
     }
 
     public void runAlerts(String action, SessionCrush the_user) {
-        this.runAlerts(action, null, null, null, the_user, null, com.crushftp.client.Common.dmz_mode);
+        AlertTools.runAlerts(action, null, null, null, the_user, null, com.crushftp.client.Common.dmz_mode);
     }
 
     public void runAlerts(String alert_action, Properties info, Properties user_info, SessionCrush the_user) {
-        this.runAlerts(alert_action, info, user_info, null, the_user, null, com.crushftp.client.Common.dmz_mode);
+        AlertTools.runAlerts(alert_action, info, user_info, null, the_user, null, com.crushftp.client.Common.dmz_mode);
     }
 
     public void runAlerts(String alert_action, Properties info, Properties user_info, SessionCrush the_user, Properties the_alert, boolean dmz_mode) {
-        this.runAlerts(alert_action, info, user_info, null, the_user, the_alert, dmz_mode);
-    }
-
-    public void runAlerts(String alert_action, Properties info, Properties user_info, Properties user, SessionCrush the_user, Properties the_alert, boolean dmz_mode) {
-        Vector alerts = ServerStatus.VG("alerts");
-        if (user_info == null && the_user != null) {
-            user_info = the_user.user_info;
-        }
-        boolean ok = false;
-        int x = 0;
-        while (x < alerts.size()) {
-            Properties p = (Properties)alerts.elementAt(x);
-            if (p.getProperty("type").equalsIgnoreCase("Disk Space Below Threshold") && alert_action.equals("disk")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Variable Watcher") && alert_action.equals("variables")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("CrushFTP Update Available") && alert_action.equals("update")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("CrushFTP Started") && alert_action.equals("started")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User reached quota percentage") && alert_action.equals("user_upload_session")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Exceeded Upload Transfer Amount Per Session") && alert_action.equals("user_upload_session")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Exceeded Upload Transfer Amount Per Day") && alert_action.equals("user_upload_day")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Exceeded Upload Transfer Amount Per Month") && alert_action.equals("user_upload_month")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Exceeded Download Transfer Amount Per Session") && alert_action.equals("user_download_session")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Download Speed Below Minimum") && alert_action.equals("user_download_speed")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Upload Speed Below Minimum") && alert_action.equals("user_upload_speed")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Exceeded Download Transfer Amount Per Day") && alert_action.equals("user_download_day")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Exceeded Download Transfer Amount Per Month") && alert_action.equals("user_download_month")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Proxy Blacklisted Site Attempted") && alert_action.equals("proxy_blacklist")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("IP Banned for Failed Logins") && alert_action.equals("ip_banned_logins")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Changed Password") && alert_action.equals("password_change")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Server Port Failed") && alert_action.equals("server_port_error")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Invalid Email Attempted") && alert_action.equals("invalid_email")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("User Hammering") && alert_action.equals("user_hammering")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Plugin Message") && alert_action.startsWith("pluginMessage_")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Security Alert") && alert_action.equals("security_alert")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Low Memory") && alert_action.equals("low_memory")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Big Directory") && alert_action.equals("big_dir")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Slow Login") && alert_action.equals("slow_login")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Login Frequency") && alert_action.equals("login_frequency")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Login Frequency Banned") && alert_action.equals("login_frequency_banned")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Job Changes") && alert_action.equals("job_update")) {
-                ok = true;
-            } else if (p.getProperty("type").equalsIgnoreCase("Update Object") && alert_action.equals("update_object")) {
-                ok = true;
-            }
-            if (ok) {
-                the_alert = p;
-                Properties recent_drives = (Properties)this.server_info.get("recent_drives");
-                if (recent_drives == null) {
-                    recent_drives = new Properties();
-                }
-                String subject = p.getProperty("subject", "");
-                String body = p.getProperty("body", "");
-                String to = p.getProperty("to", "");
-                String cc = p.getProperty("cc", "");
-                String bcc = p.getProperty("bcc", "");
-                String from = p.getProperty("from", "");
-                if (p.getProperty("type").equalsIgnoreCase("Disk Space Below Threshold") && alert_action.equals("disk")) {
-                    String drive = p.getProperty("drive", "/");
-                    long mb = Long.parseLong(p.getProperty("threshold_mb", "0")) * 1024L * 1024L;
-                    long free_bytes = Common.get_free_disk_space(drive);
-                    this.server_info.put("recent_drives", recent_drives);
-                    recent_drives.put(drive, String.valueOf(com.crushftp.client.Common.format_bytes_short2(free_bytes)) + " free");
-                    subject = Common.replace_str(subject, "%free_bytes%", com.crushftp.client.Common.format_bytes_short2(free_bytes));
-                    body = Common.replace_str(body, "%free_bytes%", com.crushftp.client.Common.format_bytes_short2(free_bytes));
-                    if (free_bytes > mb) {
-                        ok = false;
-                    }
-                } else if (p.getProperty("type").equalsIgnoreCase("Variable Watcher") && alert_action.equals("variables")) {
-                    ok = false;
-                    String cond = p.getProperty("variableCondition", "equals");
-                    String var1 = ServerStatus.change_vars_to_values_static(p.getProperty("variable1", ""), null, new Properties(), null);
-                    String var2 = ServerStatus.change_vars_to_values_static(p.getProperty("variable2", ""), null, new Properties(), null);
-                    Enumeration<Object> keys = ServerStatus.thisObj.server_info.keys();
-                    while (keys.hasMoreElements()) {
-                        String key = keys.nextElement().toString();
-                        String val = ServerStatus.thisObj.server_info.getProperty(key);
-                        if (var1.indexOf("%server_" + key + "%") >= 0) {
-                            var1 = Common.replace_str(var1, "%server_" + key + "%", String.valueOf(val));
-                        }
-                        if (var1.indexOf("%" + key + "%") >= 0) {
-                            var1 = Common.replace_str(var1, "%" + key + "%", String.valueOf(val));
-                        }
-                        if (var2.indexOf("%server_" + key + "%") >= 0) {
-                            var2 = Common.replace_str(var2, "%server_" + key + "%", String.valueOf(val));
-                        }
-                        if (var2.indexOf("%" + key + "%") >= 0) {
-                            var2 = Common.replace_str(var2, "%" + key + "%", String.valueOf(val));
-                        }
-                        if (var1.indexOf("{server_" + key + "}") >= 0) {
-                            var1 = Common.replace_str(var1, "{server_" + key + "}", String.valueOf(val));
-                        }
-                        if (var1.indexOf("{" + key + "}") >= 0) {
-                            var1 = Common.replace_str(var1, "{" + key + "}", String.valueOf(val));
-                        }
-                        if (var2.indexOf("{server_" + key + "}") >= 0) {
-                            var2 = Common.replace_str(var2, "{server_" + key + "}", String.valueOf(val));
-                        }
-                        if (var2.indexOf("{" + key + "}") < 0) continue;
-                        var2 = Common.replace_str(var2, "{" + key + "}", String.valueOf(val));
-                    }
-                    if (cond.equals("equals")) {
-                        if (var1.equals(var2)) {
-                            ok = true;
-                        }
-                    } else if (cond.equals("contains")) {
-                        if (var1.indexOf(var2) >= 0) {
-                            ok = true;
-                        }
-                    } else if (cond.equals("matches pattern")) {
-                        if (com.crushftp.client.Common.do_search(var2, var1, false, 0)) {
-                            ok = true;
-                        }
-                    } else if (cond.equals("doesn't equal") || cond.equals("!equal")) {
-                        if (!var1.equals(var2)) {
-                            ok = true;
-                        }
-                    } else if (cond.equals("doesn't contain") || cond.equals("!contain")) {
-                        if (var1.indexOf(var2) < 0) {
-                            ok = true;
-                        }
-                    } else if (cond.equals("doesn't match pattern") || cond.equals("!match pattern")) {
-                        if (!com.crushftp.client.Common.do_search(var2, var1, false, 0)) {
-                            ok = true;
-                        }
-                    } else if (cond.equals("greater than")) {
-                        try {
-                            if (Float.parseFloat(var1.trim()) > Float.parseFloat(var2.trim())) {
-                                ok = true;
-                            }
-                        }
-                        catch (Exception key) {}
-                    } else if (cond.equals("less than")) {
-                        try {
-                            if (Float.parseFloat(var1.trim()) < Float.parseFloat(var2.trim())) {
-                                ok = true;
-                            }
-                        }
-                        catch (Exception key) {}
-                    } else if (cond.equals("greater than or equal")) {
-                        try {
-                            if (Float.parseFloat(var1.trim()) >= Float.parseFloat(var2.trim())) {
-                                ok = true;
-                            }
-                        }
-                        catch (Exception key) {}
-                    } else if (cond.equals("less than or equal")) {
-                        try {
-                            if (Float.parseFloat(var1.trim()) <= Float.parseFloat(var2.trim())) {
-                                ok = true;
-                            }
-                        }
-                        catch (Exception key) {
-                            // empty catch block
-                        }
-                    }
-                    subject = Common.replace_str(subject, "%var1%", var1);
-                    subject = Common.replace_str(subject, "%var2%", var2);
-                    subject = Common.replace_str(subject, "%condition%", cond);
-                    subject = Common.replace_str(subject, "{var1}", var1);
-                    subject = Common.replace_str(subject, "{var2}", var2);
-                    subject = Common.replace_str(subject, "{condition}", cond);
-                    body = Common.replace_str(body, "%var1%", var1);
-                    body = Common.replace_str(body, "%var2%", var2);
-                    body = Common.replace_str(body, "%condition%", cond);
-                    body = Common.replace_str(body, "{var1}", var1);
-                    body = Common.replace_str(body, "{var2}", var2);
-                    body = Common.replace_str(body, "{condition}", cond);
-                } else if (!p.getProperty("type").equalsIgnoreCase("CrushFTP Update Available") || !alert_action.equals("update")) {
-                    if (p.getProperty("type").equalsIgnoreCase("CrushFTP Started") && alert_action.equals("started")) {
-                        subject = Common.replace_str(subject, "{message}", hostname);
-                        body = Common.replace_str(body, "{message}", hostname);
-                        to = Common.replace_str(to, "{message}", hostname);
-                        cc = Common.replace_str(cc, "{message}", hostname);
-                        bcc = Common.replace_str(bcc, "{message}", hostname);
-                        from = Common.replace_str(from, "{message}", hostname);
-                        subject = Common.replace_str(subject, "{host_name}", hostname);
-                        body = Common.replace_str(body, "{host_name}", hostname);
-                        to = Common.replace_str(to, "{host_name}", hostname);
-                        cc = Common.replace_str(cc, "{host_name}", hostname);
-                        bcc = Common.replace_str(bcc, "{host_name}", hostname);
-                        from = Common.replace_str(from, "{host_name}", hostname);
-                    } else if (p.getProperty("type").equalsIgnoreCase("User reached quota percentage") && alert_action.equals("user_upload_session")) {
-                        long perc;
-                        long total;
-                        long used;
-                        String path = user_info.getProperty("current_dir");
-                        try {
-                            used = the_user.get_quota_used(path);
-                        }
-                        catch (Exception e) {
-                            ok = false;
-                            p.remove("no_email");
-                            used = -12345L;
-                        }
-                        try {
-                            total = the_user.get_total_quota(path);
-                        }
-                        catch (Exception e) {
-                            ok = false;
-                            p.remove("no_email");
-                            total = -12345L;
-                        }
-                        if (total != -12345L && used >= 0L) {
-                            perc = used * 100L;
-                            perc /= total;
-                        } else {
-                            perc = -1L;
-                        }
-                        if (perc >= (long)Integer.parseInt(p.getProperty("quota_perc", ""))) {
-                            body = String.valueOf(body) + "\nPercentage of quota has been reached for" + path;
-                        } else {
-                            ok = false;
-                        }
-                    } else if (!(p.getProperty("type").equalsIgnoreCase("User Exceeded Upload Transfer Amount Per Session") && alert_action.equals("user_upload_session") || p.getProperty("type").equalsIgnoreCase("User Exceeded Upload Transfer Amount Per Day") && alert_action.equals("user_upload_day") || p.getProperty("type").equalsIgnoreCase("User Exceeded Upload Transfer Amount Per Month") && alert_action.equals("user_upload_month") || p.getProperty("type").equalsIgnoreCase("User Exceeded Download Transfer Amount Per Session") && alert_action.equals("user_download_session") || p.getProperty("type").equalsIgnoreCase("User Download Speed Below Minimum") && alert_action.equals("user_download_speed") || p.getProperty("type").equalsIgnoreCase("User Upload Speed Below Minimum") && alert_action.equals("user_upload_speed") || p.getProperty("type").equalsIgnoreCase("User Exceeded Download Transfer Amount Per Day") && alert_action.equals("user_download_day") || p.getProperty("type").equalsIgnoreCase("User Exceeded Download Transfer Amount Per Month") && alert_action.equals("user_download_month") || p.getProperty("type").equalsIgnoreCase("Proxy Blacklisted Site Attempted") && alert_action.equals("proxy_blacklist"))) {
-                        if (p.getProperty("type").equalsIgnoreCase("IP Banned for Failed Logins") && alert_action.equals("ip_banned_logins")) {
-                            Vector ip_restrictions = null;
-                            ip_restrictions = !ServerStatus.BG("save_temp_bans") && !info.getProperty("alert_timeout", "0").equals("0") ? ServerStatus.siVG("ip_restrictions_temp") : (Vector)server_settings.get("ip_restrictions");
-                            String value = ((Properties)ip_restrictions.get(0)).getProperty("reason");
-                            subject = Common.replace_str(subject, "%msg%", value);
-                            body = Common.replace_str(body, "%msg%", value);
-                            to = Common.replace_str(to, "%msg%", value);
-                            cc = Common.replace_str(cc, "%msg%", value);
-                            bcc = Common.replace_str(bcc, "%msg%", value);
-                            from = Common.replace_str(from, "%msg%", value);
-                        } else if (!p.getProperty("type").equalsIgnoreCase("User Changed Password") || !alert_action.equals("password_change")) {
-                            if (p.getProperty("type").equalsIgnoreCase("Server Port Failed") && alert_action.equals("server_port_error")) {
-                                subject = Common.replace_str(subject, "%msg%", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                body = Common.replace_str(body, "%msg%", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                to = Common.replace_str(to, "%msg%", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                cc = Common.replace_str(cc, "%msg%", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                bcc = Common.replace_str(bcc, "%msg%", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                from = Common.replace_str(from, "%msg%", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                subject = Common.replace_str(subject, "{message}", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                body = Common.replace_str(body, "{message}", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                to = Common.replace_str(to, "{message}", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                cc = Common.replace_str(cc, "{message}", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                bcc = Common.replace_str(bcc, "{message}", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                from = Common.replace_str(from, "{message}", String.valueOf(info.getProperty("alert_msg", "")) + " Error " + info.getProperty("alert_error", ""));
-                                subject = Common.replace_str(subject, "{server_port}", info.getProperty("alert_msg", ""));
-                                body = Common.replace_str(body, "{server_port}", info.getProperty("alert_msg", ""));
-                                to = Common.replace_str(to, "{server_port}", info.getProperty("alert_msg", ""));
-                                cc = Common.replace_str(cc, "{server_port}", info.getProperty("alert_msg", ""));
-                                bcc = Common.replace_str(bcc, "{server_port}", info.getProperty("alert_msg", ""));
-                                from = Common.replace_str(from, "{server_port}", info.getProperty("alert_msg", ""));
-                                subject = Common.replace_str(subject, "{server_port_error}", info.getProperty("alert_error", ""));
-                                body = Common.replace_str(body, "{server_port_error}", info.getProperty("alert_error", ""));
-                                to = Common.replace_str(to, "{server_port_error}", info.getProperty("alert_error", ""));
-                                cc = Common.replace_str(cc, "{server_port_error}", info.getProperty("alert_error", ""));
-                                bcc = Common.replace_str(bcc, "{server_port_error}", info.getProperty("alert_error", ""));
-                                from = Common.replace_str(from, "{server_port_error}", info.getProperty("alert_error", ""));
-                                subject = Common.replace_str(subject, "{host_name}", hostname);
-                                body = Common.replace_str(body, "{host_name}", hostname);
-                                to = Common.replace_str(to, "{host_name}", hostname);
-                                cc = Common.replace_str(cc, "{host_name}", hostname);
-                                bcc = Common.replace_str(bcc, "{host_name}", hostname);
-                                from = Common.replace_str(from, "{host_name}", hostname);
-                            } else if (p.getProperty("type").equalsIgnoreCase("Invalid Email Attempted") && alert_action.equals("invalid_email")) {
-                                subject = Common.replace_str(subject, "%result%", info.getProperty("result", ""));
-                                subject = Common.replace_str(subject, "%subject%", info.getProperty("subject", ""));
-                                subject = Common.replace_str(subject, "%body%", info.getProperty("body", ""));
-                                subject = Common.replace_str(subject, "%to%", info.getProperty("to", ""));
-                                subject = Common.replace_str(subject, "%cc%", info.getProperty("cc", ""));
-                                subject = Common.replace_str(subject, "%bcc%", info.getProperty("bcc", ""));
-                                subject = Common.replace_str(subject, "%from%", info.getProperty("from", ""));
-                                body = Common.replace_str(body, "%result%", info.getProperty("result", ""));
-                                body = Common.replace_str(body, "%subject%", info.getProperty("subject", ""));
-                                body = Common.replace_str(body, "%body%", info.getProperty("body", ""));
-                                body = Common.replace_str(body, "%to%", info.getProperty("to", ""));
-                                body = Common.replace_str(body, "%cc%", info.getProperty("cc", ""));
-                                body = Common.replace_str(body, "%bcc%", info.getProperty("bcc", ""));
-                                body = Common.replace_str(body, "%from%", info.getProperty("from", ""));
-                                to = Common.replace_str(to, "%to%", info.getProperty("to", ""));
-                                to = Common.replace_str(to, "%cc%", info.getProperty("cc", ""));
-                                to = Common.replace_str(to, "%bcc%", info.getProperty("bcc", ""));
-                                to = Common.replace_str(to, "%from%", info.getProperty("from", ""));
-                                cc = Common.replace_str(cc, "%to%", info.getProperty("to", ""));
-                                cc = Common.replace_str(cc, "%cc%", info.getProperty("cc", ""));
-                                cc = Common.replace_str(cc, "%bcc%", info.getProperty("bcc", ""));
-                                cc = Common.replace_str(cc, "%from%", info.getProperty("from", ""));
-                                bcc = Common.replace_str(bcc, "%to%", info.getProperty("to", ""));
-                                bcc = Common.replace_str(bcc, "%cc%", info.getProperty("cc", ""));
-                                bcc = Common.replace_str(bcc, "%bcc%", info.getProperty("bcc", ""));
-                                bcc = Common.replace_str(bcc, "%from%", info.getProperty("from", ""));
-                                from = Common.replace_str(from, "%to%", info.getProperty("to", ""));
-                                from = Common.replace_str(from, "%cc%", info.getProperty("cc", ""));
-                                from = Common.replace_str(from, "%bcc%", info.getProperty("bcc", ""));
-                                from = Common.replace_str(from, "%from%", info.getProperty("from", ""));
-                                subject = Common.replace_str(subject, "{result}", info.getProperty("result", ""));
-                                subject = Common.replace_str(subject, "{subject}", info.getProperty("subject", ""));
-                                subject = Common.replace_str(subject, "{body}", info.getProperty("body", ""));
-                                subject = Common.replace_str(subject, "{to}", info.getProperty("to", ""));
-                                subject = Common.replace_str(subject, "{cc}", info.getProperty("cc", ""));
-                                subject = Common.replace_str(subject, "{bcc}", info.getProperty("bcc", ""));
-                                subject = Common.replace_str(subject, "{from}", info.getProperty("from", ""));
-                                body = Common.replace_str(body, "{result}", info.getProperty("result", ""));
-                                body = Common.replace_str(body, "{subject}", info.getProperty("subject", ""));
-                                body = Common.replace_str(body, "{body}", info.getProperty("body", ""));
-                                body = Common.replace_str(body, "{to}", info.getProperty("to", ""));
-                                body = Common.replace_str(body, "{cc}", info.getProperty("cc", ""));
-                                body = Common.replace_str(body, "{bcc}", info.getProperty("bcc", ""));
-                                body = Common.replace_str(body, "{from}", info.getProperty("from", ""));
-                                to = Common.replace_str(to, "{to}", info.getProperty("to", ""));
-                                to = Common.replace_str(to, "{cc}", info.getProperty("cc", ""));
-                                to = Common.replace_str(to, "{bcc}", info.getProperty("bcc", ""));
-                                to = Common.replace_str(to, "{from}", info.getProperty("from", ""));
-                                cc = Common.replace_str(cc, "{to}", info.getProperty("to", ""));
-                                cc = Common.replace_str(cc, "{cc}", info.getProperty("cc", ""));
-                                cc = Common.replace_str(cc, "{bcc}", info.getProperty("bcc", ""));
-                                cc = Common.replace_str(cc, "{from}", info.getProperty("from", ""));
-                                bcc = Common.replace_str(bcc, "{to}", info.getProperty("to", ""));
-                                bcc = Common.replace_str(bcc, "{cc}", info.getProperty("cc", ""));
-                                bcc = Common.replace_str(bcc, "{bcc}", info.getProperty("bcc", ""));
-                                bcc = Common.replace_str(bcc, "{from}", info.getProperty("from", ""));
-                                from = Common.replace_str(from, "{to}", info.getProperty("to", ""));
-                                from = Common.replace_str(from, "{cc}", info.getProperty("cc", ""));
-                                from = Common.replace_str(from, "{bcc}", info.getProperty("bcc", ""));
-                                from = Common.replace_str(from, "{from}", info.getProperty("from", ""));
-                            } else if (p.getProperty("type").equalsIgnoreCase("User Hammering") && alert_action.equals("user_hammering")) {
-                                Properties recent_hammering;
-                                String id;
-                                String user_name;
-                                long stamp;
-                                Properties loginsCounter = new Properties();
-                                Properties loginsUserInfos = new Properties();
-                                long now = System.currentTimeMillis();
-                                Properties sessionIds = new Properties();
-                                Vector v = (Vector)ServerStatus.siVG("user_list").clone();
-                                int xx = v.size() - 1;
-                                while (xx >= 0) {
-                                    try {
-                                        Properties ui = (Properties)v.elementAt(xx);
-                                        stamp = Long.parseLong(ui.getProperty("login_date_stamp_unique", "0"));
-                                        user_name = ui.getProperty("user_name", "");
-                                        if (!user_name.equals("") && !user_name.equalsIgnoreCase("anonymous") && now - stamp < (long)(Integer.parseInt(p.getProperty("login_interval", "60")) * 1000)) {
-                                            id = ui.getProperty("CrushAuth", "");
-                                            if (id.equals("")) {
-                                                id = ui.getProperty("id");
-                                            }
-                                            if (!sessionIds.containsKey(id)) {
-                                                loginsCounter.put(user_name, String.valueOf(Integer.parseInt(loginsCounter.getProperty(user_name, "0")) + 1));
-                                            }
-                                            sessionIds.put(id, "found");
-                                            loginsUserInfos.put(user_name, ui);
-                                        }
-                                    }
-                                    catch (Exception e) {
-                                        Log.log("ALERT", 2, e);
-                                    }
-                                    --xx;
-                                }
-                                xx = 0;
-                                while (xx < ServerStatus.siVG("recent_user_list").size()) {
-                                    try {
-                                        Properties ui = (Properties)ServerStatus.siVG("recent_user_list").elementAt(xx);
-                                        stamp = Long.parseLong(ui.getProperty("login_date_stamp_unique", "0"));
-                                        user_name = ui.getProperty("user_name", "");
-                                        if (!user_name.equals("") && !user_name.equalsIgnoreCase("anonymous") && now - stamp < (long)(Integer.parseInt(p.getProperty("login_interval", "60")) * 1000)) {
-                                            id = ui.getProperty("CrushAuth", "");
-                                            if (id.equals("")) {
-                                                id = ui.getProperty("id");
-                                            }
-                                            if (!sessionIds.containsKey(id)) {
-                                                loginsCounter.put(user_name, String.valueOf(Integer.parseInt(loginsCounter.getProperty(user_name, "0")) + 1));
-                                            }
-                                            sessionIds.put(id, "found");
-                                            loginsUserInfos.put(user_name, ui);
-                                        }
-                                    }
-                                    catch (Exception e) {
-                                        Log.log("ALERT", 2, e);
-                                    }
-                                    ++xx;
-                                }
-                                Enumeration<Object> keys = loginsCounter.keys();
-                                boolean found = false;
-                                String line = "";
-                                boolean hasLines = false;
-                                if (body.indexOf("<LINE>") >= 0) {
-                                    line = body.substring(body.indexOf("<LINE>") + "<LINE>".length(), body.lastIndexOf("</LINE>"));
-                                    hasLines = true;
-                                }
-                                if ((recent_hammering = (Properties)this.server_info.get("recent_hammering")) == null) {
-                                    recent_hammering = new Properties();
-                                }
-                                this.server_info.put("recent_hammering", recent_hammering);
-                                recent_hammering.clear();
-                                String newLines = "";
-                                while (keys.hasMoreElements()) {
-                                    String key = keys.nextElement().toString();
-                                    int count = Integer.parseInt(loginsCounter.getProperty(key, "0"));
-                                    if (count <= Integer.parseInt(p.getProperty("login_count", "100"))) continue;
-                                    recent_hammering.put(key, String.valueOf(count) + " logins");
-                                    newLines = thisObj.change_vars_to_values(line, null, (Properties)loginsUserInfos.get(key), null);
-                                    if (hasLines) {
-                                        newLines = String.valueOf(newLines) + "\r\n" + key + ":" + count + "\r\n";
-                                    } else {
-                                        body = String.valueOf(body) + "\r\n" + key + ":" + count + "\r\n";
-                                    }
-                                    found = true;
-                                    try {
-                                        Properties info2 = new Properties();
-                                        info2.put("alert_type", "hammering");
-                                        info2.put("alert_sub_type", "user");
-                                        info2.put("alert_timeout", "0");
-                                        info2.put("alert_max", String.valueOf(p.getProperty("login_count", "100")));
-                                        info2.put("alert_count", String.valueOf(count));
-                                        info2.put("alert_msg", hasLines ? newLines.trim() : body.trim());
-                                        this.runAlerts("security_alert", info2, (Properties)loginsUserInfos.get(key), null, null, null, dmz_mode);
-                                    }
-                                    catch (Exception e) {
-                                        Log.log("BAN", 1, e);
-                                    }
-                                }
-                                body = Common.replace_str(body, "<LINE>" + line + "</LINE>", newLines).trim();
-                                if (!found) {
-                                    ok = false;
-                                }
-                            } else if (p.getProperty("type").equalsIgnoreCase("Plugin Message") && alert_action.startsWith("pluginMessage_")) {
-                                subject = Common.replace_str(subject, "%message%", alert_action.substring(alert_action.indexOf("_") + 1));
-                                body = Common.replace_str(body, "%message%", alert_action.substring(alert_action.indexOf("_") + 1));
-                                subject = Common.replace_str(subject, "{message}", alert_action.substring(alert_action.indexOf("_") + 1));
-                                body = Common.replace_str(body, "{message}", alert_action.substring(alert_action.indexOf("_") + 1));
-                                if (p.getProperty("to").toUpperCase().startsWith("PLUGIN:")) {
-                                    String plugin = p.getProperty("to").substring("plugin:".length()).trim();
-                                    Vector<Properties> items = new Vector<Properties>();
-                                    File_S f = new File_S(String.valueOf(System.getProperty("crushftp.web")) + "WebInterface/temp/");
-                                    Properties item = new Properties();
-                                    if (info != null) {
-                                        item.putAll((Map<?, ?>)info);
-                                    }
-                                    try {
-                                        item.put("url", f.toURI().toURL().toExternalForm());
-                                    }
-                                    catch (Exception sessionIds) {
-                                        // empty catch block
-                                    }
-                                    item.put("the_command", alert_action);
-                                    item.put("subject", subject);
-                                    item.put("body", body);
-                                    items.addElement(item);
-                                    this.append_log(String.valueOf(LOC.G("ALERT:")) + p.getProperty("type") + ":" + plugin, "ERROR");
-                                    Properties event = new Properties();
-                                    event.put("event_plugin_list", plugin);
-                                    event.put("name", "PluginMessage_Alert:" + plugin);
-                                    this.events6.doEventPlugin(null, event, the_user, items);
-                                    ok = false;
-                                }
-                            } else if (p.getProperty("type").equalsIgnoreCase("Security Alert") && alert_action.equals("security_alert")) {
-                                subject = Common.replace_str(subject, "{alert_type}", info.getProperty("alert_type", ""));
-                                subject = Common.replace_str(subject, "{alert_sub_type}", info.getProperty("alert_sub_type", ""));
-                                subject = Common.replace_str(subject, "{alert_timeout}", info.getProperty("alert_timeout", ""));
-                                subject = Common.replace_str(subject, "{alert_max}", info.getProperty("alert_max", ""));
-                                subject = Common.replace_str(subject, "{alert_msg}", info.getProperty("alert_msg", ""));
-                                body = Common.replace_str(body, "{alert_type}", info.getProperty("alert_type", ""));
-                                body = Common.replace_str(body, "{alert_sub_type}", info.getProperty("alert_sub_type", ""));
-                                body = Common.replace_str(body, "{alert_timeout}", info.getProperty("alert_timeout", ""));
-                                body = Common.replace_str(body, "{alert_max}", info.getProperty("alert_max", ""));
-                                body = Common.replace_str(body, "{alert_msg}", info.getProperty("alert_msg", ""));
-                                subject = Common.replace_str(subject, "%alert_type%", info.getProperty("alert_type", ""));
-                                subject = Common.replace_str(subject, "%alert_sub_type%", info.getProperty("alert_sub_type", ""));
-                                subject = Common.replace_str(subject, "%alert_timeout%", info.getProperty("alert_timeout", ""));
-                                subject = Common.replace_str(subject, "%alert_max%", info.getProperty("alert_max", ""));
-                                subject = Common.replace_str(subject, "%alert_msg%", info.getProperty("alert_msg", ""));
-                                body = Common.replace_str(body, "%alert_type%", info.getProperty("alert_type", ""));
-                                body = Common.replace_str(body, "%alert_sub_type%", info.getProperty("alert_sub_type", ""));
-                                body = Common.replace_str(body, "%alert_timeout%", info.getProperty("alert_timeout", ""));
-                                body = Common.replace_str(body, "%alert_max%", info.getProperty("alert_max", ""));
-                                body = Common.replace_str(body, "%alert_msg%", info.getProperty("alert_msg", ""));
-                            } else if (p.getProperty("type").equalsIgnoreCase("ServerBeat Alert") && alert_action.equals("serverbeat_alert")) {
-                                subject = Common.replace_str(subject, "{alert_type}", info.getProperty("alert_type", ""));
-                                subject = Common.replace_str(subject, "{alert_sub_type}", info.getProperty("alert_sub_type", ""));
-                                subject = Common.replace_str(subject, "{alert_timeout}", info.getProperty("alert_timeout", ""));
-                                subject = Common.replace_str(subject, "{alert_max}", info.getProperty("alert_max", ""));
-                                subject = Common.replace_str(subject, "{alert_msg}", info.getProperty("alert_msg", ""));
-                                body = Common.replace_str(body, "{alert_type}", info.getProperty("alert_type", ""));
-                                body = Common.replace_str(body, "{alert_sub_type}", info.getProperty("alert_sub_type", ""));
-                                body = Common.replace_str(body, "{alert_timeout}", info.getProperty("alert_timeout", ""));
-                                body = Common.replace_str(body, "{alert_max}", info.getProperty("alert_max", ""));
-                                body = Common.replace_str(body, "{alert_msg}", info.getProperty("alert_msg", ""));
-                            } else if (p.getProperty("type").equalsIgnoreCase("Low Memory") && alert_action.equals("low_memory")) {
-                                from = Common.replace_str(from, "{alert_ram_free}", info.getProperty("alert_ram_free", ""));
-                                to = Common.replace_str(to, "{alert_ram_free}", info.getProperty("alert_ram_free", ""));
-                                body = Common.replace_str(body, "{alert_ram_free}", info.getProperty("alert_ram_free", ""));
-                                subject = Common.replace_str(subject, "{alert_ram_free}", info.getProperty("alert_ram_free", ""));
-                                bcc = Common.replace_str(bcc, "{alert_ram_free}", info.getProperty("alert_ram_free", ""));
-                                cc = Common.replace_str(cc, "{alert_ram_free}", info.getProperty("alert_ram_free", ""));
-                                from = Common.replace_str(from, "%alert_ram_free%", info.getProperty("alert_ram_free", ""));
-                                to = Common.replace_str(to, "%alert_ram_free%", info.getProperty("alert_ram_free", ""));
-                                body = Common.replace_str(body, "%alert_ram_free%", info.getProperty("alert_ram_free", ""));
-                                subject = Common.replace_str(subject, "%alert_ram_free%", info.getProperty("alert_ram_free", ""));
-                                bcc = Common.replace_str(bcc, "%alert_ram_free%", info.getProperty("alert_ram_free", ""));
-                                cc = Common.replace_str(cc, "%alert_ram_free%", info.getProperty("alert_ram_free", ""));
-                                from = Common.replace_str(from, "{alert_ram_max}", info.getProperty("alert_ram_max", ""));
-                                to = Common.replace_str(to, "{alert_ram_max}", info.getProperty("alert_ram_max", ""));
-                                body = Common.replace_str(body, "{alert_ram_max}", info.getProperty("alert_ram_max", ""));
-                                subject = Common.replace_str(subject, "{alert_ram_max}", info.getProperty("alert_ram_max", ""));
-                                bcc = Common.replace_str(bcc, "{alert_ram_max}", info.getProperty("alert_ram_max", ""));
-                                cc = Common.replace_str(cc, "{alert_ram_max}", info.getProperty("alert_ram_max", ""));
-                                from = Common.replace_str(from, "%alert_ram_max%", info.getProperty("alert_ram_max", ""));
-                                to = Common.replace_str(to, "%alert_ram_max%", info.getProperty("alert_ram_max", ""));
-                                body = Common.replace_str(body, "%alert_ram_max%", info.getProperty("alert_ram_max", ""));
-                                subject = Common.replace_str(subject, "%alert_ram_max%", info.getProperty("alert_ram_max", ""));
-                                bcc = Common.replace_str(bcc, "%alert_ram_max%", info.getProperty("alert_ram_max", ""));
-                                cc = Common.replace_str(cc, "%alert_ram_max%", info.getProperty("alert_ram_max", ""));
-                                from = Common.replace_str(from, "{alert_memory_threads}", info.getProperty("alert_memory_threads", ""));
-                                to = Common.replace_str(to, "{alert_memory_threads}", info.getProperty("alert_memory_threads", ""));
-                                body = Common.replace_str(body, "{alert_memory_threads}", info.getProperty("alert_memory_threads", ""));
-                                subject = Common.replace_str(subject, "{alert_memory_threads}", info.getProperty("alert_memory_threads", ""));
-                                bcc = Common.replace_str(bcc, "{alert_memory_threads}", info.getProperty("alert_memory_threads", ""));
-                                cc = Common.replace_str(cc, "{alert_memory_threads}", info.getProperty("alert_memory_threads", ""));
-                                from = Common.replace_str(from, "%alert_memory_threads%", info.getProperty("alert_memory_threads", ""));
-                                to = Common.replace_str(to, "%alert_memory_threads%", info.getProperty("alert_memory_threads", ""));
-                                body = Common.replace_str(body, "%alert_memory_threads%", info.getProperty("alert_memory_threads", ""));
-                                subject = Common.replace_str(subject, "%alert_memory_threads%", info.getProperty("alert_memory_threads", ""));
-                                bcc = Common.replace_str(bcc, "%alert_memory_threads%", info.getProperty("alert_memory_threads", ""));
-                                cc = Common.replace_str(cc, "%alert_memory_threads%", info.getProperty("alert_memory_threads", ""));
-                            } else if (p.getProperty("type").equalsIgnoreCase("Big Directory") && alert_action.equals("big_dir")) {
-                                body = Common.replace_str(body, "{alert_msg}", info.getProperty("alert_msg", ""));
-                                subject = Common.replace_str(subject, "{alert_msg}", info.getProperty("alert_msg", ""));
-                                body = Common.replace_str(body, "%alert_msg%", info.getProperty("alert_msg", ""));
-                                subject = Common.replace_str(subject, "%alert_msg%", info.getProperty("alert_msg", ""));
-                            } else if (p.getProperty("type").equalsIgnoreCase("Slow Login") && alert_action.equals("slow_login")) {
-                                body = Common.replace_str(body, "{alert_msg}", info.getProperty("alert_msg", ""));
-                                subject = Common.replace_str(subject, "{alert_msg}", info.getProperty("alert_msg", ""));
-                                body = Common.replace_str(body, "%alert_msg%", info.getProperty("alert_msg", ""));
-                                subject = Common.replace_str(subject, "%alert_msg%", info.getProperty("alert_msg", ""));
-                            } else if (p.getProperty("type").equalsIgnoreCase("Login Frequency") && alert_action.equals("login_frequency")) {
-                                body = Common.replace_str(body, "{alert_msg}", info.getProperty("count", "0"));
-                                subject = Common.replace_str(subject, "{alert_msg}", info.getProperty("count", "0"));
-                                body = Common.replace_str(body, "%alert_msg%", info.getProperty("count", "0"));
-                                subject = Common.replace_str(subject, "%alert_msg%", info.getProperty("count", "0"));
-                                body = Common.replace_str(body, "{alert_login_interval}", String.valueOf(p.getProperty("login_interval")));
-                                subject = Common.replace_str(subject, "{alert_login_interval}", String.valueOf(p.getProperty("login_interval")));
-                                body = Common.replace_str(body, "%alert_login_interval%", String.valueOf(p.getProperty("login_interval")));
-                                subject = Common.replace_str(subject, "%alert_login_interval%", String.valueOf(p.getProperty("login_interval")));
-                            } else if (p.getProperty("type").equalsIgnoreCase("Login Frequency Banned") && alert_action.equals("login_frequency_banned")) {
-                                body = Common.replace_str(body, "{alert_msg}", info.getProperty("count", "0"));
-                                subject = Common.replace_str(subject, "{alert_msg}", info.getProperty("count", "0"));
-                                body = Common.replace_str(body, "{count}", info.getProperty("count", "0"));
-                                subject = Common.replace_str(subject, "{count}", info.getProperty("count", "0"));
-                                body = Common.replace_str(body, "{interval}", info.getProperty("interval", "0"));
-                                subject = Common.replace_str(subject, "{interval}", info.getProperty("interval", "0"));
-                                body = Common.replace_str(body, "{attempts}", info.getProperty("attempts", "0"));
-                                subject = Common.replace_str(subject, "{attempts}", info.getProperty("attempts", "0"));
-                                body = Common.replace_str(body, "{user_name}", info.getProperty("user_name", "0"));
-                                subject = Common.replace_str(subject, "{user_name}", info.getProperty("user_name", "0"));
-                                body = Common.replace_str(body, "{username}", info.getProperty("user_name", "0"));
-                                subject = Common.replace_str(subject, "{username}", info.getProperty("user_name", "0"));
-                                body = Common.replace_str(body, "{expire}", info.getProperty("expire", "0"));
-                                subject = Common.replace_str(subject, "{expire}", info.getProperty("expire", "0"));
-                                body = Common.replace_str(body, "%alert_msg%", info.getProperty("count", "0"));
-                                subject = Common.replace_str(subject, "%alert_msg%", info.getProperty("count", "0"));
-                                body = Common.replace_str(body, "{alert_login_interval}", String.valueOf(p.getProperty("login_interval")));
-                                subject = Common.replace_str(subject, "{alert_login_interval}", String.valueOf(p.getProperty("login_interval")));
-                                body = Common.replace_str(body, "%alert_login_interval%", String.valueOf(p.getProperty("login_interval")));
-                                subject = Common.replace_str(subject, "%alert_login_interval%", String.valueOf(p.getProperty("login_interval")));
-                            } else if (p.getProperty("type").equalsIgnoreCase("Job Changes") && alert_action.equals("job_update")) {
-                                body = Common.replace_str(body, "{alert_schedule_name}", info.getProperty("alert_schedule_name", ""));
-                                body = Common.replace_str(body, "{alert_schedule_changes}", info.getProperty("alert_schedule_changes", ""));
-                                body = Common.replace_str(body, "{alert_schedule_audit_trail}", info.getProperty("alert_schedule_audit_trail", ""));
-                                subject = Common.replace_str(subject, "{alert_schedule_name}", info.getProperty("alert_schedule_name", ""));
-                                subject = Common.replace_str(subject, "{alert_schedule_changes}", info.getProperty("alert_schedule_changes", ""));
-                                subject = Common.replace_str(subject, "{alert_schedule_audit_trail}", info.getProperty("alert_schedule_audit_trail", ""));
-                            } else if (p.getProperty("type").equalsIgnoreCase("Update Object") && alert_action.equals("update_object")) {
-                                if (com.crushftp.client.Common.do_search(p.getProperty("path_filter", "*"), info.getProperty("update_object_path", ""), false, 0) && com.crushftp.client.Common.do_search(p.getProperty("log_filter", "*"), info.getProperty("update_object_log", ""), false, 0)) {
-                                    body = Common.replace_str(body, "{update_object_log}", info.getProperty("update_object_log", ""));
-                                    body = Common.replace_str(body, "{update_object_path}", info.getProperty("update_object_path", ""));
-                                    subject = Common.replace_str(subject, "{update_object_log}", info.getProperty("update_object_log", ""));
-                                    subject = Common.replace_str(subject, "{update_object_path}", info.getProperty("update_object_path", ""));
-                                } else {
-                                    ok = false;
-                                }
-                            } else {
-                                ok = false;
-                            }
-                        }
-                    }
-                }
-                if (ok) {
-                    SimpleDateFormat hh;
-                    String HH;
-                    Properties hours;
-                    int curHH;
-                    if (ServerStatus.siBG("dmz_mode") && the_alert != null) {
-                        Vector queue = (Vector)com.crushftp.client.Common.System2.get("crushftp.dmz.queue");
-                        Properties action = new Properties();
-                        action.put("type", "GET:SINGLETON");
-                        action.put("id", Common.makeBoundary());
-                        action.put("need_response", "true");
-                        queue.addElement(action);
-                        action = UserTools.waitResponse(action, 30);
-                        String singleton_id = "";
-                        if (action != null) {
-                            singleton_id = "" + action.get("singleton_id");
-                        }
-                        action = new Properties();
-                        action.put("type", "PUT:ALERT");
-                        action.put("id", Common.makeBoundary());
-                        action.put("alert_action", alert_action);
-                        if (info != null) {
-                            action.put("info", info);
-                        }
-                        if (user_info != null) {
-                            action.put("user_info", user_info);
-                        }
-                        if (the_user != null && the_user.user != null) {
-                            action.put("user", the_user.user);
-                        }
-                        action.put("singleton_id", singleton_id);
-                        action.put("alert", the_alert);
-                        queue.addElement(action);
-                    }
-                    if (!ServerStatus.BG("run_alerts_dmz") && ServerStatus.siBG("dmz_mode")) {
-                        return;
-                    }
-                    this.append_log(String.valueOf(LOC.G("ALERT:")) + p.getProperty("type"), "ERROR");
-                    if (the_user != null) {
-                        user = the_user.user;
-                    }
-                    to = this.change_vars_to_values(to, user, user_info, the_user);
-                    cc = this.change_vars_to_values(cc, user, user_info, the_user);
-                    bcc = this.change_vars_to_values(bcc, user, user_info, the_user);
-                    from = this.change_vars_to_values(from, user, user_info, the_user);
-                    subject = this.change_vars_to_values(subject, user, user_info, the_user);
-                    body = this.change_vars_to_values(body, user, user_info, the_user);
-                    Enumeration<Object> keys = ServerStatus.thisObj.server_info.keys();
-                    while (keys.hasMoreElements()) {
-                        String key = keys.nextElement().toString();
-                        String val = ServerStatus.thisObj.server_info.getProperty(key);
-                        if (body.indexOf("%server_" + key + "%") >= 0) {
-                            body = Common.replace_str(body, "%server_" + key + "%", String.valueOf(val));
-                        }
-                        if (body.indexOf("%" + key + "%") >= 0) {
-                            body = Common.replace_str(body, "%" + key + "%", String.valueOf(val));
-                        }
-                        if (subject.indexOf("%server_" + key + "%") >= 0) {
-                            subject = Common.replace_str(subject, "%server_" + key + "%", String.valueOf(val));
-                        }
-                        if (subject.indexOf("%" + key + "%") < 0) continue;
-                        subject = Common.replace_str(subject, "%" + key + "%", String.valueOf(val));
-                    }
-                    if (Log.log("SERVER", 2, "")) {
-                        Log.log("SERVER", 2, new Exception("New Alert:" + subject + ":" + p));
-                    }
-                    if (!p.getProperty("alert_plugin", "").equals("")) {
-                        Properties item = (Properties)p.clone();
-                        if (the_user != null && the_user.user != null) {
-                            item.putAll((Map<?, ?>)the_user.user);
-                        }
-                        if (user_info != null) {
-                            item.putAll((Map<?, ?>)user_info);
-                        }
-                        item.putAll((Map<?, ?>)p);
-                        item.put("url", "file://" + p.getProperty("type") + "/" + p.getProperty("name"));
-                        item.put("the_file_name", subject);
-                        item.put("the_file_path", body);
-                        item.put("to", to);
-                        item.put("cc", cc);
-                        item.put("bcc", bcc);
-                        item.put("from", from);
-                        item.put("subject", subject);
-                        item.put("body", body);
-                        item.put("dmz_mode", String.valueOf(dmz_mode));
-                        if (info != null) {
-                            item.putAll((Map<?, ?>)info);
-                        }
-                        Vector<Properties> items = new Vector<Properties>();
-                        items.addElement(item);
-                        Properties event = new Properties();
-                        event.put("event_plugin_list", p.getProperty("alert_plugin", ""));
-                        event.put("name", "AlertPlugin:" + p.getProperty("type"));
-                        this.events6.doEventPlugin(null, event, the_user, items);
-                    }
-                    if (p.get("hours") == null) {
-                        p.put("hours", new Properties());
-                    }
-                    if ((curHH = Integer.parseInt((hours = (Properties)p.get("hours")).getProperty(HH = (hh = new SimpleDateFormat("HH", Locale.US)).format(new Date()), "0"))) >= Integer.parseInt(p.getProperty("max_alert_emails", "60"))) {
-                        ok = false;
-                    }
-                    if (ok && !to.equals("")) {
-                        int xx = 0;
-                        while (xx < 10) {
-                            hours.put("0" + xx, "0");
-                            ++xx;
-                        }
-                        xx = 10;
-                        while (xx < 25) {
-                            hours.put("" + xx, "0");
-                            ++xx;
-                        }
-                        hours.put(HH, String.valueOf(curHH + 1));
-                        String emailResult = com.crushftp.client.Common.send_mail(ServerStatus.SG("discovered_ip"), to, cc, bcc, from, subject, body, ServerStatus.SG("smtp_server"), ServerStatus.SG("smtp_user"), ServerStatus.SG("smtp_pass"), ServerStatus.BG("smtp_ssl"), ServerStatus.BG("smtp_html"), null);
-                        if (emailResult.toUpperCase().indexOf("SUCCESS") < 0) {
-                            Log.log("SMTP", 0, String.valueOf(LOC.G("FAILURE:")) + " " + emailResult + "\r\n");
-                            Log.log("SMTP", 0, String.valueOf(LOC.G("FROM:")) + " " + this.change_vars_to_values(p.getProperty("from"), user, user_info, the_user) + "\r\n");
-                            Log.log("SMTP", 0, String.valueOf(LOC.G("TO:")) + " " + this.change_vars_to_values(p.getProperty("to"), user, user_info, the_user) + "\r\n");
-                            Log.log("SMTP", 0, String.valueOf(LOC.G("CC:")) + " " + this.change_vars_to_values(p.getProperty("cc"), user, user_info, the_user) + "\r\n");
-                            Log.log("SMTP", 0, String.valueOf(LOC.G("BCC:")) + " " + this.change_vars_to_values(p.getProperty("bcc"), user, user_info, the_user) + "\r\n");
-                            Log.log("SMTP", 0, String.valueOf(LOC.G("SUBJECT:")) + " " + this.change_vars_to_values(p.getProperty("subject"), user, user_info, the_user) + "\r\n");
-                            Log.log("SMTP", 0, String.valueOf(LOC.G("BODY:")) + " " + this.change_vars_to_values(p.getProperty("body"), user, user_info, the_user) + "\r\n");
-                        }
-                    }
-                }
-            }
-            ++x;
-        }
+        AlertTools.runAlerts(alert_action, info, user_info, null, the_user, the_alert, dmz_mode);
     }
 
     public void sendEmail(Properties p) {
@@ -5955,6 +5651,52 @@ lbl15:
             }, "fill_vfs_cache");
         }
         catch (IOException e) {
+            Log.log("SERVER", 1, e);
+        }
+    }
+
+    public static long get_partial_val_or_all(String key, int index) {
+        long l = 0L;
+        String s = ServerStatus.SG(key).trim();
+        l = s.indexOf(",") > 0 ? Long.parseLong(s.split(",")[index].trim()) : Long.parseLong(s.trim());
+        return l;
+    }
+
+    public void monitor_thread_dump_port() {
+        try {
+            if (!ServerStatus.SG("thread_dump_port").equals("")) {
+                if (thread_dump_socket != null && thread_dump_socket.getLocalPort() == Integer.parseInt(ServerStatus.SG("thread_dump_port"))) {
+                    return;
+                }
+                if (thread_dump_socket != null) {
+                    thread_dump_socket.close();
+                }
+                thread_dump_socket = new ServerSocket(Integer.parseInt(ServerStatus.SG("thread_dump_port")), 10, InetAddress.getByName("127.0.0.1"));
+                Worker.startWorker(new Runnable(){
+
+                    @Override
+                    public void run() {
+                        ServerSocket ss = thread_dump_socket;
+                        while (!ss.isClosed()) {
+                            try {
+                                Socket sock = ss.accept();
+                                Properties request = new Properties();
+                                request.put("inputstream", sock.getInputStream());
+                                request.put("outputstream", sock.getOutputStream());
+                                AdminControls.upload_debug_info(request, "(CONNECT)");
+                                sock.close();
+                            }
+                            catch (Exception e) {
+                                e.printStackTrace();
+                                Log.log("SERVER", 1, e);
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        catch (Exception e) {
+            e.printStackTrace();
             Log.log("SERVER", 1, e);
         }
     }

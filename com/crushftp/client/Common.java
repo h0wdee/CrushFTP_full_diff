@@ -2,9 +2,7 @@
  * Decompiled with CFR 0.152.
  * 
  * Could not load the following classes:
- *  com.didisoft.pgp.CypherAlgorithm$Enum
- *  com.didisoft.pgp.HashAlgorithm$Enum
- *  com.didisoft.pgp.PGPKeyPair
+ *  org.apache.commons.codec.binary.Base32
  *  org.bouncycastle.crypto.digests.KeccakDigest
  *  org.bouncycastle.jcajce.provider.digest.SHA3$DigestSHA3
  *  org.bouncycastle.util.encoders.Hex
@@ -15,6 +13,16 @@
  *  org.jdom.input.SAXBuilder
  *  org.jdom.output.Format
  *  org.jdom.output.XMLOutputter
+ *  org.jose4j.jwk.HttpsJwks
+ *  org.jose4j.jws.JsonWebSignature
+ *  org.jose4j.jwt.JwtClaims
+ *  org.jose4j.jwt.consumer.JwtConsumer
+ *  org.jose4j.jwt.consumer.JwtConsumerBuilder
+ *  org.jose4j.keys.resolvers.HttpsJwksVerificationKeyResolver
+ *  org.jose4j.keys.resolvers.VerificationKeyResolver
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -101,6 +109,7 @@ import java.net.URI;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.security.Key;
 import java.security.KeyFactory;
 import java.security.KeyStore;
 import java.security.MessageDigest;
@@ -170,6 +179,7 @@ import org.jose4j.jwt.JwtClaims;
 import org.jose4j.jwt.consumer.JwtConsumer;
 import org.jose4j.jwt.consumer.JwtConsumerBuilder;
 import org.jose4j.keys.resolvers.HttpsJwksVerificationKeyResolver;
+import org.jose4j.keys.resolvers.VerificationKeyResolver;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.JSONValue;
@@ -1984,7 +1994,7 @@ lbl30:
         String[] hashingAlgorithms = new String[]{"SHA1", "SHA256", "SHA384", "SHA512", "MD5"};
         String[] compressions = new String[]{"ZIP", "ZLIB", "UNCOMPRESSED"};
         try {
-            PGPKeyPair key = PGPKeyPair.generateKeyPair((int)keySize, (String)commonName, (String)"RSA", (String)password, (String[])compressions, (String[])hashingAlgorithms, (String[])cyphers, (long)days);
+            PGPKeyPair key = PGPKeyPair.generateKeyPair(keySize, commonName, "RSA", password, compressions, hashingAlgorithms, cyphers, days);
             key.exportPrivateKey(privateKeyPath, true);
             key.exportPublicKey(String.valueOf(privateKeyPath.substring(0, privateKeyPath.lastIndexOf("."))) + ".pub", true);
         }
@@ -3439,12 +3449,12 @@ lbl30:
                     urlc.setRequestMethod("GET");
                     urlc.setRequestProperty("Content-Type", "application/json");
                     String result = Common.consumeResponse(urlc.getInputStream());
-                    JSONObject obj = (JSONObject)JSONValue.parse(result);
-                    geo_ip_info.append(obj.get("country_name")).append(",");
-                    geo_ip_info.append(obj.get("region_name")).append(",");
-                    geo_ip_info.append(obj.get("city")).append(",");
-                    geo_ip_info.append(obj.get("latitude")).append(",");
-                    geo_ip_info.append(obj.get("longitude"));
+                    JSONObject obj = (JSONObject)JSONValue.parse((String)result);
+                    geo_ip_info.append(obj.get((Object)"country_name")).append(",");
+                    geo_ip_info.append(obj.get((Object)"region_name")).append(",");
+                    geo_ip_info.append(obj.get((Object)"city")).append(",");
+                    geo_ip_info.append(obj.get((Object)"latitude")).append(",");
+                    geo_ip_info.append(obj.get((Object)"longitude"));
                 }
                 catch (Exception e) {
                     Common.log("SERVER", 1, e);
@@ -4630,11 +4640,11 @@ lbl30:
             if (code < 200 || code > 299) {
                 throw new Exception("Error :" + result);
             }
-            JSONObject obj = (JSONObject)JSONValue.parse(result);
+            JSONObject obj = (JSONObject)JSONValue.parse((String)result);
             Properties p = new Properties();
-            if (obj.containsKey("refresh_token") && obj.containsKey("access_token")) {
-                String refresh_token = (String)obj.get("refresh_token");
-                String access_token = (String)obj.get("access_token");
+            if (obj.containsKey((Object)"refresh_token") && obj.containsKey((Object)"access_token")) {
+                String refresh_token = (String)obj.get((Object)"refresh_token");
+                String access_token = (String)obj.get((Object)"access_token");
                 p.put("refresh_token", refresh_token);
                 p.put("access_token", access_token);
                 return p;
@@ -4668,11 +4678,11 @@ lbl30:
             if (code < 200 || code > 299) {
                 throw new IOException(result);
             }
-            String refresh_token = (String)((JSONObject)JSONValue.parse(result)).get("refresh_token");
-            String access_token = (String)((JSONObject)JSONValue.parse(result)).get("access_token");
+            String refresh_token = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"refresh_token");
+            String access_token = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"access_token");
             String id_token = "";
-            if (((JSONObject)JSONValue.parse(result)).get("id_token") != null) {
-                id_token = (String)((JSONObject)JSONValue.parse(result)).get("id_token");
+            if (((JSONObject)JSONValue.parse((String)result)).get((Object)"id_token") != null) {
+                id_token = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"id_token");
             }
             Properties p = new Properties();
             p.put("refresh_token", refresh_token);
@@ -4685,18 +4695,18 @@ lbl30:
                     if (!data.endsWith("}")) {
                         data = String.valueOf(data) + "}";
                     }
-                    JSONObject obj_a = (JSONObject)JSONValue.parse(data);
+                    JSONObject obj_a = (JSONObject)JSONValue.parse((String)data);
                     Object[] ac = obj_a.entrySet().toArray();
                     Properties pp = new Properties();
                     int i = 0;
                     while (i < ac.length) {
                         String key = ac[i].toString().split("=")[0];
                         if (key.equals("emails")) {
-                            JSONArray ja = (JSONArray)obj_a.get(key);
+                            JSONArray ja = (JSONArray)obj_a.get((Object)key);
                             String email = (String)ja.get(0);
                             pp.put("email", email);
                         } else {
-                            pp.put(key.trim(), ("" + obj_a.get(key)).trim());
+                            pp.put(key.trim(), ("" + obj_a.get((Object)key)).trim());
                         }
                         ++i;
                     }
@@ -4709,18 +4719,18 @@ lbl30:
                         if (!dtat2.endsWith("}")) {
                             dtat2 = String.valueOf(dtat2) + "}";
                         }
-                        JSONObject obj = (JSONObject)JSONValue.parse(dtat2);
+                        JSONObject obj = (JSONObject)JSONValue.parse((String)dtat2);
                         Object[] array = obj.entrySet().toArray();
                         Properties info = new Properties();
                         int i2 = 0;
                         while (i2 < array.length) {
                             String key = array[i2].toString().split("=")[0];
                             if (key.equals("emails")) {
-                                JSONArray ja = (JSONArray)obj.get(key);
+                                JSONArray ja = (JSONArray)obj.get((Object)key);
                                 String email = (String)ja.get(0);
                                 info.put("email", email);
                             } else {
-                                info.put(key.trim(), ("" + obj.get(key)).trim());
+                                info.put(key.trim(), ("" + obj.get((Object)key)).trim());
                             }
                             ++i2;
                         }
@@ -4777,18 +4787,18 @@ lbl30:
         if (code < 200 || code > 299) {
             throw new IOException(result);
         }
-        Common.log("SERVER", 2, "OAuth response keys: " + ((JSONObject)JSONValue.parse(result)).keySet());
+        Common.log("SERVER", 2, "OAuth response keys: " + ((JSONObject)JSONValue.parse((String)result)).keySet());
         String access_token = "";
-        if (((JSONObject)JSONValue.parse(result)).get("access_token") != null) {
-            access_token = "" + ((JSONObject)JSONValue.parse(result)).get("access_token");
+        if (((JSONObject)JSONValue.parse((String)result)).get((Object)"access_token") != null) {
+            access_token = "" + ((JSONObject)JSONValue.parse((String)result)).get((Object)"access_token");
         }
         String expire_in = "";
-        if (((JSONObject)JSONValue.parse(result)).get("expires_in") != null) {
-            expire_in = "" + ((JSONObject)JSONValue.parse(result)).get("expires_in");
+        if (((JSONObject)JSONValue.parse((String)result)).get((Object)"expires_in") != null) {
+            expire_in = "" + ((JSONObject)JSONValue.parse((String)result)).get((Object)"expires_in");
         }
         String refresh = "";
-        if (((JSONObject)JSONValue.parse(result)).get("refresh_token") != null) {
-            refresh = (String)((JSONObject)JSONValue.parse(result)).get("refresh_token");
+        if (((JSONObject)JSONValue.parse((String)result)).get((Object)"refresh_token") != null) {
+            refresh = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"refresh_token");
             Common.log("SERVER", 2, "OAuth renew token : Got refresh token.");
             if (refresh_tokens != null) {
                 refresh_tokens.put(refresh_token, refresh);
@@ -4838,8 +4848,8 @@ lbl30:
                 }
                 throw new Exception(result);
             }
-            String access_token = (String)((JSONObject)JSONValue.parse(result)).get("access_token");
-            String expire_in = "" + ((JSONObject)JSONValue.parse(result)).get("expires_in");
+            String access_token = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"access_token");
+            String expire_in = "" + ((JSONObject)JSONValue.parse((String)result)).get((Object)"expires_in");
             p.put("access_token", access_token);
             if (expire_in != null && !expire_in.equals("")) {
                 if (expire_in.endsWith(",")) {
@@ -4968,13 +4978,13 @@ lbl30:
         urlc.setDoOutput(true);
         urlc.setUseCaches(false);
         String result = URLConnection.consumeResponse(urlc.getInputStream());
-        JSONObject obj = (JSONObject)JSONValue.parse(result);
+        JSONObject obj = (JSONObject)JSONValue.parse((String)result);
         Common.log("SERVER", 2, "Google Id token keys: " + obj.keySet());
         Object[] a = obj.entrySet().toArray();
         int i = 0;
         while (i < a.length) {
             String key2 = a[i].toString().split("=")[0];
-            p.put(key2.trim(), ("" + obj.get(key2)).trim());
+            p.put(key2.trim(), ("" + obj.get((Object)key2)).trim());
             ++i;
         }
         return p;
@@ -4989,7 +4999,7 @@ lbl30:
             if (!data.endsWith("}")) {
                 data = String.valueOf(data) + "}";
             }
-            JSONObject obj_a = (JSONObject)JSONValue.parse(data);
+            JSONObject obj_a = (JSONObject)JSONValue.parse((String)data);
             Common.log("SERVER", 2, "Microsoft Id token keys: " + obj_a.keySet());
             Object[] ac = obj_a.entrySet().toArray();
             Properties pa = new Properties();
@@ -4997,11 +5007,11 @@ lbl30:
             while (i < ac.length) {
                 String key = ac[i].toString().split("=")[0];
                 if (key.equals("emails")) {
-                    JSONArray ja = (JSONArray)obj_a.get(key);
+                    JSONArray ja = (JSONArray)obj_a.get((Object)key);
                     String email = (String)ja.get(0);
                     pa.put("email", email);
                 } else {
-                    pa.put(key.trim(), ("" + obj_a.get(key)).trim());
+                    pa.put(key.trim(), ("" + obj_a.get((Object)key)).trim());
                 }
                 ++i;
             }
@@ -5010,7 +5020,7 @@ lbl30:
             }
             HttpsJwks httpsJkws = new HttpsJwks("https://" + tenant_name + ".b2clogin.com/" + tenant_name + ".onmicrosoft.com/" + user_flow_name + "/discovery/v2.0/keys");
             HttpsJwksVerificationKeyResolver httpsJwksKeyResolver = new HttpsJwksVerificationKeyResolver(httpsJkws);
-            JwtConsumer jwtConsumer = new JwtConsumerBuilder().setRequireExpirationTime().setAllowedClockSkewInSeconds(3600).setRequireSubject().setExpectedIssuer(pa.getProperty("iss")).setExpectedAudience(client_id).setVerificationKeyResolver(httpsJwksKeyResolver).build();
+            JwtConsumer jwtConsumer = new JwtConsumerBuilder().setRequireExpirationTime().setAllowedClockSkewInSeconds(3600).setRequireSubject().setExpectedIssuer(pa.getProperty("iss")).setExpectedAudience(new String[]{client_id}).setVerificationKeyResolver((VerificationKeyResolver)httpsJwksKeyResolver).build();
             JwtClaims jwtClaims = jwtConsumer.processToClaims(id_token);
             p.put("info", pa);
         }
@@ -5034,14 +5044,14 @@ lbl30:
         if (code < 200 || code > 299) {
             throw new Exception(result);
         }
-        JSONObject obj = (JSONObject)JSONValue.parse(result);
+        JSONObject obj = (JSONObject)JSONValue.parse((String)result);
         Object[] a = obj.entrySet().toArray();
         Common.log("SERVER", 2, "Microsoft User Info keys: " + obj.keySet());
         Properties p = new Properties();
         int i = 0;
         while (i < a.length) {
             String key = a[i].toString().split("=")[0];
-            p.put(key.trim(), ("" + obj.get(key)).trim());
+            p.put(key.trim(), ("" + obj.get((Object)key)).trim());
             ++i;
         }
         if (access_token.split("\\.").length >= 1) {
@@ -5051,14 +5061,14 @@ lbl30:
             if (!data.endsWith("}")) {
                 data = String.valueOf(data) + "}";
             }
-            JSONObject obj_a = (JSONObject)JSONValue.parse(data);
+            JSONObject obj_a = (JSONObject)JSONValue.parse((String)data);
             Common.log("SERVER", 2, "Microsoft User Info Access token keys: " + obj_a.keySet());
             Object[] ac = obj_a.entrySet().toArray();
             Properties pa = new Properties();
             int i2 = 0;
             while (i2 < ac.length) {
                 String key = ac[i2].toString().split("=")[0];
-                p.put("access_token_" + key.trim(), ("" + obj_a.get(key)).trim());
+                p.put("access_token_" + key.trim(), ("" + obj_a.get((Object)key)).trim());
                 ++i2;
             }
         }
@@ -5072,11 +5082,11 @@ lbl30:
         String clientEmail = "";
         String privateKeyID = "";
         PrivateKey key = null;
-        JSONObject jo = (JSONObject)JSONValue.parse(content);
-        clientId = (String)jo.get("client_id");
-        clientEmail = (String)jo.get("client_email");
-        privateKeyID = (String)jo.get("private_key_id");
-        privateKey = (String)jo.get("private_key");
+        JSONObject jo = (JSONObject)JSONValue.parse((String)content);
+        clientId = (String)jo.get((Object)"client_id");
+        clientEmail = (String)jo.get((Object)"client_email");
+        privateKeyID = (String)jo.get((Object)"private_key_id");
+        privateKey = (String)jo.get((Object)"private_key");
         if (!added_bc) {
             Provider provider = (Provider)BCProxy.instance().loader.loadClass("org.bouncycastle.jce.provider.BouncyCastleProvider").getDeclaredConstructor(new Class[0]).newInstance(new Object[0]);
             Security.addProvider(provider);
@@ -5101,13 +5111,13 @@ lbl30:
         } else {
             claims.setSubject(clientEmail);
         }
-        claims.setClaim("scope", scope);
+        claims.setClaim("scope", (Object)scope);
         claims.setIssuedAtToNow();
         claims.setGeneratedJwtId(64);
         claims.setExpirationTimeMinutesInTheFuture(0.75f);
         JsonWebSignature jws = new JsonWebSignature();
         jws.setPayload(claims.toJson());
-        jws.setKey(key);
+        jws.setKey((Key)key);
         jws.setAlgorithmHeaderValue("RS256");
         jws.setHeader("typ", "JWT");
         jws.setHeader("kid", privateKeyID);
@@ -5122,14 +5132,14 @@ lbl30:
         urlc.setRequestProperty("Accept", "application/json");
         int code = urlc.getResponseCode();
         String result = Common.consumeResponse(urlc.getInputStream());
-        JSONObject jo = (JSONObject)JSONValue.parse(result);
+        JSONObject jo = (JSONObject)JSONValue.parse((String)result);
         Object[] a = jo.entrySet().toArray();
         Common.log("SERVER", 2, "Cognito User Info keys: " + jo.keySet());
         Properties info = new Properties();
         int i = 0;
         while (i < a.length) {
             String key2 = a[i].toString().split("=")[0];
-            info.put(key2.trim(), ("" + jo.get(key2)).trim());
+            info.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
             ++i;
         }
         return info;

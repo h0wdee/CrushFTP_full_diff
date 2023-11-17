@@ -17,6 +17,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
@@ -53,6 +54,8 @@ public class CrushFTPDMZ {
     DMZTunnelServer5 dmzt5 = null;
     static transient Object tunnel_start_lock = new Object();
     String allowed_ips = "";
+    long last_ping = System.currentTimeMillis();
+    long last_send = System.currentTimeMillis();
 
     public CrushFTPDMZ(String[] args) {
         Common.dmz_mode = System.getProperty("crushftp.dmz", "true").equals("true");
@@ -136,7 +139,7 @@ public class CrushFTPDMZ {
                                             continue;
                                         }
                                         if (CrushFTPDMZ.this.allowed_ips.equals("")) {
-                                            CrushFTPDMZ.this.allowed_ips = String.valueOf(incoming_ip.substring(0, incoming_ip.lastIndexOf(".") + 1)) + "*";
+                                            CrushFTPDMZ.this.allowed_ips = incoming_ip;
                                             if (System.getProperty("crushftp.dmz.tunnel", "false").equals("true") && !CrushFTPDMZ.this.allowed_ips.equals("")) {
                                                 CrushFTPDMZ.this.allowed_ips = "127.0.0.1";
                                             }
@@ -315,10 +318,15 @@ public class CrushFTPDMZ {
             }
             while (true) {
                 if (queue.size() > 0) {
+                    this.last_send = System.currentTimeMillis();
                     this.sendCommand((Properties)queue.remove(0));
                     continue;
                 }
                 Thread.sleep(500L);
+                if (System.currentTimeMillis() - this.last_send <= 30000L || System.currentTimeMillis() - this.last_ping <= 30000L || !this.started || this.servers_stopped) continue;
+                if (!ServerStatus.BG("stop_dmz_ports_internal_down")) continue;
+                this.servers_stopped = true;
+                ServerStatus.thisObj.stop_all_servers_including_serverbeat();
             }
         }
         catch (Exception e) {
@@ -573,7 +581,8 @@ public class CrushFTPDMZ {
 
     public void proxyConnection(Socket sock) throws Exception {
         Socket sock2 = null;
-        String host_port = "";
+        String host = "";
+        int port = 0;
         try {
             Common.sockLog(sock, "DMZ external_sock");
             int len = sock.getInputStream().read();
@@ -586,10 +595,11 @@ public class CrushFTPDMZ {
                 }
                 len -= len2;
             }
-            host_port = new String(b, "UTF8");
-            Log.log("DMZ", 0, "CONNECTING:Proxying outgoing connection from internal server (" + sock + ") to:" + host_port);
-            sock2 = new Socket(host_port.split(":")[0], Integer.parseInt(host_port.split(":")[1]));
-            Log.log("DMZ", 0, "SUCCESS:Proxyied outgoing connection from internal server (" + sock + ") to:" + host_port);
+            host = new String(b, "UTF8").split(":")[0];
+            port = Integer.parseInt(new String(b, "UTF8").split(":")[1]);
+            Log.log("DMZ", 0, "CONNECTING:Proxying outgoing connection from internal server (" + sock + ") to:" + host + ":" + port);
+            sock2 = host.indexOf("~") >= 0 ? new Socket(host.split("~")[1], port, InetAddress.getByName(host.split("~")[0]), 0) : new Socket(host, port);
+            Log.log("DMZ", 0, "SUCCESS:Proxyied outgoing connection from internal server (" + sock + ") to:" + host + ":" + port);
             Common.sockLog(sock2, "DMZ external_sock2");
             sock2.setTcpNoDelay(true);
             sock.setSoTimeout(600000);
@@ -598,7 +608,7 @@ public class CrushFTPDMZ {
             Common.streamCopier(sock, sock2, sock2.getInputStream(), sock.getOutputStream(), true, true, true);
         }
         catch (Exception e) {
-            Log.log("DMZ", 0, "Proxy sock error:" + sock + "->" + sock2 + ":" + host_port + ":" + e);
+            Log.log("DMZ", 0, "Proxy sock error:" + sock + "->" + sock2 + ":" + host + ":" + port + ":" + e);
             try {
                 sock.close();
             }
@@ -686,7 +696,7 @@ public class CrushFTPDMZ {
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     public void sendCommand(Properties p) {
-        block15: {
+        block20: {
             try {
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
                 ObjectOutputStream out = new ObjectOutputStream(baos);
@@ -702,51 +712,73 @@ public class CrushFTPDMZ {
                     System.out.println(new Date());
                     e.printStackTrace();
                     System.out.println(new Date());
-                    Log.log("SERVER", 1, "Skipping write on object due to serialization exception.");
+                    Log.log("SERVER", 1, "Skipped write on object due to serialization exception.");
                     Log.log("SERVER", 1, e);
+                    SharedSession.findBadObjects2(p);
                     return;
                 }
                 byte[] b = baos.toByteArray();
                 boolean wrote = false;
+                boolean attempted = false;
                 if (p.getProperty("need_response", "false").equalsIgnoreCase("true")) {
                     p.put("status", "waiting");
                     dmzResponses.put(p.getProperty("id"), p);
                 }
+                Thread.currentThread().setName("DMZSender:queue=" + queue.size() + " type=" + p.getProperty("type") + " original_type=" + p.getProperty("original_type"));
                 int x = this.write_socks.size() - 1;
                 while (x >= 0) {
+                    long start = System.currentTimeMillis();
                     Socket sock = (Socket)this.write_socks.elementAt(x);
-                    sock.setSoTimeout(10000);
+                    sock.setSoTimeout(5000);
                     Properties in_out = (Properties)this.socks_in_out.get(sock);
                     DataInputStream din = (DataInputStream)in_out.get("in");
                     DataOutputStream dout = (DataOutputStream)in_out.get("out");
                     try {
-                        long start = System.currentTimeMillis();
+                        if (p.getProperty("type").equals("PUT:PONG")) {
+                            Log.log("DMZ", 1, "ATTEMPTING WRITE:" + p.getProperty("type") + ":" + p.getProperty("id") + ":" + queue.size());
+                        }
+                        attempted = true;
                         dout.writeInt(b.length);
                         dout.write(b);
                         dout.flush();
-                        int i = din.readInt();
+                        if (p.getProperty("type").equals("PUT:PONG")) {
+                            Log.log("DMZ", 1, "ATTEMPTING CONFIRM :" + p.getProperty("type") + ":" + p.getProperty("id") + ":READING_CONFIRM:" + queue.size());
+                        }
+                        int i = -1;
+                        try {
+                            i = din.readInt();
+                        }
+                        catch (SocketTimeoutException e) {
+                            Log.log("DMZ", 1, "RE-ATTEMPTING CONFIRM :" + p.getProperty("type") + ":" + p.getProperty("id") + ":5_SEC_TIMEOUT_RETRYING:" + queue.size() + ":milliseconds=" + (System.currentTimeMillis() - start));
+                            Common.dumpStack("RE-ATTEMPTING CONFIRM :" + p.getProperty("type") + ":" + p.getProperty("original_type") + ":" + p.getProperty("id") + ":5_SEC_TIMEOUT_RETRYING:" + queue.size() + ":milliseconds=" + (System.currentTimeMillis() - start));
+                            i = din.readInt();
+                        }
                         if (i != b.length) {
                             throw new IOException(String.valueOf(i) + " versus " + b.length + "  " + sock);
                         }
                         wrote = true;
-                        Thread.currentThread().setName("DMZSender:queue=" + queue.size() + " last write len=" + b.length + "(" + p.getProperty("type") + ") milliseconds=" + (System.currentTimeMillis() - start));
+                        if (p.getProperty("type").equals("PUT:PONG")) {
+                            Log.log("DMZ", 1, "ATTEMPTING WRITE :" + p.getProperty("type") + ":" + p.getProperty("id") + ":CONFIRMED:" + queue.size());
+                        }
+                        Thread.currentThread().setName("DMZSender:queue=" + queue.size() + " last write len=" + b.length + "(" + p.getProperty("type") + ":" + p.getProperty("original_type") + ") milliseconds=" + (System.currentTimeMillis() - start));
                     }
                     catch (IOException e) {
+                        Log.log("DMZ", 0, "Removing dead socket:" + sock + ":" + e + ":" + p.getProperty("type") + ":" + p.getProperty("original_type") + ":" + p.getProperty("id") + ":" + (System.currentTimeMillis() - start) + "ms");
                         Common.sockLog(sock, "writing command error:" + e);
                         DMZServerCommon.closeInOutSockRef(this.socks_in_out, sock);
                         this.write_socks.remove(sock);
-                        Log.log("DMZ", 0, "Removed dead socket:" + sock + ":" + e);
+                        Log.log("DMZ", 0, "Removed dead socket:" + sock + ":" + e + ":" + p.getProperty("type") + ":" + p.getProperty("original_type") + ":" + p.getProperty("id") + ":" + (System.currentTimeMillis() - start) + "ms");
                         Log.log("DMZ", 0, e);
                     }
                     --x;
                 }
                 if (wrote) {
                     if (!p.getProperty("type").equals("PUT:LOGGING")) {
-                        Log.log("DMZ", 1, "WROTE:" + p.getProperty("type") + ":" + p.getProperty("id"));
+                        Log.log("DMZ", 1, "WROTE:" + p.getProperty("type") + ":" + p.getProperty("original_type") + ":" + p.getProperty("id"));
                     }
-                    break block15;
+                    break block20;
                 }
-                Log.log("DMZ", 1, "FAILED WRITE:" + p.getProperty("type") + ":" + p.getProperty("id"));
+                Log.log("DMZ", 1, "FAILED WRITE:" + p.getProperty("type") + ":" + p.getProperty("original_type") + ":" + p.getProperty("id") + ":attempted=" + attempted);
                 throw new Exception("Unable to write DMZ message, no server to write to:" + this.write_socks + " servers_stopped_count=" + this.servers_stopped_count + " servers_stopped=" + this.servers_stopped);
             }
             catch (Exception e) {
@@ -820,29 +852,31 @@ public class CrushFTPDMZ {
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     private void processResponse(Properties p) throws Exception {
+        Properties p_f2;
         Cloneable response;
-        if (dmzResponses.containsKey(((Properties)p).getProperty("id", ""))) {
-            response = (Properties)dmzResponses.remove(((Properties)p).getProperty("id"));
+        if (dmzResponses.containsKey(p.getProperty("id", ""))) {
+            response = (Properties)dmzResponses.remove(p.getProperty("id"));
             if (response == null) {
                 return;
             }
-            Log.log("DMZ", 0, "READ:RECEIVED_RESPONSE:" + ((Properties)response).getProperty("type") + ":" + ((Properties)p).getProperty("id"));
-            ((Properties)response).putAll((Map<?, ?>)((Object)p));
-            if (((Properties)p).containsKey("data")) {
-                ((Properties)response).putAll((Map<?, ?>)((Properties)((Properties)p).get("data")));
+            Log.log("DMZ", 0, "READ:RECEIVED_RESPONSE:" + ((Properties)response).getProperty("type") + ":" + p.getProperty("id"));
+            ((Properties)response).putAll((Map<?, ?>)p);
+            if (p.containsKey("data")) {
+                ((Properties)response).putAll((Map<?, ?>)((Properties)p.get("data")));
             }
             p = response;
-            ((Properties)p).put("status", "done");
+            p.put("status", "done");
         }
-        Log.log("DMZ", 1, "READ:" + ((Properties)p).getProperty("type") + ":" + ((Properties)p).getProperty("id"));
-        if (((Properties)p).getProperty("type").equalsIgnoreCase("PUT:SERVER_SETTINGS")) {
+        Log.log("DMZ", 1, "READ:" + p.getProperty("type") + ":" + p.getProperty("id"));
+        p.put("original_type", p.getProperty("type"));
+        if (p.getProperty("type").equalsIgnoreCase("PUT:SERVER_SETTINGS")) {
             response = queue;
             synchronized (response) {
                 if (!this.started) {
                     this.starting = true;
                     System.out.println(new Date() + "|DMZ Starting...");
                     try {
-                        Properties server_settings2 = (Properties)((Properties)p).get("data");
+                        Properties server_settings2 = (Properties)p.get("data");
                         new ServerStatus(true, server_settings2);
                         System.out.println(new Date() + "|DMZ Started");
                     }
@@ -853,59 +887,85 @@ public class CrushFTPDMZ {
                     }
                     this.started = true;
                 } else {
-                    crushftp.handlers.Common.updateObjectLog((Properties)((Properties)p).get("data"), ServerStatus.server_settings, null);
+                    crushftp.handlers.Common.updateObjectLog((Properties)p.get("data"), ServerStatus.server_settings, null);
                     System.out.println(new Date() + "|DMZ Re-started");
                     CrushFTPDMZ.reset_data_sockets();
                 }
             }
-            ((Properties)p).put("data", new Properties());
-            ((Properties)p).put("type", "PUT:DMZ_STARTED");
+            p.put("data", new Properties());
+            p.put("type", "PUT:DMZ_STARTED");
             queue.addElement(p);
-        } else if (((Properties)p).getProperty("type").equalsIgnoreCase("PUT:SYSTEM.PROPERTIES")) {
-            Properties system_prop = (Properties)((Properties)p).get("data");
+        } else if (p.getProperty("type").equalsIgnoreCase("PUT:SYSTEM.PROPERTIES")) {
+            Properties system_prop = (Properties)p.get("data");
             Log.log("DMZ", 1, "READ:" + system_prop);
             Common.System2.put(system_prop.getProperty("key"), system_prop.get("val"));
-        } else if (((Properties)p).getProperty("type").equalsIgnoreCase("GET:SERVER_SETTINGS")) {
-            ((Properties)p).put("data", ServerStatus.server_settings);
-            ((Properties)p).put("type", "RESPONSE");
+        } else if (p.getProperty("type").equalsIgnoreCase("PUT:RELOAD_SSL")) {
+            new FileOutputStream(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "reload_ssl")).close();
+        } else if (p.getProperty("type").equalsIgnoreCase("GET:SERVER_SETTINGS")) {
+            p.put("data", ServerStatus.server_settings);
+            p.put("type", "RESPONSE");
             queue.addElement(p);
-        } else if (((Properties)p).getProperty("type").equalsIgnoreCase("GET:SERVER_INFO")) {
-            Properties request = (Properties)((Properties)p).get("data");
+        } else if (p.getProperty("type").equalsIgnoreCase("GET:SERVER_INFO")) {
+            Properties request = (Properties)p.get("data");
             Properties si = new Properties();
             if (this.started) {
                 si = (Properties)ServerStatus.thisObj.server_info.clone();
             }
             si.remove("plugins");
+            si.remove("html5_transfers");
             if (request != null && (request.getProperty("key", "").equals("server_info") || request.getProperty("command", "").equals("getStatHistory"))) {
                 si.remove("user_list");
                 si.remove("recent_user_list");
-            } else if (si.get("user_list") != null) {
-                Vector user_list = (Vector)((Vector)si.get("user_list")).clone();
-                si.put("user_list", user_list);
-                int x = 0;
-                while (x < user_list.size()) {
-                    Properties user_info = (Properties)((Properties)user_list.elementAt(x)).clone();
-                    user_list.setElementAt(user_info, x);
-                    user_info.remove("session");
-                    ++x;
+            } else {
+                Properties user_info;
+                int x;
+                if (si.get("user_list") != null) {
+                    Vector user_list = (Vector)((Vector)si.get("user_list")).clone();
+                    si.put("user_list", user_list);
+                    x = 0;
+                    while (x < user_list.size()) {
+                        user_info = (Properties)((Properties)user_list.elementAt(x)).clone();
+                        user_list.setElementAt(user_info, x);
+                        user_info.remove("session");
+                        ++x;
+                    }
+                }
+                if (si.get("recent_user_list") != null) {
+                    Vector recent_user_list = (Vector)((Vector)si.get("recent_user_list")).clone();
+                    si.put("recent_user_list", recent_user_list);
+                    x = 0;
+                    while (x < recent_user_list.size()) {
+                        user_info = (Properties)((Properties)recent_user_list.elementAt(x)).clone();
+                        recent_user_list.setElementAt(user_info, x);
+                        user_info.remove("session");
+                        ++x;
+                    }
                 }
             }
-            ((Properties)p).put("data", si);
-            ((Properties)p).put("type", "RESPONSE");
+            p.put("data", si);
+            p.put("type", "RESPONSE");
             queue.addElement(p);
-        } else if (((Properties)p).getProperty("type").equalsIgnoreCase("RUN:INSTANCE_ACTION")) {
-            ((Properties)p).put("data", AdminControls.runInstanceAction((Properties)((Properties)p).get("data"), ((Properties)p).getProperty("site"), "127.0.0.1"));
-            ((Properties)p).put("type", "RESPONSE");
-            queue.addElement(p);
-        } else if (((Properties)p).getProperty("type").equalsIgnoreCase("RUN:JOB")) {
-            Log.log("SERVER", 0, "READ:" + ((Properties)p).getProperty("type") + ":" + ((Properties)p).getProperty("id"));
-            Cloneable p_f2 = p;
-            final Properties info = (Properties)((Properties)p).remove("data");
-            Worker.startWorker(new Runnable((Properties)p_f2){
-                private final /* synthetic */ Properties val$p_f2;
-                {
-                    this.val$p_f2 = properties2;
+        } else if (p.getProperty("type").equalsIgnoreCase("RUN:INSTANCE_ACTION")) {
+            p_f2 = p;
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    try {
+                        p_f2.put("data", AdminControls.runInstanceAction((Properties)p_f2.get("data"), p_f2.getProperty("site"), "127.0.0.1"));
+                        p_f2.put("type", "RESPONSE");
+                        queue.addElement(p_f2);
+                    }
+                    catch (Exception e) {
+                        Log.log("DMZ", 0, e);
+                    }
                 }
+            });
+        } else if (p.getProperty("type").equalsIgnoreCase("RUN:JOB")) {
+            Log.log("SERVER", 0, "READ:" + p.getProperty("type") + ":" + p.getProperty("id"));
+            p_f2 = p;
+            final Properties info = (Properties)p.remove("data");
+            Worker.startWorker(new Runnable(){
 
                 @Override
                 public void run() {
@@ -913,9 +973,9 @@ public class CrushFTPDMZ {
                     Properties event = (Properties)info.remove("data");
                     event.put("event_plugin_list", "CrushTask (User Defined)");
                     event.put("name", event.getProperty("scheduleName"));
-                    Log.log("SERVER", 0, "READ:" + this.val$p_f2.getProperty("type") + ":" + this.val$p_f2.getProperty("id") + ":" + event.getProperty("name"));
+                    Log.log("SERVER", 0, "READ:" + p_f2.getProperty("type") + ":" + p_f2.getProperty("id") + ":" + event.getProperty("name"));
                     Properties info2 = ServerStatus.thisObj.events6.doEventPlugin(null, event, null, items);
-                    this.val$p_f2.put("data", info2);
+                    p_f2.put("data", info2);
                     byte[] b = null;
                     try {
                         RandomAccessFile raf = new RandomAccessFile(new File_S(info2.getProperty("log_file")), "r");
@@ -927,18 +987,19 @@ public class CrushFTPDMZ {
                         Log.log("DMZ", 0, e);
                         b = new byte[]{};
                     }
-                    this.val$p_f2.put("log", new String(b));
-                    this.val$p_f2.put("type", "RESPONSE");
-                    queue.addElement(this.val$p_f2);
-                    Log.log("SERVER", 0, "READ:" + this.val$p_f2.getProperty("type") + ":" + this.val$p_f2.getProperty("id") + ":" + event.getProperty("name") + ":complete");
+                    p_f2.put("log", new String(b));
+                    p_f2.put("type", "RESPONSE");
+                    queue.addElement(p_f2);
+                    Log.log("SERVER", 0, "READ:" + p_f2.getProperty("type") + ":" + p_f2.getProperty("id") + ":" + event.getProperty("name") + ":complete");
                 }
             });
-        } else if (((Properties)p).getProperty("type").equalsIgnoreCase("PUT:PING")) {
-            Properties pong = (Properties)((Properties)p).remove("data");
+        } else if (p.getProperty("type").equalsIgnoreCase("PUT:PING")) {
+            Properties pong = (Properties)p.remove("data");
             pong.put("time2", String.valueOf(System.currentTimeMillis()));
-            ((Properties)p).put("data", pong);
-            ((Properties)p).put("type", "PUT:PONG");
+            p.put("data", pong);
+            p.put("type", "PUT:PONG");
             queue.insertElementAt(p, 0);
+            this.last_ping = System.currentTimeMillis();
         }
     }
 }

@@ -1,33 +1,5 @@
 /*
  * Decompiled with CFR 0.152.
- * 
- * Could not load the following classes:
- *  com.maverick.events.Event
- *  com.maverick.events.EventListener
- *  com.maverick.events.J2SSHEventCodes
- *  com.maverick.sftp.SftpFile
- *  com.maverick.sftp.SftpFileAttributes
- *  com.maverick.sftp.SftpStatusException
- *  com.maverick.ssh.HostKeyVerification
- *  com.maverick.ssh.LicenseManager
- *  com.maverick.ssh.PasswordAuthentication
- *  com.maverick.ssh.PublicKeyAuthentication
- *  com.maverick.ssh.SecurityLevel
- *  com.maverick.ssh.SshAuthentication
- *  com.maverick.ssh.SshClient
- *  com.maverick.ssh.SshConnector
- *  com.maverick.ssh.SshException
- *  com.maverick.ssh.SshTransport
- *  com.maverick.ssh.components.SshKeyPair
- *  com.maverick.ssh.components.jce.JCEProvider
- *  com.maverick.ssh.components.jce.JCEProvider$BC_FLAVOR
- *  com.maverick.ssh2.Ssh2Client
- *  com.maverick.ssh2.Ssh2Context
- *  com.maverick.util.UnsignedInteger64
- *  com.sshtools.net.SocketWrapper
- *  com.sshtools.publickey.SshPrivateKeyFile
- *  com.sshtools.publickey.SshPrivateKeyFileFactory
- *  com.sshtools.sftp.SftpClient
  */
 package com.crushftp.client;
 
@@ -43,16 +15,12 @@ import com.maverick.events.J2SSHEventCodes;
 import com.maverick.sftp.SftpFile;
 import com.maverick.sftp.SftpFileAttributes;
 import com.maverick.sftp.SftpStatusException;
-import com.maverick.ssh.HostKeyVerification;
 import com.maverick.ssh.LicenseManager;
 import com.maverick.ssh.PasswordAuthentication;
 import com.maverick.ssh.PublicKeyAuthentication;
 import com.maverick.ssh.SecurityLevel;
-import com.maverick.ssh.SshAuthentication;
-import com.maverick.ssh.SshClient;
 import com.maverick.ssh.SshConnector;
 import com.maverick.ssh.SshException;
-import com.maverick.ssh.SshTransport;
 import com.maverick.ssh.components.SshKeyPair;
 import com.maverick.ssh.components.jce.JCEProvider;
 import com.maverick.ssh2.Ssh2Client;
@@ -97,7 +65,7 @@ extends GenericClient {
     static Properties created_clients;
 
     static {
-        LicenseManager.addLicense((String)"----BEGIN 3SP LICENSE----\r\nProduct : Maverick Legacy Client\r\nLicensee: Ben Spink\r\nComments: Standard Support\r\nType    : Standard Support (Runtime License)\r\nCreated : 23-Jul-2023\r\n\r\n378720803B9DC65BA600F3CF9CCEF4C80FCAB0ADF46C8024\r\n0557D5369C1819468AFFBF224CC9FAFEAC09AE47E4069341\r\n4E4C3BB0E787F87F849493402C5FB1544ABB21CB5E5A4AC8\r\n65B21E01BAEF67EAA71C03B9CE3E82632E8DB164407F1D5E\r\n481E68EE4444A90F5B17DE69FCA8D3B500EC24133F1C494B\r\n07DB2F3A7E6BA6168C07A649BCF42A8AEBB3CB014488CAB8\r\n----END 3SP LICENSE----\r\n");
+        LicenseManager.addLicense("----BEGIN 3SP LICENSE----\r\nProduct : Maverick Legacy Client\r\nLicensee: Ben Spink\r\nComments: Standard Support\r\nType    : Standard Support (Runtime License)\r\nCreated : 23-Jul-2023\r\n\r\n378720803B9DC65BA600F3CF9CCEF4C80FCAB0ADF46C8024\r\n0557D5369C1819468AFFBF224CC9FAFEAC09AE47E4069341\r\n4E4C3BB0E787F87F849493402C5FB1544ABB21CB5E5A4AC8\r\n65B21E01BAEF67EAA71C03B9CE3E82632E8DB164407F1D5E\r\n481E68EE4444A90F5B17DE69FCA8D3B500EC24133F1C494B\r\n07DB2F3A7E6BA6168C07A649BCF42A8AEBB3CB014488CAB8\r\n----END 3SP LICENSE----\r\n");
         ssh_bug_lock = new Object();
         added_bc = false;
         created_clients = new Properties();
@@ -123,7 +91,7 @@ extends GenericClient {
                         Security.addProvider(provider);
                         Common.added_bc = true;
                     }
-                    JCEProvider.enableBouncyCastle((boolean)System.getProperty("crushftp.ssh_bouncycastle", "true").equals("true"), (JCEProvider.BC_FLAVOR)JCEProvider.BC_FLAVOR.BC, (Provider)provider);
+                    JCEProvider.enableBouncyCastle(System.getProperty("crushftp.ssh_bouncycastle", "true").equals("true"), JCEProvider.BC_FLAVOR.BC, provider);
                 }
                 catch (Exception e) {
                     e.printStackTrace();
@@ -162,7 +130,7 @@ extends GenericClient {
         if (clientid != null) {
             this.config.put("clientid", clientid);
         }
-        SshConnector.addEventListener((String)this.uniqueId, (EventListener)new SftpLogger());
+        SshConnector.addEventListener(this.uniqueId, new SftpLogger());
         this.reconnect();
         return "";
     }
@@ -183,7 +151,7 @@ extends GenericClient {
             SshConnector con = null;
             Object object = ssh_bug_lock;
             synchronized (object) {
-                con = SshConnector.createInstance((SecurityLevel)SecurityLevel.WEAK, (boolean)false);
+                con = SshConnector.createInstance(SecurityLevel.WEAK, false);
                 con.setSoftwareVersionComments(String.valueOf(System.getProperty("appname", "CrushFTP")) + "_java");
                 this.ssh2Context = (Ssh2Context)con.getContext(2);
                 if (System.getProperty("crushftp.fips140_sftp_client", "false").equals("true")) {
@@ -194,7 +162,7 @@ extends GenericClient {
                 this.ssh2Context.enableCompression();
             }
             SFTPHostKeyVerifier sftphv = new SFTPHostKeyVerifier(this.config.getProperty("knownHostFile"), this.config.getProperty("verifyHost", "false").equalsIgnoreCase("true"), this.config.getProperty("addNewHost", "false").equalsIgnoreCase("true"));
-            this.ssh2Context.setHostKeyVerification((HostKeyVerification)sftphv);
+            this.ssh2Context.setHostKeyVerification(sftphv);
             this.ssh2Context.setPreferredPublicKey("ssh-dss");
             this.ssh2Context.setCipherPreferredPositionCS("aes128-ctr", 0);
             this.ssh2Context.setCipherPreferredPositionSC("aes128-ctr", 0);
@@ -322,7 +290,7 @@ extends GenericClient {
                 this.ssh2Context.setIdleConnectionTimeoutSeconds(Integer.parseInt(this.config.getProperty("timeout", "0")) / 1000);
                 this.ssh_socket.setSoTimeout(Integer.parseInt(this.config.getProperty("timeout", "0")));
             }
-            this.session = (Ssh2Client)con.connect((SshTransport)new SocketWrapper(this.ssh_socket), this.config.getProperty("username"));
+            this.session = (Ssh2Client)con.connect(new SocketWrapper(this.ssh_socket), this.config.getProperty("username"));
             if (!this.config.getProperty("ssh_private_key", this.config.getProperty("privateKeyFilePath", "")).equals("") && !this.config.getProperty("ssh_private_key", this.config.getProperty("privateKeyFilePath", "")).equalsIgnoreCase("NONE")) {
                 String private_key_path = Common.replace_str(this.config.getProperty("ssh_private_key", this.config.getProperty("privateKeyFilePath", "")), "{username}", this.config.getProperty("username"));
                 private_key_path = Common.replace_str(private_key_path, "{user_name}", this.config.getProperty("username"));
@@ -331,7 +299,7 @@ extends GenericClient {
                 SshPrivateKeyFile pkfile = null;
                 if (System.getProperty("crushftp.v10_beta", "false").equals("true") && Common.System2.containsKey("crushftp.keystores." + private_key_path.toString().toUpperCase().replace('\\', '/'))) {
                     Properties p = (Properties)Common.System2.get("crushftp.keystores." + private_key_path.toString().toUpperCase().replace('\\', '/'));
-                    pkfile = SshPrivateKeyFileFactory.parse((InputStream)new ByteArrayInputStream((byte[])p.get("bytes")));
+                    pkfile = SshPrivateKeyFileFactory.parse(new ByteArrayInputStream((byte[])p.get("bytes")));
                 } else if (System.getProperty("crushftp.v10_beta", "false").equals("true") && !private_key_path.toString().equals("") && (private_key_path.toUpperCase().startsWith("FILE://") || !new VRL(private_key_path).getProtocol().equalsIgnoreCase("FILE"))) {
                     VRL vrl = new VRL(private_key_path);
                     GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SFTPClient", new Vector());
@@ -341,7 +309,7 @@ extends GenericClient {
                     c.login(vrl.getUsername(), vrl.getPassword(), null);
                     ByteArrayOutputStream baos = new ByteArrayOutputStream();
                     Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true), baos, false, true, true);
-                    pkfile = SshPrivateKeyFileFactory.parse((InputStream)new ByteArrayInputStream(baos.toByteArray()));
+                    pkfile = SshPrivateKeyFileFactory.parse(new ByteArrayInputStream(baos.toByteArray()));
                     Properties p2 = new Properties();
                     p2.put("bytes", baos.toByteArray());
                     if (System.getProperty("crushftp.v10_beta", "false").equals("true")) {
@@ -350,7 +318,7 @@ extends GenericClient {
                     }
                     Common.System2.put("crushftp.keystores." + private_key_path.toUpperCase().replace('\\', '/'), p2);
                 } else {
-                    pkfile = SshPrivateKeyFileFactory.parse((InputStream)new FileInputStream(new VRL(private_key_path).getPath()));
+                    pkfile = SshPrivateKeyFileFactory.parse(new FileInputStream(new VRL(private_key_path).getPath()));
                 }
                 SshKeyPair pair = null;
                 if (pkfile.isPassphraseProtected() || !this.config.getProperty("ssh_private_key_pass", "").equals("")) {
@@ -388,14 +356,14 @@ extends GenericClient {
                 auth.setPrivateKey(pair.getPrivateKey());
                 auth.setPublicKey(pair.getPublicKey());
                 auth.setUsername(this.config.getProperty("username"));
-                this.session.authenticate((SshAuthentication)auth);
+                this.session.authenticate(auth);
             }
             if (this.config.getProperty("ssh_private_key", this.config.getProperty("privateKeyFilePath", "")).equals("") || this.config.getProperty("ssh_private_key", this.config.getProperty("privateKeyFilePath", "")).equalsIgnoreCase("NONE") || this.config.getProperty("ssh_two_factor", this.config.getProperty("twoFactorAuthentication", "")).equals("true")) {
                 PasswordAuthentication auth = new PasswordAuthentication();
                 auth.setPassword(this.config.getProperty("password"));
                 auth.setUsername(this.config.getProperty("username"));
                 if (!this.session.isAuthenticated()) {
-                    this.session.authenticate((SshAuthentication)auth);
+                    this.session.authenticate(auth);
                 }
             }
             if (!this.session.isAuthenticated()) {
@@ -404,7 +372,7 @@ extends GenericClient {
             if (this.config.getProperty("custom_dot_default_dir", "false").equals("true") || this.config.getProperty("dot_default_dir", "false").equals("true")) {
                 System.getProperties().put("maverick.globalscapeDefaultDirWorkaround", "true");
             }
-            this.sftp = new SftpClient((SshClient)this.session);
+            this.sftp = new SftpClient(this.session);
             try {
                 Method setDirectoryAttributeCheck = this.sftp.getClass().getDeclaredMethod("setDirectoryAttributeCheck", Boolean.TYPE);
                 setDirectoryAttributeCheck.invoke(this.sftp, this.config.getProperty("custom_checkDirectoryAttributeBeforeList", "false").equals("true"));
@@ -448,7 +416,7 @@ extends GenericClient {
             }
         }
         catch (SshException e) {
-            this.log("SSH_CLIENT", 2, this.log((Exception)((Object)e)));
+            this.log("SSH_CLIENT", 2, this.log(e));
             if (e.getCause() != null) {
                 this.log("SSH_CLIENT", 2, this.log(e.getCause()));
             }
@@ -580,15 +548,15 @@ extends GenericClient {
             }
             catch (SftpStatusException ee) {
                 try {
-                    if (("" + (Object)((Object)ee)).indexOf("No such file") >= 0) {
-                        this.log("SSH_CLIENT", 2, this.log("" + (Object)((Object)ee)));
+                    if (("" + ee).indexOf("No such file") >= 0) {
+                        this.log("SSH_CLIENT", 2, this.log("" + ee));
                         this.log("SSH_CLIENT", 2, "Trying blank ls param...");
                         v = this.sftp.ls();
                     }
                 }
                 catch (SftpStatusException e) {
-                    if (("" + (Object)((Object)e)).indexOf("Failed to open") >= 0) {
-                        this.log("SSH_CLIENT", 2, this.log("" + (Object)((Object)e)));
+                    if (("" + e).indexOf("Failed to open") >= 0) {
+                        this.log("SSH_CLIENT", 2, this.log("" + e));
                         break block66;
                     }
                     throw e;
@@ -611,7 +579,7 @@ extends GenericClient {
                     }
                     if (data == null || data.startsWith("/") || this.config.getProperty("sftp_11_token", "false").equals("true")) {
                         Date d = v[x].getAttributes().getModifiedDateTime();
-                        data = SftpClient.formatLongname((SftpFile)v[x]);
+                        data = SftpClient.formatLongname(v[x]);
                         this.log("SSH_CLIENT", 2, "RAW long name (" + v[x].isDirectory() + "):" + data);
                         if (data.indexOf("                        ") >= 0 || data.trim().startsWith("-") && v[x].isDirectory() || this.config.getProperty("sftp_11_token", "false").equals("true")) {
                             String uid;
@@ -980,10 +948,10 @@ extends GenericClient {
             this.sftp.rm(this.convertPath(path));
         }
         catch (SftpStatusException e) {
-            if (("" + (Object)((Object)e)).toUpperCase().indexOf("NO SUCH FILE") >= 0 || ("" + (Object)((Object)e)).toUpperCase().indexOf("NOT A VALID FILE PATH") >= 0) {
+            if (("" + e).toUpperCase().indexOf("NO SUCH FILE") >= 0 || ("" + e).toUpperCase().indexOf("NOT A VALID FILE PATH") >= 0) {
                 return true;
             }
-            this.log("SSH_CLIENT", 1, (Exception)((Object)e));
+            this.log("SSH_CLIENT", 1, e);
             return false;
         }
         return true;
@@ -1061,7 +1029,7 @@ extends GenericClient {
             }
             catch (Exception exception) {}
             this.ssh_socket = null;
-            SshConnector.removeEventListener((String)this.uniqueId);
+            SshConnector.removeEventListener(this.uniqueId);
             created_clients.remove(this.uniqueId);
         }
     }
@@ -1234,6 +1202,7 @@ lbl-1000:
             this.ignoreLogEvents = ignore;
         }
 
+        @Override
         public void processEvent(Event evt) {
             if (!(evt.getId() != 110 && evt.getId() != 111 && evt.getId() != 112 || this.ignoreLogEvents)) {
                 SFTPClient.this.log("SSH_CLIENT", 0, String.valueOf(evt.getAllAttributes()));
@@ -1246,7 +1215,7 @@ lbl-1000:
                     SFTPClient.this.log("SSH_CLIENT", 1, SFTPClient.this.log((Throwable)evt.getAttribute("THROWABLE")));
                 }
             } else {
-                SFTPClient.this.log("SSH_CLIENT", 0, String.valueOf((String)J2SSHEventCodes.messageCodes.get(new Integer(evt.getId()))) + evt.getAllAttributes());
+                SFTPClient.this.log("SSH_CLIENT", 0, String.valueOf(J2SSHEventCodes.messageCodes.get(new Integer(evt.getId()))) + evt.getAllAttributes());
             }
         }
     }

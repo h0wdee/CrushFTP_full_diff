@@ -27,7 +27,7 @@ public class FailedLogins {
             Common.setupReportDates(params, params.getProperty("show", ""), params.getProperty("startDate"), params.getProperty("endDate"));
             SimpleDateFormat mmddyyyy = new SimpleDateFormat("MM/dd/yyyy HH:mm:ss", Locale.US);
             Vector usernames = (Vector)params.get("usernames");
-            String sql = "SELECT USER_NAME as \"username\", START_TIME as \"start_time\", IP as \"ip\"\r FROM SESSIONS\r where SUCCESS_LOGIN = 'false' and START_TIME >= ? and END_TIME <= ?\r /*START_USERNAMES*/and USER_NAME in (%usernames%)/*END_USERNAMES*/\rgroup by USER_NAME, START_TIME, IP\r order by USER_NAME\r";
+            String sql = "SELECT USER_NAME as \"username\", START_TIME as \"start_time\", IP as \"ip\", SESSION as \"protocol\", SERVER_GROUP as \"server_port\"\r FROM SESSIONS\r where SUCCESS_LOGIN = 'false' and START_TIME >= ? and END_TIME <= ?\r /*START_USERNAMES*/and USER_NAME in (%usernames%)/*END_USERNAMES*/\rgroup by USER_NAME, START_TIME, IP, SESSION, SERVER_GROUP\r order by USER_NAME\r";
             String tmp = Common.getFileText(String.valueOf(System.getProperty("crushftp.web")) + "WebInterface/Reports/FailedLogins.sql");
             if (tmp != null) {
                 sql = tmp;
@@ -36,6 +36,8 @@ public class FailedLogins {
             }
             sql = ReportTools.fixSqlUsernames(sql, usernames);
             Vector ips = ServerStatus.thisObj.statTools.executeSqlQuery_mem(sql, new Object[]{mmddyyyy.parse(params.getProperty("startDate", "1/1/2000 00:00:00")), mmddyyyy.parse(params.getProperty("endDate", "1/1/2100 00:00:00"))}, false, params);
+            int size = ips.size();
+            Properties results = new Properties();
             if (params.getProperty("excludeAnonymous", "false").equals("true")) {
                 Vector temp = new Vector();
                 temp.addAll(ips);
@@ -54,7 +56,6 @@ public class FailedLogins {
                 }
                 ips = temp;
             }
-            Properties results = new Properties();
             results.put("ips", ips);
             Common common_code = new Common();
             results.put("export", params.getProperty("export", ""));

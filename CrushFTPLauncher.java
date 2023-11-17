@@ -28,12 +28,12 @@ public class CrushFTPLauncher {
     }
 
     public CrushFTPLauncher(Object o) {
-        block81: {
+        block96: {
             String defaultUserFolder;
             String[] args;
-            block83: {
-                block82: {
-                    block80: {
+            block98: {
+                block97: {
+                    block95: {
                         Common.log = new Vector();
                         if (System.getProperties().containsKey("crushftp.log.append")) {
                             Common.log = (Vector)System.getProperties().remove("crushftp.log.append");
@@ -48,29 +48,29 @@ public class CrushFTPLauncher {
                         if (args == null || args.length == 0) {
                             args = new String[]{"-g"};
                         }
-                        if (!args[0].toUpperCase().startsWith("-DMZI")) break block80;
+                        if (!args[0].toUpperCase().startsWith("-DMZI")) break block95;
                         crushftp.handlers.Common common_code = new crushftp.handlers.Common();
                         if (crushftp.handlers.Common.machine_is_x()) {
                             common_code.install_osx_service();
                         } else if (crushftp.handlers.Common.machine_is_windows()) {
-                            Common.install_windows_service(512, "CrushFTP", "plugins/lib/CrushFTPJarProxy.jar");
+                            Common.install_windows_service(512, "CrushFTP", "plugins/lib/" + System.getProperty("appname", "CrushFTP") + "JarProxy.jar");
                             ByteArrayOutputStream baos = new ByteArrayOutputStream();
                             try {
-                                Common.copyStreams(new FileInputStream(new File_S("service/CrushFTPService.ini")), baos, true, true);
+                                Common.copyStreams(new FileInputStream(new File_S("service/" + System.getProperty("appname", "CrushFTP") + "Service.ini")), baos, true, true);
                                 String s = new String(baos.toByteArray(), "UTF8");
                                 s = crushftp.handlers.Common.replace_str(s, "arg.1=-d", "arg.1=-dmz\r\narg.2=" + args[1]);
-                                RandomAccessFile raf = new RandomAccessFile(new File_S("service/CrushFTPService.ini"), "rw");
+                                RandomAccessFile raf = new RandomAccessFile(new File_S("service/" + System.getProperty("appname", "CrushFTP") + "Service.ini"), "rw");
                                 raf.setLength(0L);
                                 raf.write(s.getBytes("UTF8"));
                                 raf.close();
-                                Process proc = Runtime.getRuntime().exec("net stop \"CrushFTP Server\"");
+                                Process proc = Runtime.getRuntime().exec("net stop \"" + System.getProperty("appname", "CrushFTP") + " Server\"");
                                 BufferedReader proc_in = new BufferedReader(new InputStreamReader(proc.getInputStream()));
                                 String data = "";
                                 while ((data = proc_in.readLine()) != null) {
                                     Log.log("SERVER", 0, data);
                                 }
                                 proc_in.close();
-                                proc = Runtime.getRuntime().exec("net start \"CrushFTP Server\"");
+                                proc = Runtime.getRuntime().exec("net start \"" + System.getProperty("appname", "CrushFTP") + " Server\"");
                                 proc_in = new BufferedReader(new InputStreamReader(proc.getInputStream()));
                                 data = "";
                                 while ((data = proc_in.readLine()) != null) {
@@ -82,9 +82,9 @@ public class CrushFTPLauncher {
                                 e.printStackTrace();
                             }
                         }
-                        break block81;
+                        break block96;
                     }
-                    if (!args[0].toUpperCase().startsWith("-TEST_THREADS")) break block82;
+                    if (!args[0].toUpperCase().startsWith("-TEST_THREADS")) break block97;
                     int count1 = 0;
                     int count2 = 0;
                     try {
@@ -115,9 +115,9 @@ public class CrushFTPLauncher {
                     }
                     System.out.println(String.valueOf(count1) + " threads successful");
                     System.exit(0);
-                    break block81;
+                    break block96;
                 }
-                if (!args[0].toUpperCase().startsWith("-TEST_OPENFILES")) break block83;
+                if (!args[0].toUpperCase().startsWith("-TEST_OPENFILES")) break block98;
                 int count1 = 0;
                 int count2 = 0;
                 Vector<FileInputStream> file_list = new Vector<FileInputStream>();
@@ -129,7 +129,7 @@ public class CrushFTPLauncher {
                             System.out.println(String.valueOf(count1) + " files successful");
                             count2 = 0;
                         }
-                        file_list.addElement(new FileInputStream(new File("./CrushFTP.jar")));
+                        file_list.addElement(new FileInputStream(new File("./" + System.getProperty("appname", "CrushFTP") + ".jar")));
                         ++x;
                     }
                 }
@@ -146,7 +146,7 @@ public class CrushFTPLauncher {
                 }
                 System.out.println(String.valueOf(count1) + " files successful");
                 System.exit(0);
-                break block81;
+                break block96;
             }
             if (args[0].toUpperCase().startsWith("-VERIFYUSERSVFS")) {
                 File[] users = new File("./users/" + args[1] + "/").listFiles();
@@ -201,11 +201,78 @@ public class CrushFTPLauncher {
                     ++x;
                 }
                 System.exit(0);
+            } else if (args[0].toUpperCase().startsWith("-TOGGLEVFSENCRYPTION")) {
+                File[] users = new File("./users/" + args[1] + "/").listFiles();
+                boolean encrypt = false;
+                boolean decrypt = false;
+                if (args.length > 2) {
+                    encrypt = args[2].equalsIgnoreCase("encrypt");
+                }
+                if (args.length > 2) {
+                    decrypt = args[2].equalsIgnoreCase("decrypt");
+                }
+                int encrypted = 0;
+                String encrypted_users = "";
+                int decrypted = 0;
+                String decrypted_users = "";
+                int x = 0;
+                while (x < users.length) {
+                    try {
+                        Vector v = new Vector();
+                        crushftp.handlers.Common.appendListing(String.valueOf(users[x].getPath()) + "/VFS/", v, "", 9, false);
+                        boolean found_encrypted = false;
+                        boolean found_decrypted = false;
+                        int xx = 0;
+                        while (xx < v.size()) {
+                            Vector vfs_items;
+                            File_S f = (File_S)v.elementAt(xx);
+                            if (!f.isDirectory() && (vfs_items = (Vector)crushftp.handlers.Common.readXMLObject(f.getPath())) != null) {
+                                Properties vfs_item = (Properties)vfs_items.elementAt(0);
+                                if (vfs_item.getProperty("encrypted", "false").equals("false")) {
+                                    ++decrypted;
+                                    found_decrypted = true;
+                                }
+                                if (vfs_item.getProperty("encrypted", "false").equals("true")) {
+                                    ++encrypted;
+                                    found_encrypted = true;
+                                }
+                                if (encrypt && vfs_item.getProperty("encrypted", "false").equals("false")) {
+                                    System.out.println(String.valueOf(f.getPath()) + ":Encrypting item.");
+                                    vfs_item.put("encrypted", "true");
+                                    vfs_item.put("url", Common.encryptDecrypt(vfs_item.getProperty("url"), true));
+                                    crushftp.handlers.Common.writeXMLObject(f.getPath(), (Object)vfs_items, "VFS");
+                                }
+                                if (decrypt && vfs_item.getProperty("encrypted", "false").equals("true")) {
+                                    System.out.println(String.valueOf(f.getPath()) + ":Decrypting item.");
+                                    vfs_item.put("encrypted", "false");
+                                    vfs_item.put("url", Common.encryptDecrypt(vfs_item.getProperty("url"), false));
+                                    crushftp.handlers.Common.writeXMLObject(f.getPath(), (Object)vfs_items, "VFS");
+                                }
+                            }
+                            ++xx;
+                        }
+                        if (found_decrypted) {
+                            decrypted_users = String.valueOf(decrypted_users) + users[x].getName() + ",";
+                        }
+                        if (found_encrypted) {
+                            encrypted_users = String.valueOf(encrypted_users) + users[x].getName() + ",";
+                        }
+                    }
+                    catch (Exception e) {
+                        System.out.println(users[x]);
+                        e.printStackTrace();
+                    }
+                    ++x;
+                }
+                System.out.println("Encrypted URLs found:" + encrypted + ":" + encrypted_users);
+                System.out.println("#########################################################################################################");
+                System.out.println("Decrypted URLs found:" + decrypted + ":" + decrypted_users);
+                System.exit(0);
             } else if (args[0].toUpperCase().startsWith("-DMZ")) {
                 System.setProperty("java.awt.headless", "true");
                 new CrushFTPDMZ(args);
             } else if (args[0].toUpperCase().startsWith("-V")) {
-                System.out.println("CrushFTP " + ServerStatus.version_info_str + ServerStatus.sub_version_info_str);
+                System.out.println(String.valueOf(System.getProperty("appname", "CrushFTP")) + " " + ServerStatus.version_info_str + ServerStatus.sub_version_info_str);
                 System.out.println("CrushTunnel 3.1.16");
             } else if (args[0].toUpperCase().startsWith("-SBD")) {
                 System.setProperty("java.awt.headless", "true");
@@ -281,7 +348,7 @@ public class CrushFTPLauncher {
                 if (crushftp.handlers.Common.machine_is_x()) {
                     crushftp.handlers.Common.remove_osx_service();
                 } else if (crushftp.handlers.Common.machine_is_windows()) {
-                    Common.remove_windows_service("CrushFTP", "plugins/lib/CrushFTPJarProxy.jar");
+                    Common.remove_windows_service("CrushFTP", "plugins/lib/" + System.getProperty("appname", "CrushFTP") + "JarProxy.jar");
                 }
             } else if (args[0].toUpperCase().equals("-A")) {
                 String userDir = defaultUserFolder;
@@ -322,7 +389,7 @@ public class CrushFTPLauncher {
                 System.out.println("-p :      takes two parameters to encrypt a password. The first is the format (DES or SHA), the second is the password.");
                 System.out.println("-sbd :    ServerBeat deadman's switch...if session.obj file stops having date updated for 10 seconds, release our VIP.");
                 System.out.println("");
-                System.out.println("-v : CrushFTP version info.");
+                System.out.println("-v : " + System.getProperty("appname", "CrushFTP") + " version info.");
                 System.out.println("-? : this help screen.");
                 System.out.println("/? : this help screen.");
                 System.out.println("-help : this help screen.");

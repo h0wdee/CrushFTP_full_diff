@@ -46,7 +46,7 @@ public class ExpiringAccounts {
                 int pos = 0;
                 int x = 0;
                 while (x < current_user_group_listing.size()) {
-                    block21: {
+                    block23: {
                         ++pos;
                         try {
                             status.put("status", String.valueOf((int)((float)pos / (float)current_user_group_listing.size() * 100.0f)) + "%");
@@ -67,8 +67,8 @@ public class ExpiringAccounts {
                             String max_logins = UserTools.ut.getEndUserProperty(server, username, "max_logins", "0");
                             try {
                                 SimpleDateFormat sdf;
-                                Date expire_date1 = new Date(System.currentTimeMillis() + 51840000000L);
-                                Date expire_date2 = new Date(System.currentTimeMillis() + 51840000000L);
+                                Date expire_date1 = new Date();
+                                Date expire_date2 = new Date();
                                 Properties user_tmp = UserTools.ut.getUser(server, username, false);
                                 if (max_logins.equals("-1")) {
                                     Properties user = new Properties();
@@ -77,7 +77,7 @@ public class ExpiringAccounts {
                                         user.put("account_disabled", "true");
                                         userDetails.put(username, user);
                                     }
-                                    break block21;
+                                    break block23;
                                 }
                                 if (user_tmp.getProperty("expire_password", "").equals("true") && !user_tmp.getProperty("expire_password_when", "").equals("") && params.getProperty("expire_password", "true").equals("true")) {
                                     sdf = new SimpleDateFormat("MM/dd/yyyy hh:mm:ss aa", Locale.US);
@@ -98,9 +98,13 @@ public class ExpiringAccounts {
                                 c.setTime(new Date());
                                 int days_until_expiration = Integer.parseInt(params.getProperty("days", ""));
                                 ((Calendar)c).add(5, days_until_expiration);
-                                Log.log("REPORT", 1, String.valueOf(username) + ":" + expire_date1 + "  less than  " + c.getTime());
-                                Log.log("REPORT", 1, String.valueOf(username) + ":" + expire_date2 + "  less than  " + c.getTime());
-                                if ((expire_date1.getTime() < c.getTime().getTime() || expire_date2.getTime() < c.getTime().getTime()) && (days_until_expiration <= 0 || expire_date1.getTime() >= System.currentTimeMillis() && expire_date2.getTime() >= System.currentTimeMillis())) {
+                                if (params.getProperty("expire_password", "true").equals("true")) {
+                                    Log.log("REPORT", 1, "PASSWORD EXPIRE:" + username + ":" + expire_date1 + "  less than  " + c.getTime());
+                                }
+                                if (params.getProperty("expire_account", "true").equals("true")) {
+                                    Log.log("REPORT", 1, "ACCOUNT EXPIRE:" + username + ":" + expire_date2 + "  less than  " + c.getTime());
+                                }
+                                if ((params.getProperty("expire_password", "true").equals("true") && expire_date1.getTime() < c.getTime().getTime() || params.getProperty("expire_account", "true").equals("true") && expire_date2.getTime() < c.getTime().getTime()) && (days_until_expiration <= 0 || (!params.getProperty("expire_password", "true").equals("true") || expire_date1.getTime() >= System.currentTimeMillis()) && (!params.getProperty("expire_account", "true").equals("true") || expire_date2.getTime() >= System.currentTimeMillis()))) {
                                     Properties user = new Properties();
                                     user.put("username", username);
                                     if (params.getProperty("expire_account", "true").equals("true")) {

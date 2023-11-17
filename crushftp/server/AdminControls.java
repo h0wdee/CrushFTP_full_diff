@@ -2,13 +2,16 @@
  * Decompiled with CFR 0.152.
  * 
  * Could not load the following classes:
- *  com.didisoft.pgp.KeyStore
- *  com.didisoft.pgp.PGPLib
+ *  org.apache.commons.compress.archivers.ArchiveEntry
+ *  org.apache.commons.compress.archivers.zip.ZipArchiveEntry
+ *  org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream
  */
 package crushftp.server;
 
 import com.crushftp.client.AgentUI;
 import com.crushftp.client.Base64;
+import com.crushftp.client.Common;
+import com.crushftp.client.FileClient;
 import com.crushftp.client.File_B;
 import com.crushftp.client.File_S;
 import com.crushftp.client.File_U;
@@ -18,9 +21,10 @@ import com.crushftp.client.HeapDumper;
 import com.crushftp.client.URLConnection;
 import com.crushftp.client.VRL;
 import com.crushftp.client.Worker;
+import com.didisoft.pgp.KeyStore;
 import com.didisoft.pgp.PGPLib;
 import crushftp.gui.LOC;
-import crushftp.handlers.Common;
+import crushftp.handlers.JobFilesHandler;
 import crushftp.handlers.JobScheduler;
 import crushftp.handlers.Log;
 import crushftp.handlers.SSLKeyManager;
@@ -34,9 +38,12 @@ import crushftp.server.QuickConnect;
 import crushftp.server.ServerSessionAJAX;
 import crushftp.server.ServerStatus;
 import crushftp.server.VFS;
+import crushftp.server.daemon.DMZServer5;
 import crushftp.server.daemon.DMZServerCommon;
 import crushftp.server.daemon.GenericServer;
+import crushftp.server.daemon.ServerBeat;
 import java.awt.Desktop;
+import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -46,6 +53,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Method;
@@ -56,7 +64,6 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.security.cert.Certificate;
@@ -76,16 +83,18 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Vector;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
-import javax.crypto.Cipher;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
+import org.apache.commons.compress.archivers.ArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 
 public class AdminControls {
     public static Properties jobs_summary_cache = new Properties();
-    public static long last_job_cache_clean = System.currentTimeMillis();
     static Properties expandUsernames_cache = new Properties();
     public static Vector runningSchedules = new Vector();
     static Properties tmp_telnet_sockets = new Properties();
@@ -123,6 +132,9 @@ public class AdminControls {
         if (request.getProperty("command").equals("getLog")) {
             return AdminControls.getLog(request, site);
         }
+        if (request.getProperty("command").equals("getLogSnippet")) {
+            return AdminControls.getLogSnippet(request, site);
+        }
         if (request.getProperty("command").equals("adminAction")) {
             return AdminControls.adminAction(request, site, user_ip);
         }
@@ -131,6 +143,9 @@ public class AdminControls {
         }
         if (request.getProperty("command").equals("getRestartShutdownIdleStatus")) {
             return AdminControls.getRestartShutdownIdleStatus(request, site);
+        }
+        if (request.getProperty("command").equals("updateIdle")) {
+            return AdminControls.updateIdle(request, site);
         }
         if (request.getProperty("command").equals("restartIdle")) {
             return AdminControls.restartIdle(request, site);
@@ -158,6 +173,12 @@ public class AdminControls {
         }
         if (request.getProperty("command").equals("dumpHeap")) {
             return AdminControls.dumpHeap(request, site);
+        }
+        if (request.getProperty("command").equals("prometheusMetrics")) {
+            return AdminControls.prometheusMetrics(request, site);
+        }
+        if (request.getProperty("command").equals("upload_debug_info")) {
+            return AdminControls.upload_debug_info(request, site);
         }
         if (request.getProperty("command").equals("pgpGenerateKeyPair")) {
             return AdminControls.pgpGenerateKeyPair(request, site);
@@ -191,6 +212,9 @@ public class AdminControls {
         }
         if (request.getProperty("command").equals("addJob")) {
             return AdminControls.addJob(request, site);
+        }
+        if (request.getProperty("command").equals("addToJobs")) {
+            return AdminControls.addToJobs(request, site);
         }
         if (request.getProperty("command").equals("renameJob")) {
             return AdminControls.renameJob(request, site);
@@ -243,6 +267,9 @@ public class AdminControls {
         if (request.getProperty("command").equals("restorePrefs")) {
             return AdminControls.restorePrefs(request, site);
         }
+        if (request.getProperty("command").equals("unblockUsername")) {
+            return AdminControls.unblockUsername(request, site);
+        }
         if (request.getProperty("command").equals("telnetSocket")) {
             return AdminControls.telnetSocket(request, site);
         }
@@ -261,7 +288,7 @@ public class AdminControls {
         if (request.getProperty("command").equals("convertXMLSQLUsers")) {
             return AdminControls.convertXMLSQLUsers(request, site);
         }
-        if (request.getProperty("command").equals("registerCrushFTP")) {
+        if (request.getProperty("command").equals("register" + System.getProperty("appname", "CrushFTP"))) {
             return AdminControls.registerCrushFTP(request, site);
         }
         if (request.getProperty("command").equals("importUsers")) {
@@ -333,6 +360,15 @@ public class AdminControls {
         if (request.getProperty("command").equals("restartAllHttpsPorts")) {
             return AdminControls.restartAllHttpsPorts(request);
         }
+        if (request.getProperty("command").equals("validateAppMD5s")) {
+            return AdminControls.validateAppMD5s(request);
+        }
+        if (request.getProperty("command").equals("system.gc")) {
+            return AdminControls.forceGC(request, site);
+        }
+        if (request.getProperty("command").equals("clearCache")) {
+            return AdminControls.clearCache(request, site);
+        }
         return "";
     }
 
@@ -352,7 +388,7 @@ public class AdminControls {
                         if (request.getProperty("instance", "").equals("")) {
                             o = ServerStatus.server_settings;
                         } else {
-                            id = Common.makeBoundary();
+                            id = crushftp.handlers.Common.makeBoundary();
                             DMZServerCommon.sendCommand(request.getProperty("instance", ""), new Properties(), "GET:SERVER_SETTINGS", id);
                             p = DMZServerCommon.getResponse(id, 20);
                             o = p.get("data");
@@ -390,13 +426,26 @@ public class AdminControls {
                             if (site.indexOf("(REPORT_VIEW)") >= 0 && site.indexOf("(REPORT_EDIT)") >= 0) {
                                 ((Properties)o).put("reportSchedules", ServerStatus.VG("reportSchedules"));
                             }
+                            if (site.indexOf("(JOB_EDIT)") >= 0) {
+                                Vector<Properties> dmz_servers = new Vector<Properties>();
+                                Vector server_list = ServerStatus.VG("server_list");
+                                int xx = 0;
+                                while (xx < server_list.size()) {
+                                    Properties server_item = (Properties)server_list.elementAt(xx);
+                                    if (server_item.getProperty("serverType", "").equalsIgnoreCase("DMZ") && server_item.getProperty("enabled", "true").equals("true")) {
+                                        dmz_servers.add(server_item);
+                                    }
+                                    ++xx;
+                                }
+                                ((Properties)o).put("server_list", dmz_servers);
+                            }
                         }
                     } else if (key.equals("server_info")) {
                         if (request.getProperty("instance", "").equals("")) {
                             o = ServerStatus.thisObj.server_info.clone();
                         } else {
                             o = null;
-                            id = Common.makeBoundary();
+                            id = crushftp.handlers.Common.makeBoundary();
                             DMZServerCommon.sendCommand(request.getProperty("instance", ""), request, "GET:SERVER_INFO", id);
                             p = DMZServerCommon.getResponse(id, 20);
                             o = p.get("data");
@@ -410,6 +459,7 @@ public class AdminControls {
                                 o2.put("about_info_str", ((Properties)o).getProperty("about_info_str"));
                             }
                             o2.put("current_datetime_ddmmyyhhmmss", ((Properties)o).getProperty("current_datetime_ddmmyyhhmmss"));
+                            o2.put("current_datetime_millis", ((Properties)o).getProperty("current_datetime_millis"));
                             o = new Properties();
                             ((Properties)o).putAll((Map<?, ?>)o2);
                         }
@@ -446,7 +496,7 @@ public class AdminControls {
     public static Object getDashboardItems(Properties request, String site) {
         Properties o2 = new Properties();
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -463,7 +513,7 @@ public class AdminControls {
             Properties o = null;
             try {
                 o = (Properties)ServerStatus.thisObj.server_info.clone();
-                String[] keys = "jce_installed,low_memory,machine_is_linux,machine_is_solaris,machine_is_unix,machine_is_windows,machine_is_x,machine_is_x_10_5_plus,sub_version_info_str,version_info_str,registration_name,rid,enterprise_level,max_max_users,update_available,update_available_version,update_available_html,about_info_str,server_start_time,registration_email,server_list,recent_drives,recent_hammering,last_logins,ram_max,ram_free,thread_pool_available,thread_pool_busy,downloaded_files,uploaded_files,total_server_bytes_sent,total_server_bytes_received,successful_logins,failed_logins,current_download_speed,current_upload_speed,concurrent_users,replicated_servers,replicated_servers_count,replicated_servers_pending_user_sync,replicated_servers_pendingResponses,replicated_servers_lastActive,replicated_servers_sent_1,replicated_servers_sent_2,replicated_servers_sent_3,replicated_servers_sent_4,replicated_servers_sent_5,replicated_servers_queue_1,replicated_servers_queue_2,replicated_servers_queue_3,replicated_servers_queue_4,replicated_servers_queue_5,java_info,memcache_objects,keywords_cache_size,exif_item_count,replicated_received_message_count,replicated_write_prefs_count,replicated_user_changes_count,replicated_job_changes_count,server_cpu,os_cpu,open_files,max_open_files,connected_unique_ips,replication_vfs_count,ram_pending_bytes,ram_pending_bytes_s3_upload,ram_pending_bytes_s3_download,running_event_threads".split(",");
+                String[] keys = "jce_installed,low_memory,machine_is_linux,machine_is_solaris,machine_is_unix,machine_is_windows,machine_is_x,machine_is_x_10_5_plus,sub_version_info_str,version_info_str,registration_name,rid,enterprise_level,max_max_users,update_available,update_available_version,update_available_html,about_info_str,server_start_time,registration_email,server_list,recent_drives,recent_hammering,last_logins,ram_max,ram_free,thread_pool_available,thread_pool_busy,downloaded_files,uploaded_files,total_server_bytes_sent,total_server_bytes_received,successful_logins,failed_logins,current_download_speed,current_upload_speed,concurrent_users,replicated_servers,replicated_servers_count,replicated_servers_pending_user_sync,replicated_servers_pendingResponses,replicated_servers_lastActive,replicated_servers_sent_1,replicated_servers_sent_2,replicated_servers_sent_3,replicated_servers_sent_4,replicated_servers_sent_5,replicated_servers_queue_1,replicated_servers_queue_2,replicated_servers_queue_3,replicated_servers_queue_4,replicated_servers_queue_5,java_info,memcache_objects,keywords_cache_size,exif_item_count,replicated_received_message_count,replicated_write_prefs_count,replicated_user_changes_count,replicated_job_changes_count,server_cpu,os_cpu,open_files,max_open_files,connected_unique_ips,replication_vfs_count,ram_pending_bytes,ram_pending_bytes_s3_upload,ram_pending_bytes_s3_download,running_event_threads,max_server_upload_speed,max_server_download_speed,ram_pending_bytes_multisegment_download,ram_pending_bytes_multisegment_upload".split(",");
                 int x = 0;
                 while (x < keys.length) {
                     Object tmp = o.get(keys[x]);
@@ -476,7 +526,7 @@ public class AdminControls {
                 o2.put("replication_status", GenericClientMulti.replication_status);
                 o2.put("max_threads", ServerStatus.SG("max_threads"));
                 o2.put("hostname", ServerStatus.hostname);
-                if (ServerStatus.BG("encryption_pass_needed") && new String(com.crushftp.client.Common.encryption_password).equals("crushftp")) {
+                if (ServerStatus.BG("encryption_pass_needed") && new String(Common.encryption_password).equals("crushftp")) {
                     o2.put("encryption_pass_needed", String.valueOf(ServerStatus.BG("encryption_pass_needed")));
                 }
             }
@@ -498,7 +548,7 @@ public class AdminControls {
     public static Object getDashboardHistory(Properties request, String site) {
         Properties o2 = new Properties();
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -550,8 +600,8 @@ public class AdminControls {
                 history_obj.put("history_time", oldest_time.getName().substring(0, oldest_time.getName().indexOf(".")));
                 return history_obj;
             }
-            archived_history = String.valueOf(archived_history) + Common.dots(request.getProperty("history_date")) + "/";
-            if (!new File_S(archived_history = String.valueOf(archived_history) + Common.dots(request.getProperty("history_time")) + ".history_obj").exists()) return "FAILURE:Specified date and time unavailable.";
+            archived_history = String.valueOf(archived_history) + crushftp.handlers.Common.dots(request.getProperty("history_date")) + "/";
+            if (!new File_S(archived_history = String.valueOf(archived_history) + crushftp.handlers.Common.dots(request.getProperty("history_time")) + ".history_obj").exists()) return "FAILURE:Specified date and time unavailable.";
             ObjectInputStream ois = new ObjectInputStream(new FileInputStream(new File_S(archived_history)));
             o2 = (Properties)ois.readObject();
             ois.close();
@@ -570,7 +620,7 @@ public class AdminControls {
     public static Object getDataFlowItems(Properties request, String site) {
         Properties o2 = new Properties();
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -632,7 +682,7 @@ public class AdminControls {
     public static Object getServerInfoItems(Properties request, String site) {
         Properties o2 = new Properties();
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -682,7 +732,7 @@ public class AdminControls {
         String admin_group_name_raw = request.getProperty("admin_group_name");
         Properties o2 = new Properties();
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -703,7 +753,7 @@ public class AdminControls {
                     o = (Properties)ServerStatus.server_settings.clone();
                 } else {
                     o = null;
-                    String id = Common.makeBoundary();
+                    String id = crushftp.handlers.Common.makeBoundary();
                     DMZServerCommon.sendCommand(request.getProperty("instance", ""), request, "GET:SERVER_SETTINGS", id);
                     Properties p = DMZServerCommon.getResponse(id, 20);
                     o = (Properties)p.get("data");
@@ -718,33 +768,37 @@ public class AdminControls {
                     o.put("blank_passwords", ServerStatus.SG("blank_passwords"));
                     o.put("user_default_folder_privs", ServerStatus.SG("user_default_folder_privs"));
                     Vector tasks = new Vector();
-                    Vector<Properties> crush_task_subitems = new Vector<Properties>();
-                    Properties fake_task = new Properties();
-                    fake_task.put("pluginName", "");
-                    fake_task.put("subItem", "");
-                    Vector<Properties> fake_subitems = new Vector<Properties>();
-                    fake_subitems.add(fake_task);
-                    tasks.add(fake_subitems);
                     Vector plugins = ServerStatus.VG("plugins");
-                    int x = 0;
-                    while (x < plugins.size()) {
-                        Vector subitems = (Vector)plugins.get(x);
-                        if (subitems.size() != 0 && ((Properties)subitems.elementAt(0)).getProperty("pluginName", "").equals("CrushTask")) {
-                            tasks.add(crush_task_subitems);
-                            int xx = 0;
-                            while (xx < subitems.size()) {
-                                Properties p = (Properties)subitems.elementAt(xx);
-                                if (p.getProperty("enabled", "false").equals("true")) {
-                                    Properties task_names = new Properties();
-                                    task_names.put("pluginName", p.getProperty("pluginName", ""));
-                                    task_names.put("subItem", p.getProperty("subItem", ""));
-                                    task_names.put("enabled", "true");
-                                    crush_task_subitems.add(task_names);
+                    if (site.indexOf("(USER_ADMIN)") < 0) {
+                        Vector<Properties> crush_task_subitems = new Vector<Properties>();
+                        Properties fake_task = new Properties();
+                        fake_task.put("pluginName", "");
+                        fake_task.put("subItem", "");
+                        Vector<Properties> fake_subitems = new Vector<Properties>();
+                        fake_subitems.add(fake_task);
+                        tasks.add(fake_subitems);
+                        int x = 0;
+                        while (x < plugins.size()) {
+                            Vector subitems = (Vector)plugins.get(x);
+                            if (subitems.size() != 0 && ((Properties)subitems.elementAt(0)).getProperty("pluginName", "").equals("CrushTask")) {
+                                tasks.add(crush_task_subitems);
+                                int xx = 0;
+                                while (xx < subitems.size()) {
+                                    Properties p = (Properties)subitems.elementAt(xx);
+                                    if (p.getProperty("enabled", "false").equals("true")) {
+                                        Properties task_names = new Properties();
+                                        task_names.put("pluginName", p.getProperty("pluginName", ""));
+                                        task_names.put("subItem", p.getProperty("subItem", ""));
+                                        task_names.put("enabled", "true");
+                                        crush_task_subitems.add(task_names);
+                                    }
+                                    ++xx;
                                 }
-                                ++xx;
                             }
+                            ++x;
                         }
-                        ++x;
+                    } else {
+                        tasks = plugins;
                     }
                     o.put("plugins", tasks);
                     if (site.indexOf("(REPORT_VIEW)") >= 0 && site.indexOf("(REPORT_EDIT)") >= 0) {
@@ -753,10 +807,10 @@ public class AdminControls {
                     if (!admin_group_name_raw.equals("")) {
                         Vector<String> server_groups = new Vector<String>();
                         String[] fake_ucg = admin_group_name_raw.split(",");
-                        int x2 = 0;
-                        while (x2 < fake_ucg.length) {
-                            server_groups.addElement(fake_ucg[x2].trim());
-                            ++x2;
+                        int x = 0;
+                        while (x < fake_ucg.length) {
+                            server_groups.addElement(fake_ucg[x].trim());
+                            ++x;
                         }
                         o.put("server_groups", server_groups);
                     }
@@ -784,7 +838,7 @@ public class AdminControls {
 
     public static Object getJob(Properties request, String site) {
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -805,14 +859,14 @@ public class AdminControls {
             int x = 0;
             while (x < jobs.size()) {
                 f = (File_S)jobs.elementAt(x);
-                if (!(f.getName().startsWith("_") || site.indexOf("(USER_ADMIN)") >= 0 && (new VRL(f.getAbsolutePath()) + "/").indexOf("/jobs/" + request.getProperty("admin_group_name", "") + "/") < 0)) {
+                if (!(f.getName().startsWith("_") || site.indexOf("(CONNECT)") < 0 && site.indexOf("(USER_ADMIN)") >= 0 && (new VRL(f.getAbsolutePath()) + "/").indexOf("/jobs/" + request.getProperty("admin_group_name", "") + "/") < 0)) {
                     Properties p;
                     ++found_limited_admin_folder;
                     if (request.getProperty("schedule_info", "").equals("true")) {
                         if (new File_S(String.valueOf(f.getPath()) + "/job.XML").exists()) {
                             subfolder_parents.put(f.getPath(), "");
                             subfolder_parents.put(f.getParentFile().getPath(), "");
-                            p = (Properties)Common.readXMLObject(String.valueOf(f.getPath()) + "/job.XML");
+                            p = (Properties)JobFilesHandler.readXMLObject(String.valueOf(f.getPath()) + "/job.XML");
                             if (p != null) {
                                 Properties p2 = new Properties();
                                 String job_name = AdminControls.jobName(f);
@@ -848,7 +902,7 @@ public class AdminControls {
                             all.addElement(p2);
                         }
                     } else if ((site.indexOf("(CONNECT)") <= 0 || site.indexOf("(JOB_EDIT)") <= 0) && site.indexOf("(JOB_MONITOR)") >= 0) {
-                        if (new File_S(String.valueOf(f.getPath()) + "/job.XML").exists() && (p = (Properties)Common.readXMLObject(String.valueOf(f.getPath()) + "/job.XML")) != null && AdminControls.expandUsernames(p.getProperty("allowed_usernames", "")).indexOf(request.getProperty("calling_user", "~NONE~").toUpperCase()) >= 0) {
+                        if (new File_S(String.valueOf(f.getPath()) + "/job.XML").exists() && (p = (Properties)JobFilesHandler.readXMLObject(String.valueOf(f.getPath()) + "/job.XML")) != null && AdminControls.expandUsernames(p.getProperty("allowed_usernames", "")).indexOf(request.getProperty("calling_user", "~NONE~").toUpperCase()) >= 0) {
                             all.addElement(AdminControls.jobName(f));
                         }
                     } else {
@@ -880,7 +934,7 @@ public class AdminControls {
             while (x < jobs.size()) {
                 String job_name = AdminControls.jobName((File_S)jobs.elementAt(x));
                 if (request.getProperty("name", "").equalsIgnoreCase(job_name)) {
-                    Properties p = (Properties)Common.readXMLObject(String.valueOf(((File_S)jobs.elementAt(x)).getPath()) + "/job.XML");
+                    Properties p = (Properties)JobFilesHandler.readXMLObject(String.valueOf(((File_S)jobs.elementAt(x)).getPath()) + "/job.XML");
                     if (p.containsKey("tasks") && p.get("tasks") instanceof Vector) {
                         Vector v = (Vector)p.get("tasks");
                         int xx = 0;
@@ -890,22 +944,22 @@ public class AdminControls {
                             while (keys.hasMoreElements()) {
                                 String key = keys.nextElement().toString();
                                 if (pp.get(key).toString().contains("<LINE>")) {
-                                    pp.put(key, Common.replace_str(pp.get(key).toString(), "<LINE>", "{line_start}"));
+                                    pp.put(key, crushftp.handlers.Common.replace_str(pp.get(key).toString(), "<LINE>", "{line_start}"));
                                 }
                                 if (pp.get(key).toString().contains("&lt;LINE&gt;")) {
-                                    pp.put(key, Common.replace_str(pp.get(key).toString(), "&lt;LINE&gt;", "{line_start}"));
+                                    pp.put(key, crushftp.handlers.Common.replace_str(pp.get(key).toString(), "&lt;LINE&gt;", "{line_start}"));
                                 }
                                 if (pp.get(key).toString().contains("&amp;lt;LINE&gt;")) {
-                                    pp.put(key, Common.replace_str(pp.get(key).toString(), "&amp;lt;LINE&gt;", "{line_start}"));
+                                    pp.put(key, crushftp.handlers.Common.replace_str(pp.get(key).toString(), "&amp;lt;LINE&gt;", "{line_start}"));
                                 }
                                 if (pp.get(key).toString().contains("</LINE>")) {
-                                    pp.put(key, Common.replace_str(pp.get(key).toString(), "</LINE>", "{line_end}"));
+                                    pp.put(key, crushftp.handlers.Common.replace_str(pp.get(key).toString(), "</LINE>", "{line_end}"));
                                 }
                                 if (pp.get(key).toString().contains("&lt;/LINE&gt;")) {
-                                    pp.put(key, Common.replace_str(pp.get(key).toString(), "&lt;/LINE&gt;", "{line_end}"));
+                                    pp.put(key, crushftp.handlers.Common.replace_str(pp.get(key).toString(), "&lt;/LINE&gt;", "{line_end}"));
                                 }
                                 if (!pp.get(key).toString().contains("&amp;lt;/LINE&gt;")) continue;
-                                pp.put(key, Common.replace_str(pp.get(key).toString(), "&amp;lt;/LINE&gt;", "{line_end}"));
+                                pp.put(key, crushftp.handlers.Common.replace_str(pp.get(key).toString(), "&amp;lt;/LINE&gt;", "{line_end}"));
                             }
                             ++xx;
                         }
@@ -929,7 +983,7 @@ public class AdminControls {
             Properties pp = new Properties();
             pp.put("request", request);
             pp.put("site", "");
-            SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.AdminControls.saveReport", "info", pp);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.saveReport", "info", pp);
         }
         try {
             RandomAccessFile out = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "SavedReports/" + request.getProperty("report_token")), "rw");
@@ -952,10 +1006,10 @@ public class AdminControls {
             Properties pp = new Properties();
             pp.put("request", request);
             pp.put("site", site);
-            SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.AdminControls.renameJob", "info", pp);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.renameJob", "info", pp);
         }
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -967,7 +1021,7 @@ public class AdminControls {
                 return "FAILURE:Job not found.";
             }
         }
-        if (JobScheduler.jobRunning(request.getProperty("priorName", ""))) {
+        if (JobScheduler.jobRunningCount(request.getProperty("priorName", "")) > 0) {
             return "FAILURE:Rename is not allowed on running job. Frist stop the job  : " + request.getProperty("priorName", "");
         }
         Vector jobs = JobScheduler.getJobList(false);
@@ -983,20 +1037,20 @@ public class AdminControls {
                 }
                 File_S newJob = new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + new_name);
                 if (((File_S)jobs.elementAt(x)).renameTo(newJob)) {
-                    Properties job = (Properties)Common.readXMLObject(new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + JobScheduler.safeName(request.getProperty("name")) + "/job.XML"));
+                    Properties job = (Properties)JobFilesHandler.readXMLObject(new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + JobScheduler.safeName(request.getProperty("name")) + "/job.XML"));
                     job.put("scheduleName", JobScheduler.safeName(request.getProperty("name")));
                     try {
-                        Common.writeXMLObject(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + request.getProperty("name") + "/job.XML", (Object)job, "job");
+                        JobFilesHandler.writeXMLObject(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + request.getProperty("name") + "/job.XML", job, "job");
                         File_S[] f = (File_S[])((File)newJob).listFiles();
                         int xx = 0;
                         while (f != null && xx < f.length) {
                             if (f[xx].getName().indexOf("_") > 0 && f[xx].getName().lastIndexOf(".XML") > 0 && f[xx].isFile()) {
                                 try {
-                                    Properties tracker = (Properties)Common.readXMLObject(f[xx].getPath());
+                                    Properties tracker = (Properties)JobFilesHandler.readXMLObject(f[xx].getPath());
                                     if (tracker.containsKey("settings")) {
                                         Properties settings = (Properties)tracker.get("settings");
                                         settings.put("scheduleName", JobScheduler.safeName(request.getProperty("name")));
-                                        Common.writeXMLObject(f[xx].getPath(), (Object)tracker, "tracker");
+                                        JobFilesHandler.writeXMLObject(f[xx].getPath(), tracker, "tracker");
                                     }
                                 }
                                 catch (Exception e) {
@@ -1027,10 +1081,10 @@ public class AdminControls {
             Properties pp = new Properties();
             pp.put("request", request);
             pp.put("site", site);
-            SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.AdminControls.removeJob", "info", pp);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.removeJob", "info", pp);
         }
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -1049,7 +1103,7 @@ public class AdminControls {
                 if (site.indexOf("(USER_ADMIN)") >= 0 && (new VRL(((File_S)jobs.elementAt(x)).getAbsolutePath()) + "/").indexOf("/jobs/" + request.getProperty("admin_group_name", "") + "/") < 0) {
                     return "FAILURE:Job could not be renamed because you don't have access to this job:" + request.getProperty("priorName", "");
                 }
-                Common.recurseDelete(((File_S)jobs.elementAt(x)).getPath(), false);
+                crushftp.handlers.Common.recurseDelete(((File_S)jobs.elementAt(x)).getPath(), false);
                 return "SUCCESS:" + JobScheduler.safeName(request.getProperty("name"));
             }
             ++x;
@@ -1066,10 +1120,10 @@ public class AdminControls {
             Properties pp = new Properties();
             pp.put("request", request);
             pp.put("site", site);
-            SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.AdminControls.addJob", "info", pp);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.addJob", "info", pp);
         }
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -1083,28 +1137,97 @@ public class AdminControls {
         }
         Properties job = null;
         try {
-            job = (Properties)Common.readXMLObject(new ByteArrayInputStream(Common.url_decode(request.getProperty("data").replace('+', ' ')).getBytes("UTF8")));
+            job = (Properties)crushftp.handlers.Common.readXMLObject(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(request.getProperty("data").replace('+', ' ')).getBytes("UTF8")));
             if (job == null) {
                 throw new Exception("Invalid xml for job");
             }
-            Common.urlDecodePost(request);
+            crushftp.handlers.Common.urlDecodePost(request);
+            return AdminControls.writeOutJobConfig(job, site, request, JobScheduler.safeName(Common.dots(request.getProperty("name"))));
+        }
+        catch (Exception e) {
+            return "FAILURE:" + e.getMessage();
+        }
+    }
+
+    public static Object addToJobs(Properties request, String site) {
+        return AdminControls.addToJobs(request, site, true);
+    }
+
+    public static Object addToJobs(Properties request, String site, boolean replicate) {
+        if (ServerStatus.BG("replicate_jobs") && replicate) {
+            Properties pp = new Properties();
+            pp.put("request", request);
+            pp.put("site", site);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.addToJobs", "info", pp);
+        }
+        if (!request.getProperty("instance", "").equals("")) {
+            String id = crushftp.handlers.Common.makeBoundary();
+            String instance = request.remove("instance").toString();
+            DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
+            try {
+                Properties p = DMZServerCommon.getResponse(id, 20);
+                return p.get("data");
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+                return "FAILURE:AddToJobs update failed." + request.getProperty("job_list");
+            }
+        }
+        Properties job_fragment = null;
+        try {
+            job_fragment = (Properties)crushftp.handlers.Common.readXMLObject(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(request.getProperty("job_fragment").replace('+', ' ')).getBytes("UTF8")));
+            if (job_fragment == null) {
+                throw new Exception("Invalid xml for job");
+            }
+        }
+        catch (Exception e) {
+            return "FAILURE:" + e.getMessage();
+        }
+        crushftp.handlers.Common.urlDecodePost(request);
+        String[] job_list = request.getProperty("job_list").split(";");
+        String failures = "";
+        int x = 0;
+        while (x < job_list.length) {
+            String jobName = JobScheduler.safeName(Common.dots(job_list[x]));
+            try {
+                Properties job = (Properties)JobFilesHandler.readXMLObject(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName + "/job.XML");
+                job.putAll((Map<?, ?>)job_fragment);
+                String result = AdminControls.writeOutJobConfig(job, site, request, jobName);
+                if (result.startsWith("FAILURE:")) {
+                    throw new Exception(result);
+                }
+            }
+            catch (Exception e) {
+                failures = String.valueOf(failures) + "FAILURE:" + e.getMessage() + "\r\n";
+            }
+            ++x;
+        }
+        if (failures.equals("")) {
+            return "SUCCESS:" + request.getProperty("job_list");
+        }
+        return failures;
+    }
+
+    public static String writeOutJobConfig(Properties job, String site, Properties request, String jobName) {
+        try {
+            job.put("modified", String.valueOf(System.currentTimeMillis()));
+            job.remove("new_job_id_run");
             if (site.indexOf("(USER_ADMIN)") >= 0) {
                 UserTools.testLimitedTasks(job, request);
             }
-            String jobName = JobScheduler.safeName(com.crushftp.client.Common.dots(request.getProperty("name")));
             if (site.indexOf("(USER_ADMIN)") >= 0 && !jobName.startsWith(request.getProperty("admin_group_name", ""))) {
                 jobName = String.valueOf(request.getProperty("admin_group_name", "")) + "/" + jobName;
             }
             new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName).mkdirs();
             new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName + "/job2.XML").delete();
-            Common.writeXMLObject(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName + "/job2.XML", (Object)job, "job");
+            JobFilesHandler.writeXMLObject(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName + "/job2.XML", job, "job");
             boolean update = false;
             String update_log = "";
             String new_audit_trail = "";
             if (new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName + "/job.XML").exists()) {
                 update = true;
                 if (ServerStatus.BG("v10_beta")) {
-                    Properties old_job = (Properties)Common.readXMLObject(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName + "/job.XML");
+                    Properties old_job = (Properties)JobFilesHandler.readXMLObject(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName + "/job.XML");
                     Properties new_job = new Properties();
                     new_job.putAll((Map<?, ?>)job);
                     try {
@@ -1118,13 +1241,16 @@ public class AdminControls {
                     old_job.remove("audit_trail");
                     new_audit_trail = (String)new_job.remove("audit_trail");
                     StringBuffer update_log_summary = new StringBuffer();
-                    Common.updateObjectLog(new_job, old_job, String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName + "/job.XML", true, update_log_summary);
+                    crushftp.handlers.Common.updateObjectLog(JobFilesHandler.readXMLObject(new_job, true), JobFilesHandler.readXMLObject(old_job, true), String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + jobName + "/job.XML", true, update_log_summary);
                     update_log = update_log_summary.toString();
                 }
                 new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/" + jobName + "_19.XML").delete();
                 int x = 18;
                 while (x >= 0) {
                     try {
+                        if (!new File_S(crushftp.handlers.Common.all_but_last(String.valueOf(System.getProperty("crushftp.backup")) + "backup/" + jobName + "_" + (x + 1) + ".XML")).exists()) {
+                            new File_S(crushftp.handlers.Common.all_but_last(String.valueOf(System.getProperty("crushftp.backup")) + "backup/" + jobName + "_" + (x + 1) + ".XML")).mkdirs();
+                        }
                         new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/" + jobName + "_" + x + ".XML").renameTo(new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/" + jobName + "_" + (x + 1) + ".XML"));
                     }
                     catch (Exception e) {
@@ -1170,7 +1296,7 @@ public class AdminControls {
     }
 
     public static Object makedirJob(Properties request, String site, boolean replicate) {
-        String s1 = Common.dots(Common.url_decode(request.getProperty("item_name").replace('+', ' ')));
+        String s1 = crushftp.handlers.Common.dots(crushftp.handlers.Common.url_decode(request.getProperty("item_name").replace('+', ' ')));
         if (site.indexOf("(USER_ADMIN)") >= 0) {
             if ((new VRL(new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + s1).getAbsolutePath()) + "/").indexOf("/jobs/" + request.getProperty("admin_group_name", "") + "/") < 0) {
                 return "FAILURE:Job could not be created because you don't have access to this job:" + request.getProperty("item_name", "");
@@ -1181,8 +1307,8 @@ public class AdminControls {
     }
 
     public static Object renamedirJob(Properties request, String site, boolean replicate) {
-        String s1 = Common.dots(Common.url_decode(request.getProperty("item_name1").replace('+', ' ')));
-        String s2 = Common.dots(Common.url_decode(request.getProperty("item_name2").replace('+', ' ').replace('/', '_')));
+        String s1 = crushftp.handlers.Common.dots(crushftp.handlers.Common.url_decode(request.getProperty("item_name1").replace('+', ' ')));
+        String s2 = crushftp.handlers.Common.dots(crushftp.handlers.Common.url_decode(request.getProperty("item_name2").replace('+', ' ').replace('/', '_')));
         Vector jobs = JobScheduler.getJobList(false);
         int x = 0;
         while (x < jobs.size()) {
@@ -1199,7 +1325,7 @@ public class AdminControls {
     }
 
     public static Object deletedirJob(Properties request, String site, boolean replicate) {
-        String s1 = Common.dots(Common.url_decode(request.getProperty("item_name1").replace('+', ' ')));
+        String s1 = crushftp.handlers.Common.dots(crushftp.handlers.Common.url_decode(request.getProperty("item_name1").replace('+', ' ')));
         int x = 0;
         Vector jobs = JobScheduler.getJobList(false);
         if (x < jobs.size()) {
@@ -1215,9 +1341,98 @@ public class AdminControls {
         return "SUCCESS:" + s1 + " not found.";
     }
 
+    public static String validateAppMD5s(Properties request) {
+        int count = 0;
+        int total_local_files = 0;
+        int total_md5_files = 0;
+        String mismatches = "";
+        Vector<String> md5s = new Vector<String>();
+        Vector<File_S> files = new Vector<File_S>();
+        String validation_file = "https://support." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".com/md5s/v10.txt";
+        try {
+            BufferedReader br = null;
+            if (new File_S("./md5s.txt").exists()) {
+                validation_file = new File_S("./md5s.txt").getCanonicalPath();
+                br = new BufferedReader(new InputStreamReader(new FileInputStream(new File_S(validation_file))));
+            } else {
+                br = new BufferedReader(new InputStreamReader(new VRL(validation_file).openConnection().getInputStream()));
+            }
+            String data = "";
+            while ((data = br.readLine()) != null) {
+                if (data.trim().equals("")) continue;
+                md5s.addElement(String.valueOf(data.substring(data.indexOf(" ") + 1).trim()) + ":" + data.substring(0, data.indexOf(" ")));
+            }
+            br.close();
+            total_md5_files = md5s.size();
+            crushftp.handlers.Common.getAllFileListing(files, "./plugins/", 4, false);
+            files.addElement(new File_S("./WebInterface/CrushTunnel.jar"));
+            files.addElement(new File_S("./" + System.getProperty("appname", "CrushFTP") + ".jar"));
+            files.addElement(new File_S("./" + System.getProperty("appname", "CrushFTP") + ".exe"));
+            files.addElement(new File_S("./" + System.getProperty("appname", "CrushFTP") + "32.exe"));
+            String base_path = String.valueOf(new File_S("./").getCanonicalPath().replace('\\', '/')) + "/";
+            int x = files.size() - 1;
+            while (x >= 0) {
+                File_S f = (File_S)files.elementAt(x);
+                if (!f.getName().toUpperCase().endsWith(".JAR") && !f.getName().toUpperCase().endsWith(".EXE")) {
+                    files.remove(x);
+                } else {
+                    String path;
+                    String md5 = "NONE";
+                    if (f.exists()) {
+                        FileInputStream file_in = new FileInputStream(f);
+                        md5 = crushftp.handlers.Common.getMD5(file_in);
+                        ((InputStream)file_in).close();
+                    }
+                    if ((path = f.getCanonicalPath().replace('\\', '/')).startsWith(base_path)) {
+                        path = path.substring(base_path.length());
+                    }
+                    boolean found = false;
+                    int xx = 0;
+                    while (xx < md5s.size()) {
+                        String line = md5s.elementAt(xx).toString();
+                        if (path.equals(line.split(":")[0]) || crushftp.handlers.Common.last(path).equals(crushftp.handlers.Common.last(line.split(":")[0]))) {
+                            found = true;
+                            if (md5.equals(line.split(":")[1])) {
+                                ++count;
+                            } else {
+                                mismatches = String.valueOf(mismatches) + path + ":LOCAL=" + md5 + " EXPECTED=" + line.split(":")[1] + "\r\n";
+                            }
+                            md5s.remove(xx);
+                            break;
+                        }
+                        ++xx;
+                    }
+                    if (found) {
+                        files.remove(x);
+                    }
+                    ++total_local_files;
+                }
+                --x;
+            }
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+        }
+        String missing_md5_items = "";
+        int x = 0;
+        while (x < md5s.size()) {
+            missing_md5_items = String.valueOf(missing_md5_items) + md5s.elementAt(x).toString().split(":")[0] + "\r\n";
+            ++x;
+        }
+        String extra_files = "";
+        int x2 = 0;
+        while (x2 < files.size()) {
+            extra_files = String.valueOf(extra_files) + files.elementAt(x2).toString().substring(2) + "\r\n";
+            ++x2;
+        }
+        String result_msg = "";
+        result_msg = count == total_md5_files && count == total_local_files && mismatches.equals("") ? "SUCCESS:All items matched." : "FAILURE:Something didn't match exactly.";
+        return String.valueOf(result_msg) + "\r\n\r\n\r\n" + count + " file MD5's validated.  Local files:" + total_local_files + " versus md5 server files:" + total_md5_files + "\r\n\r\n\r\nMISMATCHES:\r\n---------------------------\r\n" + mismatches + "\r\n\r\nMISSING_MD5_ITEMS:\r\n---------------------------\r\n" + missing_md5_items + "\r\n\r\nEXTRA_ITEMS:\r\n---------------------------\r\n" + extra_files + "\r\n\r\n\r\nFiles compared with:" + validation_file;
+    }
+
     public static Object getServerRoots(Properties request, String site, SessionCrush thisSession) {
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -1233,19 +1448,22 @@ public class AdminControls {
         p.put("server.root", System.getProperty("crushftp.server.root", ""));
         p.put("user.root", System.getProperty("crushftp.user.root", ""));
         if (site.indexOf("(USER_ADMIN)") >= 0 && System.getProperty("crushftp.user.root", "").equals("") && thisSession != null) {
-            String parentUser = thisSession.getAdminGroupName(request);
-            if (parentUser.startsWith(",")) {
-                parentUser = parentUser.substring(1);
-            }
-            if (parentUser.indexOf(",") >= 0) {
-                parentUser = parentUser.substring(0, parentUser.indexOf(","));
-            }
-            VFS tempVFS = UserTools.ut.getVFS(request.getProperty("serverGroup"), parentUser);
             try {
                 Properties item;
                 VRL vrl;
-                Vector listing = UserTools.ut.get_virtual_list_fake(tempVFS, "/", request.getProperty("serverGroup"), parentUser);
-                if (listing.size() > 0 && (vrl = new VRL(tempVFS.get_item("/" + (item = (Properties)listing.elementAt(0)).getProperty("name") + "/").getProperty("url"))).getProtocol().equalsIgnoreCase("FILE")) {
+                VFS tempVFS;
+                Vector listing;
+                String parentUser = thisSession.getAdminGroupName(request);
+                if (parentUser.equals("Limited Admin : Group name was not specified!")) {
+                    throw new Exception(parentUser);
+                }
+                if (parentUser.startsWith(",")) {
+                    parentUser = parentUser.substring(1);
+                }
+                if (parentUser.indexOf(",") >= 0) {
+                    parentUser = parentUser.substring(0, parentUser.indexOf(","));
+                }
+                if ((listing = UserTools.ut.get_virtual_list_fake(tempVFS = UserTools.ut.getVFS(request.getProperty("serverGroup"), parentUser), "/", request.getProperty("serverGroup"), parentUser)).size() > 0 && (vrl = new VRL(tempVFS.get_item("/" + (item = (Properties)listing.elementAt(0)).getProperty("name") + "/").getProperty("url"))).getProtocol().equalsIgnoreCase("FILE")) {
                     p.put("user.root", vrl.getPath());
                     p.put("server.root", vrl.getPath());
                 }
@@ -1277,18 +1495,18 @@ public class AdminControls {
         StringBuffer xml = new StringBuffer();
         String[] params = null;
         params = request.getProperty("params").indexOf("-") >= 0 ? request.getProperty("params").split("-") : request.getProperty("params").split(",");
+        Properties si = null;
+        if (request.getProperty("instance", "").equals("")) {
+            si = ServerStatus.thisObj.server_info;
+        } else {
+            String id = crushftp.handlers.Common.makeBoundary();
+            DMZServerCommon.sendCommand(request.getProperty("instance", ""), request, "GET:SERVER_INFO", id);
+            Properties p = DMZServerCommon.getResponse(id, 20);
+            si = (Properties)p.get("data");
+        }
         int x = 0;
         while (x < params.length) {
             String param = params[x].trim();
-            Properties si = null;
-            if (request.getProperty("instance", "").equals("")) {
-                si = ServerStatus.thisObj.server_info;
-            } else {
-                String id = Common.makeBoundary();
-                DMZServerCommon.sendCommand(request.getProperty("instance", ""), request, "GET:SERVER_INFO", id);
-                Properties p = DMZServerCommon.getResponse(id, 20);
-                si = (Properties)p.get("data");
-            }
             Vector<String> v = (Vector<String>)si.get(String.valueOf(param) + "_history");
             if (v == null) {
                 v = new Vector<String>();
@@ -1331,7 +1549,7 @@ public class AdminControls {
                 ++xx;
             }
         }
-        String[] usernames = com.crushftp.client.Common.html_clean_usernames(users.split(","));
+        String[] usernames = Common.html_clean_usernames(users.split(","));
         xx = 0;
         while (xx < usernames.length) {
             String username = usernames[xx].toUpperCase().trim();
@@ -1357,7 +1575,7 @@ public class AdminControls {
             return new Properties();
         }
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -1375,11 +1593,11 @@ public class AdminControls {
         p.put("store_job_items", ServerStatus.SG("store_job_items"));
         p.put("job_statistics_enabled", ServerStatus.SG("job_statistics_enabled"));
         p.put("audit_job_logs", ServerStatus.SG("audit_job_logs"));
+        p.put("job_log_name", ServerStatus.SG("job_log_name"));
         return p;
     }
 
     /*
-     * WARNING - Removed try catching itself - possible behaviour change.
      * Unable to fully structure code
      */
     public static Vector getJobsSummary(Properties request, String site) throws Exception {
@@ -1388,9 +1606,13 @@ public class AdminControls {
         }
         si = null;
         if (!request.getProperty("instance", "").equals("")) {
-            id = Common.makeBoundary();
-            instance = request.remove("instance").toString();
-            DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
+            id = crushftp.handlers.Common.makeBoundary();
+            dmz_request = (Properties)Common.CLONE(request);
+            instance = dmz_request.remove("instance").toString();
+            if (!dmz_request.getProperty("command").equals("getJobsSummary")) {
+                dmz_request.put("command", "getJobsSummary");
+            }
+            DMZServerCommon.sendCommand(instance, dmz_request, site, "RUN:INSTANCE_ACTION", id);
             try {
                 p = DMZServerCommon.getResponse(id, 20);
                 return (Vector)p.get("data");
@@ -1432,125 +1654,61 @@ public class AdminControls {
         start_time = Long.parseLong(request.getProperty("start_time", "0"));
         end_time = Long.parseLong(request.getProperty("end_time", "0"));
         jobs = JobScheduler.getJobList(request.getProperty("hideUserActiveSchedules", "false").equals("false"));
-        sdf = new SimpleDateFormat("yyMMddHHmmss", Locale.US);
         vv2 = new Vector<Properties>();
         filter = request.getProperty("filter", "").toUpperCase();
-        var12_18 = AdminControls.jobs_summary_cache;
-        synchronized (var12_18) {
-            x = 0;
-            while (x < jobs.size()) {
-                f = (File_S)jobs.elementAt(x);
-                f2 = (File_S[])f.listFiles();
-                xx = 0;
-                while (f2 != null && xx < f2.length) {
-                    block39: {
-                        job_name = f2[xx].getName();
-                        if (!job_name.equalsIgnoreCase("job.XML") && !job_name.equalsIgnoreCase("inprogress.XML") && !job_name.equalsIgnoreCase("inprogress") && job_name.toUpperCase().endsWith(".XML") && (job_name = job_name.substring(0, job_name.lastIndexOf(".XML"))).indexOf("_") >= 0) {
-                            job_id = job_name.split("_")[0];
-                            try {
-                                if (job_name.split("_")[1].equals("new") || sdf.parse(job_name.split("_")[1]).getTime() < start_time || sdf.parse(job_name.split("_")[1]).getTime() > end_time) break block39;
-                                summaryJob = null;
-                                if (AdminControls.jobs_summary_cache.containsKey(f2[xx].getPath())) {
-                                    sj = (Properties)AdminControls.jobs_summary_cache.get(f2[xx].getPath());
-                                    if (site.indexOf("(JOB_MONITOR)") >= 0 && AdminControls.expandUsernames((settings = (Properties)sj.get("settings")).getProperty("allowed_usernames", "")).indexOf(request.getProperty("calling_user", "~NONE~").toUpperCase()) < 0) break block39;
-                                    if (sj.getProperty("modified", "0").equals(String.valueOf(f2[xx].lastModified()))) {
-                                        summaryJob = sj;
-                                    }
-                                }
-                                ok = false;
-                                if (summaryJob == null) {
-                                    tracker = (Properties)Common.readXMLObject(f2[xx].getPath());
-                                    settings = (Properties)tracker.get("settings");
-                                    if (site.indexOf("(JOB_MONITOR)") >= 0 && AdminControls.expandUsernames(settings.getProperty("allowed_usernames", "")).indexOf(request.getProperty("calling_user", "~NONE~").toUpperCase()) < 0) break block39;
-                                    summaryJob = new Properties();
-                                    summaryJob.put("name", "");
-                                    summaryJob.put("start", tracker.getProperty("start", ""));
-                                    summaryJob.put("end", tracker.getProperty("end", "0"));
-                                    summaryJob.put("id", job_id);
-                                    summaryJob.put("log_file", tracker.getProperty("log_file", ""));
-                                    summaryJob.put("stop", tracker.getProperty("stop", ""));
-                                    summaryJob.put("status", tracker.getProperty("status", ""));
-                                    if (settings == null) {
-                                        settings = new Properties();
-                                    }
-                                    set2 = new Properties();
-                                    set2.put("pluginName", settings.getProperty("pluginName", ""));
-                                    set2.put("subItem", settings.getProperty("subItem", ""));
-                                    set2.put("scheduleName", settings.getProperty("scheduleName", ""));
-                                    set2.put("name", settings.getProperty("name", ""));
-                                    set2.put("id", settings.getProperty("id", ""));
-                                    if (site.indexOf("(JOB_MONITOR)") >= 0) {
-                                        set2.put("allowed_usernames", settings.getProperty("allowed_usernames", ""));
-                                    }
-                                    summaryJob.put("settings", set2);
-                                    summaryJob.put("modified", String.valueOf(f2[xx].lastModified()));
-                                    AdminControls.jobs_summary_cache.put(f2[xx].getPath(), summaryJob);
-                                }
-                                if (!filter.equals("")) {
-                                    settings = (Properties)summaryJob.get("settings");
-                                    if (settings.getProperty("scheduleName", "").toUpperCase().indexOf(filter) >= 0) {
-                                        ok = true;
-                                    } else if (summaryJob.getProperty("status", "").toUpperCase().indexOf(filter) >= 0) {
-                                        ok = true;
-                                    } else {
-                                        start_d = new Date(Long.parseLong(summaryJob.getProperty("start", "0")));
-                                        end_d = new Date(Long.parseLong(summaryJob.getProperty("end", "0")));
-                                        duration_d = new Date(Long.parseLong(summaryJob.getProperty("end", "0")) - Long.parseLong(summaryJob.getProperty("start", "0")));
-                                        sdf2 = new SimpleDateFormat("dd/MM/yyyy hh:mm:ss aa");
-                                        sdf3 = new SimpleDateFormat("hh:mm:ss aa");
-                                        s1 = sdf2.format(start_d).toUpperCase();
-                                        s2 = sdf2.format(end_d).toUpperCase();
-                                        s3 = sdf3.format(duration_d).toUpperCase();
-                                        if (s1.indexOf(filter) >= 0) {
-                                            ok = true;
-                                        } else if (s2.indexOf(filter) >= 0) {
-                                            ok = true;
-                                        } else if (s3.indexOf(filter) >= 0) {
-                                            ok = true;
-                                        }
-                                    }
-                                } else {
-                                    ok = true;
-                                }
-                                if (ok) {
-                                    vv2.insertElementAt(summaryJob, 0);
-                                }
-                            }
-                            catch (Exception e) {
-                                Log.log("SERVER", 1, e);
-                            }
+        now = String.valueOf(System.currentTimeMillis());
+        keys = AdminControls.jobs_summary_cache.keys();
+        while (keys.hasMoreElements()) {
+            job_path = keys.nextElement().toString();
+            summaryJob = (Properties)AdminControls.jobs_summary_cache.get(job_path);
+            try {
+                if (Long.parseLong(summaryJob.getProperty("start", now)) < start_time || Long.parseLong(summaryJob.getProperty("end", now)) > end_time) continue;
+                ok = false;
+                if (!filter.equals("")) {
+                    settings = (Properties)summaryJob.get("settings");
+                    if (site.indexOf("(JOB_MONITOR)") >= 0 && AdminControls.expandUsernames(settings.getProperty("allowed_usernames", "")).indexOf(request.getProperty("calling_user", "~NONE~").toUpperCase()) < 0) continue;
+                    if (settings.getProperty("scheduleName", "").toUpperCase().indexOf(filter) >= 0) {
+                        ok = true;
+                    } else if (summaryJob.getProperty("status", "").toUpperCase().indexOf(filter) >= 0) {
+                        ok = true;
+                    } else {
+                        start_d = new Date(Long.parseLong(summaryJob.getProperty("start", "0")));
+                        end_d = new Date(Long.parseLong(summaryJob.getProperty("end", "0")));
+                        duration_d = new Date(Long.parseLong(summaryJob.getProperty("end", "0")) - Long.parseLong(summaryJob.getProperty("start", "0")));
+                        sdf2 = new SimpleDateFormat("dd/MM/yyyy hh:mm:ss aa");
+                        sdf3 = new SimpleDateFormat("hh:mm:ss aa");
+                        s1 = sdf2.format(start_d).toUpperCase();
+                        s2 = sdf2.format(end_d).toUpperCase();
+                        s3 = sdf3.format(duration_d).toUpperCase();
+                        if (s1.indexOf(filter) >= 0) {
+                            ok = true;
+                        } else if (s2.indexOf(filter) >= 0) {
+                            ok = true;
+                        } else if (s3.indexOf(filter) >= 0) {
+                            ok = true;
                         }
                     }
-                    ++xx;
+                } else {
+                    ok = true;
                 }
-                ++x;
+                if (!ok) continue;
+                vv2.insertElementAt(summaryJob, 0);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 1, e);
             }
         }
-        Common.do_sort(vv, "", "start");
-        Common.do_sort(vv2, "", "start");
-        if (true) ** GOTO lbl168
+        crushftp.handlers.Common.do_sort(vv, "", "start");
+        crushftp.handlers.Common.do_sort(vv2, "", "start");
+        if (true) ** GOTO lbl111
         do {
             vv2.removeElementAt(vv2.size() - 1);
-lbl168:
+lbl111:
             // 2 sources
 
         } while (vv2.size() > ServerStatus.IG("max_job_summary_scan"));
         vv2.addAll(vv);
         vv = vv2;
-        var12_18 = AdminControls.jobs_summary_cache;
-        synchronized (var12_18) {
-            if (System.currentTimeMillis() - AdminControls.last_job_cache_clean > 60000L) {
-                keys = AdminControls.jobs_summary_cache.keys();
-                while (keys.hasMoreElements()) {
-                    key = keys.nextElement().toString();
-                    sj = (Properties)AdminControls.jobs_summary_cache.get(key);
-                    f = new File_S(key);
-                    if (f.exists() && sj.getProperty("modified", "0").equals(String.valueOf(f.lastModified()))) continue;
-                    AdminControls.jobs_summary_cache.remove(key);
-                }
-                AdminControls.last_job_cache_clean = System.currentTimeMillis();
-            }
-        }
         return vv;
     }
 
@@ -1560,7 +1718,7 @@ lbl168:
         }
         Properties si = null;
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -1586,7 +1744,7 @@ lbl168:
         }
         if (vv.size() == 0) {
             if (!request.getProperty("scheduleName", "").equals("")) {
-                File_S f = new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + com.crushftp.client.Common.dots(request.getProperty("scheduleName", "")));
+                File_S f = new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + Common.dots(request.getProperty("scheduleName", "")));
                 AdminControls.checkJobFolder(site, request, vv, f);
             } else {
                 jobs = JobScheduler.getJobList(false);
@@ -1642,7 +1800,7 @@ lbl168:
                         active_item.remove("newItems");
                     }
                     if (active_item.containsKey("items")) {
-                        items2 = (Vector)com.crushftp.client.Common.CLONE(active_item.get("items"));
+                        items2 = (Vector)Common.CLONE(active_item.get("items"));
                         active_item.put("items", items2);
                         xxx = 0;
                         while (xxx < items2.size()) {
@@ -1654,7 +1812,7 @@ lbl168:
                         }
                     }
                     if (active_item.containsKey("newItems")) {
-                        items2 = (Vector)com.crushftp.client.Common.CLONE(active_item.get("newItems"));
+                        items2 = (Vector)Common.CLONE(active_item.get("newItems"));
                         active_item.put("newItems", items2);
                         xxx = 0;
                         while (xxx < items2.size()) {
@@ -1681,7 +1839,7 @@ lbl168:
             String job_name = f2[xx].getName();
             if (!job_name.equalsIgnoreCase("job.XML") && !job_name.equalsIgnoreCase("inprogress.XML") && !job_name.equalsIgnoreCase("inprogress") && job_name.toUpperCase().endsWith(".XML") && (job_id = (job_name = job_name.substring(0, job_name.lastIndexOf(".XML"))).split("_")[0]).equals(request.getProperty("job_id"))) {
                 Properties settings;
-                Properties tracker = (Properties)Common.readXMLObject(f2[xx].getPath());
+                Properties tracker = (Properties)JobFilesHandler.readXMLObject(f2[xx].getPath());
                 tracker.put("job_history_obj_path", f2[xx].getPath());
                 if (site.indexOf("(JOB_MONITOR)") < 0 || AdminControls.expandUsernames((settings = (Properties)tracker.get("settings")).getProperty("allowed_usernames", "")).indexOf(request.getProperty("calling_user", "~NONE~").toUpperCase()) >= 0) {
                     vv.addElement(tracker.clone());
@@ -1696,7 +1854,7 @@ lbl168:
         if (request.getProperty("instance", "").equals("")) {
             si = ServerStatus.thisObj.server_info;
         } else {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             DMZServerCommon.sendCommand(request.getProperty("instance", ""), request, "GET:SERVER_INFO", id);
             Properties p = DMZServerCommon.getResponse(id, 20);
             si = (Properties)p.get("data");
@@ -1724,15 +1882,15 @@ lbl168:
             Properties pp = new Properties();
             pp.put("request", request);
             pp.put("site", site);
-            SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.AdminControls.newFolder", "info", pp);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.newFolder", "info", pp);
         }
-        if (Common.machine_is_x() && !new File_U(request.getProperty("path")).exists()) {
+        if (crushftp.handlers.Common.machine_is_x() && !new File_U(request.getProperty("path")).exists()) {
             request.put("path", "/Volumes" + request.getProperty("path"));
         }
         if (!new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("name")).mkdirs()) {
             return "New Folder Failed!";
         }
-        Common.updateOSXInfo(String.valueOf(request.getProperty("path")) + request.getProperty("name"));
+        crushftp.handlers.Common.updateOSXInfo(String.valueOf(request.getProperty("path")) + request.getProperty("name"));
         return "OK";
     }
 
@@ -1741,9 +1899,9 @@ lbl168:
             Properties pp = new Properties();
             pp.put("request", request);
             pp.put("site", site);
-            SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.AdminControls.renameItem", "info", pp);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.renameItem", "info", pp);
         }
-        if (Common.machine_is_x() && !new File_U(request.getProperty("path")).exists()) {
+        if (crushftp.handlers.Common.machine_is_x() && !new File_U(request.getProperty("path")).exists()) {
             request.put("path", "/Volumes" + request.getProperty("path"));
         }
         if (!new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("name")).renameTo(new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("newName")))) {
@@ -1757,18 +1915,18 @@ lbl168:
             Properties pp = new Properties();
             pp.put("request", request);
             pp.put("site", site);
-            SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.AdminControls.duplicateItem", "info", pp);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.duplicateItem", "info", pp);
         }
-        if (Common.machine_is_x() && !new File_U(request.getProperty("path")).exists()) {
+        if (crushftp.handlers.Common.machine_is_x() && !new File_U(request.getProperty("path")).exists()) {
             request.put("path", "/Volumes" + request.getProperty("path"));
         }
         Vector list = new Vector();
         try {
-            Common.getAllFileListing(list, new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("name")).getCanonicalPath(), 5, true);
+            crushftp.handlers.Common.getAllFileListing(list, new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("name")).getCanonicalPath(), 5, true);
             if (list.size() > 100) {
                 return "Too many items to allow duplicate! " + list.size();
             }
-            Common.recurseCopy_U(new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("name")).getCanonicalPath(), String.valueOf(new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("name")).getCanonicalPath()) + "_tmp_" + Common.makeBoundary(), false);
+            crushftp.handlers.Common.recurseCopy_U(new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("name")).getCanonicalPath(), String.valueOf(new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("name")).getCanonicalPath()) + "_tmp_" + crushftp.handlers.Common.makeBoundary(), false);
         }
         catch (Exception e) {
             Log.log("SERVER", 0, e);
@@ -1782,9 +1940,9 @@ lbl168:
             Properties pp = new Properties();
             pp.put("request", request);
             pp.put("site", site);
-            SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.AdminControls.deleteItem", "info", pp);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.deleteItem", "info", pp);
         }
-        if (Common.machine_is_x() && !new File_U(request.getProperty("path")).exists()) {
+        if (crushftp.handlers.Common.machine_is_x() && !new File_U(request.getProperty("path")).exists()) {
             request.put("path", "/Volumes" + request.getProperty("path"));
         }
         if (!new File_U(String.valueOf(request.getProperty("path")) + request.getProperty("name")).exists()) {
@@ -1811,17 +1969,17 @@ lbl168:
                 if (!request.getProperty("instance", "").equals("")) {
                     var4_4 = DMZServerCommon.stop_send_prefs;
                     synchronized (var4_4) {
-                        id = Common.makeBoundary();
+                        id = crushftp.handlers.Common.makeBoundary();
                         instance = request.remove("instance").toString();
                         DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
                         p = DMZServerCommon.getResponse(id, 20);
                         if (request.getProperty("key").indexOf("server_settings/") >= 0) {
-                            id2 = Common.makeBoundary();
+                            id2 = crushftp.handlers.Common.makeBoundary();
                             DMZServerCommon.sendCommand(instance, new Properties(), "GET:SERVER_SETTINGS", id2);
                             pp = DMZServerCommon.getResponse(id2, 20);
                             SharedSessionReplicated.send("", "WRITE_PREFS", instance, (Properties)pp.get("data"));
                             Thread.sleep(200L);
-                            Common.write_server_settings((Properties)pp.get("data"), instance);
+                            crushftp.handlers.Common.write_server_settings((Properties)pp.get("data"), instance);
                         }
                         return p.get("data").toString();
                     }
@@ -1830,7 +1988,7 @@ lbl168:
                     pp = new Properties();
                     pp.put("request", request);
                     pp.put("site", site);
-                    SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.AdminControls.setServerItem", "info", pp);
+                    SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.setServerItem", "info", pp);
                 }
                 original_disabled_ciphers = ServerStatus.SG("disabled_ciphers");
                 keys = request.getProperty("key").split("/");
@@ -1877,12 +2035,12 @@ lbl168:
                         ++x;
                     }
                     new_o = null;
-                    new_o = !request.getProperty("data_type").equals("text") ? (request.getProperty("data").equals("") && request.getProperty("data_type").equals("vector") ? new Vector<E>() : Common.readXMLObject(new ByteArrayInputStream(Common.url_decode(request.getProperty("data").replace('+', ' ')).getBytes("UTF8")))) : Common.url_decode(request.getProperty("data", "").replace('+', ' '));
+                    new_o = !request.getProperty("data_type").equals("text") ? (request.getProperty("data").equals("") && request.getProperty("data_type").equals("vector") ? new Vector<E>() : crushftp.handlers.Common.readXMLObject(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(request.getProperty("data").replace('+', ' ')).getBytes("UTF8")))) : crushftp.handlers.Common.url_decode(request.getProperty("data", "").replace('+', ' '));
                     if (o instanceof Properties) {
                         if (lastKey.equals("server_prefs") && (new_o instanceof Properties || new_o instanceof Vector)) {
-                            Common.updateObjectLog(new_o, o, request.getProperty("key"), true, log_summary);
+                            crushftp.handlers.Common.updateObjectLog(new_o, o, request.getProperty("key"), true, log_summary);
                         } else if (new_o instanceof Properties || new_o instanceof Vector) {
-                            Common.updateObjectLog(new_o, ((Properties)o).get(lastKey), request.getProperty("key"), true, log_summary);
+                            crushftp.handlers.Common.updateObjectLog(new_o, ((Properties)o).get(lastKey), request.getProperty("key"), true, log_summary);
                         } else {
                             ((Properties)o).put(lastKey, new_o.toString());
                         }
@@ -1908,27 +2066,27 @@ lbl168:
                             if (new_o == null) {
                                 new_o = new Vector<E>();
                             }
-                            Common.updateObjectLog(new_o, v, request.getProperty("key"), true, log_summary);
+                            crushftp.handlers.Common.updateObjectLog(new_o, v, request.getProperty("key"), true, log_summary);
                         } else {
                             if (new_o == null) {
                                 new_o = new Vector<E>();
                             }
                             if (request.getProperty("key").startsWith("server_settings/ip_restrictions/")) {
-                                new_o_tmp = (Vector)com.crushftp.client.Common.CLONE(new_o);
-                                v_temp = (Vector)com.crushftp.client.Common.CLONE(v);
+                                new_o_tmp = (Vector)Common.CLONE(new_o);
+                                v_temp = (Vector)Common.CLONE(v);
                                 Collections.reverse(new_o_tmp);
                                 Collections.reverse(v_temp);
-                                Common.updateObjectLog(new_o_tmp, v_temp, request.getProperty("key"), true, log_summary);
-                                Common.updateObjectLog(new_o, v, new StringBuffer(), true);
+                                crushftp.handlers.Common.updateObjectLog(new_o_tmp, v_temp, request.getProperty("key"), true, log_summary);
+                                crushftp.handlers.Common.updateObjectLog(new_o, v, new StringBuffer(), true);
                             } else {
-                                Common.updateObjectLog(new_o, v, request.getProperty("key"), true, log_summary);
+                                crushftp.handlers.Common.updateObjectLog(new_o, v, request.getProperty("key"), true, log_summary);
                             }
                         }
                     } else {
                         i = Integer.parseInt(lastKey);
                         if (request.getProperty("data_action", "").equals("remove")) {
                             delO = v.remove(i);
-                            Common.updateObjectLogOnly(delO, String.valueOf(request.getProperty("key")) + ":remove ", log_summary);
+                            crushftp.handlers.Common.updateObjectLogOnly(delO, String.valueOf(request.getProperty("key")) + ":remove ", log_summary);
                         } else if (request.getProperty("data_action", "").equals("move_left")) {
                             o2 = v.elementAt(i);
                             if (i > 0) {
@@ -1939,7 +2097,7 @@ lbl168:
                                     ((Properties)o1).put("subItem", "");
                                 }
                             }
-                            Common.updateObjectLogOnly(o2, String.valueOf(request.getProperty("key")) + ":move_left " + i, log_summary);
+                            crushftp.handlers.Common.updateObjectLogOnly(o2, String.valueOf(request.getProperty("key")) + ":move_left " + i, log_summary);
                         } else if (request.getProperty("data_action", "").equals("move_right")) {
                             o2 = v.elementAt(i);
                             if (i <= v.size() - 2) {
@@ -1947,18 +2105,18 @@ lbl168:
                                 v.setElementAt(o2, i + 1);
                                 v.setElementAt(o1, i);
                             }
-                            Common.updateObjectLogOnly(o2, String.valueOf(request.getProperty("key")) + ":move_right " + i, log_summary);
+                            crushftp.handlers.Common.updateObjectLogOnly(o2, String.valueOf(request.getProperty("key")) + ":move_right " + i, log_summary);
                         } else if (i > v.size() - 1) {
                             v.addElement(new_o);
-                            Common.updateObjectLogOnly(new_o, String.valueOf(request.getProperty("key")) + ":add " + v.size(), log_summary);
+                            crushftp.handlers.Common.updateObjectLogOnly(new_o, String.valueOf(request.getProperty("key")) + ":add " + v.size(), log_summary);
                             if (v == (Vector)ServerStatus.server_settings.get("server_list")) {
                                 ServerStatus.thisObj.start_this_server(i);
                             }
                         } else if (new_o instanceof Properties || new_o instanceof Vector) {
-                            Common.updateObjectLog(new_o, v.elementAt(i), request.getProperty("key"), true, log_summary);
+                            crushftp.handlers.Common.updateObjectLog(new_o, v.elementAt(i), request.getProperty("key"), true, log_summary);
                         } else {
                             v.setElementAt(new_o.toString(), i);
-                            Common.updateObjectLogOnly(new_o, String.valueOf(request.getProperty("key")) + "/" + i + " " + i + "=", log_summary);
+                            crushftp.handlers.Common.updateObjectLogOnly(new_o, String.valueOf(request.getProperty("key")) + "/" + i + " " + i + "=", log_summary);
                         }
                     }
                     if (!System.getProperty("crushftp.user.root", "").equals("") || !System.getProperty("crushftp.server.root", "").equals("")) {
@@ -2032,17 +2190,17 @@ lbl192:
                     status = "FAILURE:" + e.toString();
                 }
             }
-            if ((template = Common.get_email_template("Change Setting Email")) != null) {
+            if ((template = crushftp.handlers.Common.get_email_template("Change Setting Email")) != null) {
                 body = template.getProperty("emailBody");
-                body = Common.replace_str(body, "{keys}", request.getProperty("key"));
-                body = Common.replace_str(body, "{summary}", log_summary.toString());
-                body = Common.replace_str(body, "{username}", request.getProperty("username", ""));
-                body = Common.replace_str(body, "{user_name}", request.getProperty("username", ""));
+                body = crushftp.handlers.Common.replace_str(body, "{keys}", request.getProperty("key"));
+                body = crushftp.handlers.Common.replace_str(body, "{summary}", log_summary.toString());
+                body = crushftp.handlers.Common.replace_str(body, "{username}", request.getProperty("username", ""));
+                body = crushftp.handlers.Common.replace_str(body, "{user_name}", request.getProperty("username", ""));
                 subject = template.getProperty("emailSubject");
-                subject = Common.replace_str(subject, "{keys}", request.getProperty("key"));
-                subject = Common.replace_str(subject, "{summary}", log_summary.toString());
-                subject = Common.replace_str(subject, "{username}", request.getProperty("username", ""));
-                subject = Common.replace_str(subject, "{user_name}", request.getProperty("username", ""));
+                subject = crushftp.handlers.Common.replace_str(subject, "{keys}", request.getProperty("key"));
+                subject = crushftp.handlers.Common.replace_str(subject, "{summary}", log_summary.toString());
+                subject = crushftp.handlers.Common.replace_str(subject, "{username}", request.getProperty("username", ""));
+                subject = crushftp.handlers.Common.replace_str(subject, "{user_name}", request.getProperty("username", ""));
                 email_info = new Properties();
                 email_info.put("server", ServerStatus.SG("smtp_server"));
                 email_info.put("user", ServerStatus.SG("smtp_user"));
@@ -2054,7 +2212,18 @@ lbl192:
                 email_info.put("to", template.getProperty("emailCC"));
                 email_info.put("subject", subject);
                 email_info.put("body", body);
-                ServerStatus.thisObj.sendEmail(email_info);
+                Worker.startWorker(new Runnable(){
+
+                    @Override
+                    public void run() {
+                        try {
+                            ServerStatus.thisObj.sendEmail(email_info);
+                        }
+                        catch (Exception e) {
+                            Log.log("HTTP_SERVER", 1, e);
+                        }
+                    }
+                });
             }
         }
         catch (Exception e) {
@@ -2068,14 +2237,28 @@ lbl192:
 
     public static Object getUser(Properties request, String site, SessionCrush thisSession) {
         Properties p;
-        if (site.indexOf("(CONNECT)") < 0) {
+        String username;
+        if (site.indexOf("(CONNECT)") < 0 && thisSession != null && thisSession.server_item != null) {
             request.put("serverGroup", thisSession.server_item.getProperty("linkedServer"));
         }
         if (request.getProperty("serverGroup_original", "").equals("extra_vfs")) {
             request.put("serverGroup", "extra_vfs");
         }
+        if (request.getProperty("serverGroup").equals("@AutoDomain")) {
+            String serverGroup = request.getProperty("serverGroup");
+            username = thisSession.uiSG("user_name");
+            if (username.indexOf("@") > 0) {
+                String newLinkedServer = username.split("@")[username.split("@").length - 1];
+                String newLinkedServer2 = Common.dots(newLinkedServer);
+                if (newLinkedServer.equals(newLinkedServer2 = newLinkedServer2.replace('/', '-').replace('\\', '-').replace('%', '-').replace(':', '-').replace(';', '-'))) {
+                    username = username.substring(0, username.lastIndexOf("@"));
+                    serverGroup = newLinkedServer;
+                }
+            }
+            request.put("serverGroup", serverGroup);
+        }
         String status = "OK";
-        String username = Common.url_decode(request.getProperty("username").replace('+', ' '));
+        username = crushftp.handlers.Common.url_decode(request.getProperty("username").replace('+', ' '));
         Vector<Properties> extra_vfs = new Vector<Properties>();
         if (request.getProperty("serverGroup").endsWith("_restored_backup")) {
             String source_path = String.valueOf(System.getProperty("crushftp.backup")) + "backup/" + request.getProperty("user_zip_file");
@@ -2099,14 +2282,14 @@ lbl192:
         }
         try {
             if (!request.getProperty("instance", "").equals("")) {
-                String id = Common.makeBoundary();
+                String id = crushftp.handlers.Common.makeBoundary();
                 String instance = request.remove("instance").toString();
                 DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
                 Properties p2 = DMZServerCommon.getResponse(id, 20);
                 return p2.get("data");
             }
             VFS uVFS = UserTools.ut.getVFS(request.getProperty("serverGroup"), username);
-            Properties new_user = UserTools.ut.getUser(request.getProperty("serverGroup"), username, false);
+            Properties new_user = UserTools.ut.getUser(request.getProperty("serverGroup"), username, request.getProperty("flatten", "false").equals("true"));
             if (new_user == null || !new_user.getProperty("username", "not found").equalsIgnoreCase(username)) {
                 throw new Exception("User not found:" + username);
             }
@@ -2161,7 +2344,7 @@ lbl192:
                     Vector vItems = (Vector)p.get("vItems");
                     dir_item = (Properties)((Properties)vItems.elementAt(0)).clone();
                 }
-                dir_item.put("path", Common.all_but_last(virtualPath));
+                dir_item.put("path", crushftp.handlers.Common.all_but_last(virtualPath));
                 dir_item.put("name", p.getProperty("name"));
                 Vector<Properties> wrapper = new Vector<Properties>();
                 wrapper.addElement(dir_item);
@@ -2193,7 +2376,7 @@ lbl192:
                 ServerSessionAJAX.fixButtons(buttons);
             }
             if (request.getProperty("serverGroup").endsWith("_restored_backup")) {
-                Common.recurseDelete(String.valueOf(System.getProperty("crushftp.backup")) + "backup/" + request.getProperty("username"), false);
+                crushftp.handlers.Common.recurseDelete(String.valueOf(System.getProperty("crushftp.backup")) + "backup/" + request.getProperty("username"), false);
             }
             return user_items;
         }
@@ -2216,8 +2399,8 @@ lbl192:
                     continue;
                 }
                 File_S file_entry = new File_S(String.valueOf(dest_path) + path);
-                if (!new File_S(Common.all_but_last(String.valueOf(dest_path) + path)).exists()) {
-                    new File_S(Common.all_but_last(String.valueOf(dest_path) + path)).mkdirs();
+                if (!new File_S(crushftp.handlers.Common.all_but_last(String.valueOf(dest_path) + path)).exists()) {
+                    new File_S(crushftp.handlers.Common.all_but_last(String.valueOf(dest_path) + path)).mkdirs();
                 }
                 RandomAccessFile out = new RandomAccessFile(file_entry, "rw");
                 byte[] b = new byte[32768];
@@ -2244,7 +2427,7 @@ lbl192:
 
     public static String setUserItem(Properties request, SessionCrush thisSession, String site) {
         String status;
-        block100: {
+        block112: {
             status = "OK";
             try {
                 StringBuffer log_summary = new StringBuffer();
@@ -2265,13 +2448,13 @@ lbl192:
                             if (!request.containsKey("usernames")) {
                                 request.put("usernames", request.getProperty("username", ""));
                             }
-                            String[] usernames = com.crushftp.client.Common.html_clean_usernames(Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"));
+                            String[] usernames = Common.html_clean_usernames(crushftp.handlers.Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"));
                             int x = 0;
                             while (x < usernames.length) {
                                 group.addElement(usernames[x].trim());
                                 ++x;
                             }
-                            Common.updateObjectLogOnly("add " + request.getProperty("usernames"), "users/" + request.getProperty("serverGroup") + "/inheritance/" + request.getProperty("group_name"), log_summary);
+                            crushftp.handlers.Common.updateObjectLogOnly("add " + request.getProperty("usernames"), "users/" + request.getProperty("serverGroup") + "/inheritance/" + request.getProperty("group_name"), log_summary);
                         } else if (request.getProperty("data_action", "").equals("delete")) {
                             String[] usernames;
                             groups = UserTools.getGroups(request.getProperty("serverGroup"));
@@ -2283,7 +2466,7 @@ lbl192:
                             if (!request.containsKey("usernames")) {
                                 request.put("usernames", request.getProperty("username", ""));
                             }
-                            if ((usernames = com.crushftp.client.Common.html_clean_usernames(Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"))).length == 0 || request.getProperty("usernames").equals("")) {
+                            if ((usernames = Common.html_clean_usernames(crushftp.handlers.Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"))).length == 0 || request.getProperty("usernames").equals("")) {
                                 groups.remove(request.getProperty("group_name"));
                             } else {
                                 int x = 0;
@@ -2292,17 +2475,17 @@ lbl192:
                                     ++x;
                                 }
                             }
-                            Common.updateObjectLogOnly("delete " + request.getProperty("usernames"), "users/" + request.getProperty("serverGroup") + "/groups/" + request.getProperty("group_name"), log_summary);
+                            crushftp.handlers.Common.updateObjectLogOnly("delete " + request.getProperty("usernames"), "users/" + request.getProperty("serverGroup") + "/groups/" + request.getProperty("group_name"), log_summary);
                         } else {
-                            groups = (Properties)Common.readXMLObjectError(new ByteArrayInputStream(Common.url_decode(request.getProperty("groups").replace('+', ' ')).getBytes("UTF8")));
+                            groups = (Properties)crushftp.handlers.Common.readXMLObjectError(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(request.getProperty("groups").replace('+', ' ')).getBytes("UTF8")));
                             Properties groups_original = UserTools.getGroups(request.getProperty("serverGroup"));
-                            Common.updateObjectLog(groups, groups_original, "users/" + request.getProperty("serverGroup") + "/groups", false, log_summary);
+                            crushftp.handlers.Common.updateObjectLog(groups, groups_original, "users/" + request.getProperty("serverGroup") + "/groups", false, log_summary);
                         }
                         if (groups == null) {
                             groups = new Properties();
                         }
                         UserTools.writeGroups(request.getProperty("serverGroup"), groups, true, request);
-                        break block100;
+                        break block112;
                     }
                     if (request.getProperty("xmlItem", "").equals("inheritance")) {
                         Properties inheritances = null;
@@ -2311,7 +2494,7 @@ lbl192:
                             if (!request.containsKey("usernames")) {
                                 request.put("usernames", request.getProperty("username", ""));
                             }
-                            String[] usernames = com.crushftp.client.Common.html_clean_usernames(Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"));
+                            String[] usernames = Common.html_clean_usernames(crushftp.handlers.Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"));
                             int x = 0;
                             while (x < usernames.length) {
                                 Vector<String> inherit = (Vector<String>)inheritances.get(usernames[x]);
@@ -2322,14 +2505,14 @@ lbl192:
                                 inheritances.put(usernames[x], inherit);
                                 ++x;
                             }
-                            Common.updateObjectLogOnly("add " + request.getProperty("usernames"), "users/" + request.getProperty("serverGroup") + "/inheritance/" + request.getProperty("inheritance_name"), log_summary);
+                            crushftp.handlers.Common.updateObjectLogOnly("add " + request.getProperty("usernames"), "users/" + request.getProperty("serverGroup") + "/inheritance/" + request.getProperty("inheritance_name"), log_summary);
                         } else if (request.getProperty("data_action", "").equals("delete")) {
                             String[] usernames;
                             inheritances = UserTools.getInheritance(request.getProperty("serverGroup"));
                             if (!request.containsKey("usernames")) {
                                 request.put("usernames", request.getProperty("username", ""));
                             }
-                            if ((usernames = com.crushftp.client.Common.html_clean_usernames(Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"))).length == 0 || request.getProperty("usernames").equals("")) {
+                            if ((usernames = Common.html_clean_usernames(crushftp.handlers.Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"))).length == 0 || request.getProperty("usernames").equals("")) {
                                 Enumeration<Object> keys = inheritances.keys();
                                 while (keys.hasMoreElements()) {
                                     String key = keys.nextElement().toString();
@@ -2356,9 +2539,9 @@ lbl192:
                                     ++x;
                                 }
                             }
-                            Common.updateObjectLogOnly("delete " + request.getProperty("usernames"), "users/" + request.getProperty("serverGroup") + "/inheritance/" + request.getProperty("inheritance_name"), log_summary);
+                            crushftp.handlers.Common.updateObjectLogOnly("delete " + request.getProperty("usernames"), "users/" + request.getProperty("serverGroup") + "/inheritance/" + request.getProperty("inheritance_name"), log_summary);
                         } else {
-                            inheritances = (Properties)Common.readXMLObjectError(new ByteArrayInputStream(Common.url_decode(request.getProperty("inheritance").replace('+', ' ')).getBytes("UTF8")));
+                            inheritances = (Properties)crushftp.handlers.Common.readXMLObjectError(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(request.getProperty("inheritance").replace('+', ' ')).getBytes("UTF8")));
                             if (!request.getProperty("old_username", "").equals("")) {
                                 Enumeration<Object> keys = inheritances.keys();
                                 while (keys.hasMoreElements()) {
@@ -2369,38 +2552,38 @@ lbl192:
                                 }
                             }
                             Properties inheritances_original = UserTools.getInheritance(request.getProperty("serverGroup"));
-                            Common.updateObjectLog(inheritances, inheritances_original, "users/" + request.getProperty("serverGroup") + "/inheritance", false, log_summary);
+                            crushftp.handlers.Common.updateObjectLog(inheritances, inheritances_original, "users/" + request.getProperty("serverGroup") + "/inheritance", false, log_summary);
                         }
                         if (inheritances == null) {
                             inheritances = new Properties();
                         }
                         UserTools.writeInheritance(request.getProperty("serverGroup"), inheritances, true, request);
-                        break block100;
+                        break block112;
                     }
                     if (request.getProperty("xmlItem", "").equals("user")) {
                         if (!request.containsKey("usernames")) {
                             request.put("usernames", request.getProperty("username", ""));
                         }
-                        String[] usernames = com.crushftp.client.Common.html_clean_usernames(Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"));
+                        String[] usernames = Common.html_clean_usernames(crushftp.handlers.Common.url_decode(request.getProperty("usernames").replace('+', ' ')).split(";"));
                         int x = 0;
                         while (x < usernames.length) {
-                            String username = usernames[x].trim();
-                            if (!username.equals("")) {
+                            String username = crushftp.handlers.Common.dots(usernames[x].trim());
+                            if (!(username.equals("") || username.equals("/") || username.equals(".") || username.equals("./"))) {
                                 if (request.getProperty("data_action").equals("delete")) {
                                     Properties user;
                                     if (request.getProperty("expire_user", "false").equals("true") && (user = UserTools.ut.getUser(request.getProperty("serverGroup"), username, true)) != null) {
                                         UserTools.expireUserVFSTask(user, request.getProperty("serverGroup"), username);
                                     }
-                                    Common.updateObjectLogOnly("delete ", "users/" + request.getProperty("serverGroup") + "/" + username, log_summary);
+                                    crushftp.handlers.Common.updateObjectLogOnly("delete ", "users/" + request.getProperty("serverGroup") + "/" + username, log_summary);
                                     UserTools.deleteUser(request.getProperty("serverGroup"), username);
                                     Vector user_list = new Vector();
                                     UserTools.refreshUserList(request.getProperty("serverGroup"), user_list);
                                     int xx = 0;
                                     while (xx < user_list.size()) {
                                         File_S f;
-                                        String newUser = com.crushftp.client.Common.dots(user_list.elementAt(xx).toString());
+                                        String newUser = Common.dots(user_list.elementAt(xx).toString());
                                         if (newUser.toUpperCase().endsWith(".SHARED") && (f = new File_S(String.valueOf(System.getProperty("crushftp.users")) + "/" + request.getProperty("serverGroup") + "/" + newUser + "/VFS/Shares/" + username)).exists()) {
-                                            Common.recurseDelete(f.getCanonicalPath(), false);
+                                            crushftp.handlers.Common.recurseDelete(f.getCanonicalPath(), false);
                                             f = new File_S(String.valueOf(System.getProperty("crushftp.users")) + "/" + request.getProperty("serverGroup") + "/" + newUser + "/VFS/Shares/");
                                             if (f.listFiles() == null || f.listFiles().length == 0) {
                                                 UserTools.deleteUser(request.getProperty("serverGroup"), newUser);
@@ -2421,8 +2604,8 @@ lbl192:
                                                     ++loop;
                                                 }
                                                 if (username.equalsIgnoreCase(pp.getProperty("M"))) {
-                                                    Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "storage/" + pp.getProperty("U") + pp.getProperty("P"), false);
-                                                    Common.recurseDelete_U(accounts[xx2].getCanonicalPath(), false);
+                                                    crushftp.handlers.Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "storage/" + pp.getProperty("U") + pp.getProperty("P"), false);
+                                                    crushftp.handlers.Common.recurseDelete_U(accounts[xx2].getCanonicalPath(), false);
                                                 }
                                             }
                                         }
@@ -2432,23 +2615,29 @@ lbl192:
                                         ++xx2;
                                     }
                                 } else {
+                                    String bcc;
                                     Properties old_user;
                                     Properties template;
+                                    Vector events;
                                     Properties default_user = UserTools.ut.getUser(request.getProperty("serverGroup"), "default", false);
                                     Properties new_user = new Properties();
                                     if (!request.getProperty("user", "").equals("")) {
-                                        new_user = (Properties)Common.readXMLObject(new ByteArrayInputStream(Common.url_decode(request.getProperty("user").replace('+', ' ')).getBytes("UTF8")));
+                                        new_user = (Properties)crushftp.handlers.Common.readXMLObject(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(request.getProperty("user").replace('+', ' ')).getBytes("UTF8")));
                                     }
                                     new_user.put("userVersion", "6");
                                     if (new_user.containsKey("password")) {
                                         Properties old_user2;
                                         if (!new_user.getProperty("password").equals("SHA3:XXXXXXXXXXXXXXXXXXXX")) {
+                                            Properties user_tmp;
                                             if (thisSession != null) {
                                                 Log.log("SERVER", 0, String.valueOf(username) + " password changed by admin (" + thisSession.uiSG("user_name") + ").");
                                             }
                                             String pass = new_user.getProperty("password", "");
                                             if (new_user.getProperty("salt", "").equals("") && default_user.getProperty("salt", "").equalsIgnoreCase("random")) {
-                                                new_user.put("salt", Common.makeBoundary(8));
+                                                new_user.put("salt", crushftp.handlers.Common.makeBoundary(8));
+                                            }
+                                            if ((user_tmp = UserTools.ut.getUser(request.getProperty("serverGroup"), username, true)) != null && !user_tmp.getProperty("salt", "").equals("")) {
+                                                new_user.put("salt", user_tmp.getProperty("salt"));
                                             }
                                             if (!(pass.startsWith("SHA:") || pass.startsWith("SHA512:") || pass.startsWith("SHA256:") || pass.startsWith("SHA3:") || pass.startsWith("MD5:") || pass.startsWith("CRYPT3:") || pass.startsWith("BCRYPT:") || pass.startsWith("MD5CRYPT:") || pass.startsWith("PBKDF2SHA256:") || pass.startsWith("SHA512CRYPT:") || pass.startsWith("ARGOND:"))) {
                                                 pass = ServerStatus.thisObj.common_code.encode_pass(pass, ServerStatus.SG("password_encryption"), new_user.getProperty("salt", ""));
@@ -2456,7 +2645,20 @@ lbl192:
                                             } else {
                                                 new_user.put("password", pass);
                                             }
-                                        } else if (!request.getProperty("old_username", "").equals("") && (old_user2 = UserTools.ut.getUser(request.getProperty("serverGroup"), Common.url_decode(request.getProperty("old_username", "")).replace('+', ' '), false)) != null) {
+                                            try {
+                                                ServerStatus serverStatus = ServerStatus.thisObj;
+                                                long rid = serverStatus.statTools.u();
+                                                String user_ip = "0.0.0.0";
+                                                if (thisSession != null) {
+                                                    user_ip = thisSession.uiSG("user_ip");
+                                                }
+                                                ServerStatus.thisObj.statTools.add_login_stat("CHANGE_PASS", username, user_ip, true, String.valueOf(request.getProperty("serverGroup")) + "_ADMIN_INITIATED_" + crushftp.handlers.Common.makeBoundary(), rid);
+                                                ServerStatus.thisObj.statTools.executeSql(ServerStatus.SG("stats_update_sessions"), new Object[]{new Date(), rid});
+                                            }
+                                            catch (Exception e) {
+                                                Log.log("SERVER", 0, e);
+                                            }
+                                        } else if (!request.getProperty("old_username", "").equals("") && (old_user2 = UserTools.ut.getUser(request.getProperty("serverGroup"), crushftp.handlers.Common.url_decode(request.getProperty("old_username", "")).replace('+', ' '), false)) != null) {
                                             new_user.put("password", old_user2.getProperty("password", ""));
                                         }
                                     }
@@ -2494,11 +2696,11 @@ lbl192:
                                                     }
                                                     if (request.getProperty("old_username", "").equalsIgnoreCase(pp.getProperty("M"))) {
                                                         String folderName = "u=" + pp.getProperty("U") + ",,p=" + pp.getProperty("P") + ",,m=" + username + ",,t=" + pp.getProperty("T") + ",,ex=" + pp.getProperty("EX");
-                                                        Properties info = (Properties)Common.readXMLObject_U(String.valueOf(accounts[xx].getPath()) + "/INFO.XML");
+                                                        Properties info = (Properties)crushftp.handlers.Common.readXMLObject_U(String.valueOf(accounts[xx].getPath()) + "/INFO.XML");
                                                         info.put("master", username);
                                                         info.put("account_path", String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + folderName + "/");
                                                         accounts[xx].renameTo(new File_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + folderName + "/"));
-                                                        Common.writeXMLObject_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + folderName + "/" + "INFO.XML", info, "INFO");
+                                                        crushftp.handlers.Common.writeXMLObject_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + folderName + "/" + "INFO.XML", info, "INFO");
                                                     }
                                                 }
                                             }
@@ -2526,7 +2728,7 @@ lbl192:
                                         if (user != null && !user.getProperty("created_by_email", "").equals("")) {
                                             new_user.put("created_by_email", user.getProperty("created_by_email", ""));
                                         }
-                                        Common.updateObjectLog(new_user, user, "users/" + request.getProperty("serverGroup") + "/" + username, true, log_summary);
+                                        crushftp.handlers.Common.updateObjectLog(new_user, user, "users/" + request.getProperty("serverGroup") + "/" + username, true, log_summary);
                                         new_user = user;
                                     }
                                     if (request.getProperty("data_action").equals("replace")) {
@@ -2541,15 +2743,15 @@ lbl192:
                                             new_user.put("created_by_email", user.getProperty("created_by_email", ""));
                                         }
                                         if (user != null) {
-                                            Common.updateObjectLog(new_user, user, "users/" + request.getProperty("serverGroup") + "/" + username, false, log_summary);
+                                            crushftp.handlers.Common.updateObjectLog(new_user, user, "users/" + request.getProperty("serverGroup") + "/" + username, false, log_summary);
                                         }
                                     }
                                     if (request.getProperty("data_action").equals("new")) {
                                         if (new_user.getProperty("password").equals("SHA3:XXXXXXXXXXXXXXXXXXXX")) {
                                             new_user.put("password", "");
                                         }
-                                        Common.updateObjectLogOnly("new ", "users/" + request.getProperty("serverGroup") + "/" + username, log_summary);
-                                        Common.updateObjectLog(new_user, new Properties(), "users/" + request.getProperty("serverGroup") + "/" + username, false, new StringBuffer());
+                                        crushftp.handlers.Common.updateObjectLogOnly("new ", "users/" + request.getProperty("serverGroup") + "/" + username, log_summary);
+                                        crushftp.handlers.Common.updateObjectLog(new_user, new Properties(), "users/" + request.getProperty("serverGroup") + "/" + username, false, new StringBuffer());
                                         new_user.put("created_time", String.valueOf(System.currentTimeMillis()));
                                         if (thisSession != null && thisSession.uiSG("user_name") != null) {
                                             new_user.put("created_by_username", thisSession.uiSG("user_name"));
@@ -2575,7 +2777,7 @@ lbl192:
                                         if (user != null && !user.getProperty("created_by_email", "").equals("")) {
                                             new_user.put("created_by_email", user.getProperty("created_by_email", ""));
                                         }
-                                        Common.updateObjectLogOnly(request.getProperty("update_remove_key", ""), "users/" + request.getProperty("serverGroup") + "/" + username, log_summary);
+                                        crushftp.handlers.Common.updateObjectLogOnly(request.getProperty("update_remove_key", ""), "users/" + request.getProperty("serverGroup") + "/" + username, log_summary);
                                         String[] keys = request.getProperty("update_remove_key", "").split(";");
                                         int xx = 0;
                                         while (xx < keys.length) {
@@ -2584,6 +2786,36 @@ lbl192:
                                         }
                                         new_user = user;
                                     }
+                                    if ((events = (Vector)new_user.get("events")) != null) {
+                                        int xx = events.size() - 1;
+                                        while (xx >= 0) {
+                                            Properties event = (Properties)events.elementAt(xx);
+                                            if (event.getProperty("linkUser") != null && !event.getProperty("linkUser").equals("")) {
+                                                boolean found_user = false;
+                                                Properties linkUser = UserTools.ut.getUser(request.getProperty("serverGroup"), event.getProperty("linkUser"), true);
+                                                Vector events2 = null;
+                                                if (linkUser != null) {
+                                                    events2 = (Vector)linkUser.get("events");
+                                                    found_user = true;
+                                                }
+                                                boolean found_event = false;
+                                                int xxx = 0;
+                                                while (found_user && events2 != null && xxx < events2.size()) {
+                                                    Properties event2 = (Properties)events2.elementAt(xxx);
+                                                    if (event2.getProperty("name", "").equals(event.getProperty("linkEvent", ""))) {
+                                                        found_event = true;
+                                                        break;
+                                                    }
+                                                    ++xxx;
+                                                }
+                                                if (!found_user || !found_event) {
+                                                    events.removeElementAt(xx);
+                                                    Log.log("SERVER", 0, "Removed dead event:" + username + " event linked user=" + event.getProperty("linkUser") + " event linked name=" + event.getProperty("linkEvent", ""));
+                                                }
+                                            }
+                                            --xx;
+                                        }
+                                    }
                                     UserTools.writeUser(request.getProperty("serverGroup"), username, new_user, true, true, request);
                                     UserTools.ut.getUser(request.getProperty("serverGroup"), username, true);
                                     Log.log("HTTP_SERVER", 1, "Updated user :" + username);
@@ -2591,22 +2823,22 @@ lbl192:
                                         UserTools.writeVFS(request.getProperty("serverGroup"), username, (Properties)AdminControls.processVFSSubmission((Properties)request, (String)username, (String)site, (SessionCrush)thisSession, (boolean)true, (StringBuffer)log_summary).homes.elementAt(0), true, request);
                                         Log.log("HTTP_SERVER", 1, "Updated user vfs :" + username);
                                     }
-                                    if ((template = Common.get_email_template("Change Email")) != null && (old_user = UserTools.ut.getUser(request.getProperty("serverGroup"), username, false)) != null && new_user != null && !old_user.getProperty("email", "").equals(new_user.getProperty("email", ""))) {
+                                    if ((template = crushftp.handlers.Common.get_email_template("Change Email")) != null && (old_user = UserTools.ut.getUser(request.getProperty("serverGroup"), username, false)) != null && new_user != null && !old_user.getProperty("email", "").equals(new_user.getProperty("email", ""))) {
                                         String body = template.getProperty("emailBody");
-                                        body = Common.replace_str(body, "{old_email}", old_user.getProperty("email"));
-                                        body = Common.replace_str(body, "{new_email}", new_user.getProperty("email"));
-                                        body = Common.replace_str(body, "{summary}", log_summary.toString());
+                                        body = crushftp.handlers.Common.replace_str(body, "{old_email}", old_user.getProperty("email"));
+                                        body = crushftp.handlers.Common.replace_str(body, "{new_email}", new_user.getProperty("email"));
+                                        body = crushftp.handlers.Common.replace_str(body, "{summary}", log_summary.toString());
                                         String subject = template.getProperty("emailSubject");
-                                        subject = Common.replace_str(subject, "{old_email}", old_user.getProperty("email"));
-                                        subject = Common.replace_str(subject, "{new_email}", new_user.getProperty("email"));
-                                        subject = Common.replace_str(subject, "{summary}", log_summary.toString());
+                                        subject = crushftp.handlers.Common.replace_str(subject, "{old_email}", old_user.getProperty("email"));
+                                        subject = crushftp.handlers.Common.replace_str(subject, "{new_email}", new_user.getProperty("email"));
+                                        subject = crushftp.handlers.Common.replace_str(subject, "{summary}", log_summary.toString());
                                         new_user.put("username", username);
                                         new_user.put("user_name", username);
                                         body = ServerStatus.change_vars_to_values_static(body, new_user, new_user, null);
                                         subject = ServerStatus.change_vars_to_values_static(subject, new_user, new_user, null);
                                         String cc = ServerStatus.change_vars_to_values_static(template.getProperty("emailCC"), new_user, new_user, null);
-                                        String bcc = ServerStatus.change_vars_to_values_static(template.getProperty("emailBCC"), new_user, new_user, null);
-                                        Properties email_info = new Properties();
+                                        String bcc2 = ServerStatus.change_vars_to_values_static(template.getProperty("emailBCC"), new_user, new_user, null);
+                                        final Properties email_info = new Properties();
                                         email_info.put("server", ServerStatus.SG("smtp_server"));
                                         email_info.put("user", ServerStatus.SG("smtp_user"));
                                         email_info.put("pass", ServerStatus.SG("smtp_pass"));
@@ -2616,25 +2848,36 @@ lbl192:
                                         email_info.put("reply_to", template.getProperty("emailReplyTo"));
                                         email_info.put("to", String.valueOf(new_user.getProperty("email")) + "," + old_user.getProperty("email"));
                                         email_info.put("cc", cc);
-                                        email_info.put("bcc", bcc);
+                                        email_info.put("bcc", bcc2);
                                         email_info.put("subject", subject);
                                         email_info.put("body", body);
-                                        ServerStatus.thisObj.sendEmail(email_info);
+                                        Worker.startWorker(new Runnable(){
+
+                                            @Override
+                                            public void run() {
+                                                try {
+                                                    ServerStatus.thisObj.sendEmail(email_info);
+                                                }
+                                                catch (Exception e) {
+                                                    Log.log("SERVER", 1, e);
+                                                }
+                                            }
+                                        }, "Send Change Email");
                                     }
-                                    if ((template = Common.get_email_template("Change User Email")) != null) {
+                                    if ((template = crushftp.handlers.Common.get_email_template("Change User Email")) != null) {
                                         String body = template.getProperty("emailBody");
-                                        body = Common.replace_str(body, "{new_email}", new_user.getProperty("email"));
-                                        body = Common.replace_str(body, "{summary}", log_summary.toString());
+                                        body = crushftp.handlers.Common.replace_str(body, "{new_email}", new_user.getProperty("email"));
+                                        body = crushftp.handlers.Common.replace_str(body, "{summary}", log_summary.toString());
                                         String subject = template.getProperty("emailSubject");
-                                        subject = Common.replace_str(subject, "{new_email}", new_user.getProperty("email"));
-                                        subject = Common.replace_str(subject, "{summary}", log_summary.toString());
+                                        subject = crushftp.handlers.Common.replace_str(subject, "{new_email}", new_user.getProperty("email"));
+                                        subject = crushftp.handlers.Common.replace_str(subject, "{summary}", log_summary.toString());
                                         new_user.put("username", username);
                                         new_user.put("user_name", username);
                                         body = ServerStatus.change_vars_to_values_static(body, new_user, new_user, null);
                                         subject = ServerStatus.change_vars_to_values_static(subject, new_user, new_user, null);
                                         String cc = ServerStatus.change_vars_to_values_static(template.getProperty("emailCC"), new_user, new_user, null);
-                                        String bcc = ServerStatus.change_vars_to_values_static(template.getProperty("emailBCC"), new_user, new_user, null);
-                                        Properties email_info = new Properties();
+                                        bcc = ServerStatus.change_vars_to_values_static(template.getProperty("emailBCC"), new_user, new_user, null);
+                                        final Properties email_info = new Properties();
                                         email_info.put("server", ServerStatus.SG("smtp_server"));
                                         email_info.put("user", ServerStatus.SG("smtp_user"));
                                         email_info.put("pass", ServerStatus.SG("smtp_pass"));
@@ -2647,14 +2890,62 @@ lbl192:
                                         email_info.put("bcc", bcc);
                                         email_info.put("subject", subject);
                                         email_info.put("body", body);
-                                        ServerStatus.thisObj.sendEmail(email_info);
+                                        Worker.startWorker(new Runnable(){
+
+                                            @Override
+                                            public void run() {
+                                                try {
+                                                    ServerStatus.thisObj.sendEmail(email_info);
+                                                }
+                                                catch (Exception e) {
+                                                    Log.log("SERVER", 1, e);
+                                                }
+                                            }
+                                        }, "Send Change User Email");
+                                    }
+                                    if (request.getProperty("data_action").equals("new") && (template = crushftp.handlers.Common.get_email_template("New User Email")) != null) {
+                                        String body = template.getProperty("emailBody");
+                                        body = crushftp.handlers.Common.replace_str(body, "{user_email}", new_user.getProperty("email"));
+                                        String subject = template.getProperty("emailSubject");
+                                        subject = crushftp.handlers.Common.replace_str(subject, "{user_email}", new_user.getProperty("email"));
+                                        new_user.put("username", username);
+                                        new_user.put("user_name", username);
+                                        body = ServerStatus.change_vars_to_values_static(body, new_user, new_user, null);
+                                        subject = ServerStatus.change_vars_to_values_static(subject, new_user, new_user, null);
+                                        String cc = ServerStatus.change_vars_to_values_static(template.getProperty("emailCC"), new_user, new_user, null);
+                                        bcc = ServerStatus.change_vars_to_values_static(template.getProperty("emailBCC"), new_user, new_user, null);
+                                        final Properties email_info = new Properties();
+                                        email_info.put("server", ServerStatus.SG("smtp_server"));
+                                        email_info.put("user", ServerStatus.SG("smtp_user"));
+                                        email_info.put("pass", ServerStatus.SG("smtp_pass"));
+                                        email_info.put("ssl", ServerStatus.SG("smtp_ssl"));
+                                        email_info.put("html", ServerStatus.SG("smtp_html"));
+                                        email_info.put("from", template.getProperty("emailFrom"));
+                                        email_info.put("reply_to", template.getProperty("emailReplyTo"));
+                                        email_info.put("to", cc);
+                                        email_info.put("cc", cc);
+                                        email_info.put("bcc", bcc);
+                                        email_info.put("subject", subject);
+                                        email_info.put("body", body);
+                                        Worker.startWorker(new Runnable(){
+
+                                            @Override
+                                            public void run() {
+                                                try {
+                                                    ServerStatus.thisObj.sendEmail(email_info);
+                                                }
+                                                catch (Exception e) {
+                                                    Log.log("SERVER", 1, e);
+                                                }
+                                            }
+                                        }, "Send New User Email");
                                     }
                                 }
                                 UserTools.ut.forceMemoryReload(username);
                             }
                             ++x;
                         }
-                        break block100;
+                        break block112;
                     }
                     status = "Unknown xmlItem:" + request.getProperty("xmlitem");
                 }
@@ -2671,9 +2962,9 @@ lbl192:
         return status;
     }
 
-    public static Properties getUserList(Properties request, String site, SessionCrush thisSession) {
+    public static Properties getUserList(Properties request, String site, SessionCrush thisSession) throws Exception {
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -2685,10 +2976,27 @@ lbl192:
                 return null;
             }
         }
-        if (site.indexOf("(CONNECT)") < 0) {
-            request.put("serverGroup", thisSession.server_item.getProperty("linkedServer"));
+        if (site.indexOf("(CONNECT)") < 0 && thisSession != null && thisSession.server_item != null) {
+            if (ServerStatus.BG("user_manager_admin_all_connection_groups") && site.indexOf("(USER_VIEW)") > 0) {
+                request.put("serverGroup", request.getProperty("serverGroup", "MainUsers").equals(request.getProperty("serverGroup_original", "MainUsers")) ? thisSession.server_item.getProperty("linkedServer") : request.getProperty("serverGroup_original", "MainUsers"));
+            } else {
+                request.put("serverGroup", thisSession.server_item.getProperty("linkedServer"));
+            }
         }
         Vector list = new Vector();
+        if (request.getProperty("serverGroup").equals("@AutoDomain")) {
+            String serverGroup = request.getProperty("serverGroup");
+            String username = thisSession.uiSG("user_name");
+            if (username.indexOf("@") > 0) {
+                String newLinkedServer = username.split("@")[username.split("@").length - 1];
+                String newLinkedServer2 = Common.dots(newLinkedServer);
+                if (newLinkedServer.equals(newLinkedServer2 = newLinkedServer2.replace('/', '-').replace('\\', '-').replace('%', '-').replace(':', '-').replace(';', '-'))) {
+                    username = username.substring(0, username.lastIndexOf("@"));
+                    serverGroup = newLinkedServer;
+                }
+            }
+            request.put("serverGroup", serverGroup);
+        }
         UserTools.refreshUserList(request.getProperty("serverGroup"), list);
         if (site.indexOf("(CONNECT)") < 0 && site.indexOf("(USER_VIEW)") < 0 && site.indexOf("(USER_EDIT)") < 0) {
             list = AdminControls.getLimitedAdminUserList(request, thisSession, list);
@@ -2698,8 +3006,11 @@ lbl192:
         return user_list;
     }
 
-    private static Vector getLimitedAdminUserList(Properties request, SessionCrush thisSession, Vector list) {
+    public static Vector getLimitedAdminUserList(Properties request, SessionCrush thisSession, Vector list) throws Exception {
         String groupName = thisSession.getAdminGroupName(request);
+        if (groupName.equals("Limited Admin : Group name was not specified!")) {
+            throw new Exception(groupName);
+        }
         Properties info = UserTools.getAllowedUsers(groupName, request.getProperty("serverGroup"), list);
         Properties info2 = UserTools.getAllowedUsers("pendingSelfRegistration", request.getProperty("serverGroup"), list);
         list = (Vector)info.get("list");
@@ -2719,7 +3030,7 @@ lbl192:
     static Object getUserXML(Properties request, String site, SessionCrush session) {
         try {
             if (!request.getProperty("instance", "").equals("")) {
-                String id = Common.makeBoundary();
+                String id = crushftp.handlers.Common.makeBoundary();
                 String instance = request.remove("instance").toString();
                 DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
                 Properties p = DMZServerCommon.getResponse(id, 20);
@@ -2767,27 +3078,27 @@ lbl192:
         Properties item;
         VRL vrl;
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             Properties p = DMZServerCommon.getResponse(id, 20);
             return (Properties)p.get("data");
         }
-        if (site.indexOf("(CONNECT)") < 0) {
+        if (site.indexOf("(CONNECT)") < 0 && thisSession != null && thisSession.server_item != null) {
             request.put("serverGroup", thisSession.server_item.getProperty("linkedServer"));
         }
-        String username = Common.url_decode(request.getProperty("username", "").replace('+', ' '));
+        String username = crushftp.handlers.Common.url_decode(request.getProperty("username", "").replace('+', ' '));
         String parentUser = null;
-        String path = Common.url_decode(request.getProperty("path", "").replace('+', ' '));
+        String path = crushftp.handlers.Common.url_decode(request.getProperty("path", "").replace('+', ' '));
         if (!path.startsWith("/")) {
             path = "/" + path;
         }
         if (!path.endsWith("/")) {
             path = String.valueOf(path) + "/";
         }
-        path = com.crushftp.client.Common.dots(path);
+        path = Common.dots(path);
         VFS tempVFS = AdminControls.processVFSSubmission(request, username, site, thisSession, false, new StringBuffer());
-        if (site.indexOf("(CONNECT)") < 0 && site.indexOf("(USER_VIEW)") < 0 && site.indexOf("(USER_EDIT)") < 0 && site.indexOf("(JOB_EDIT)") < 0 && (vrl = new VRL((item = tempVFS.get_item(path)).getProperty("url"))).getProtocol().equalsIgnoreCase("file")) {
+        if (site.indexOf("(CONNECT)") < 0 && site.indexOf("(USER_VIEW)") < 0 && site.indexOf("(USER_EDIT)") < 0 && (site.indexOf("(JOB_EDIT)") < 0 || site.indexOf("(USER_ADMIN") >= 0 && site.indexOf("(JOB_EDIT)") >= 0) && (vrl = new VRL((item = tempVFS.get_item(path)).getProperty("url"))).getProtocol().equalsIgnoreCase("file")) {
             String groupName;
             Properties info = (Properties)thisSession.get("user_admin_info");
             Vector list = (Vector)info.get("list");
@@ -2795,6 +3106,45 @@ lbl192:
                 throw new Exception("Username " + username + " not found.");
             }
             parentUser = groupName = thisSession.getAdminGroupName(request);
+            if (!UserTools.parentPathOK(request.getProperty("serverGroup"), parentUser, item.getProperty("url"))) {
+                throw new Exception("Invalid VFS item config:" + path);
+            }
+        }
+        if (request.getProperty("command", "").equals("testVFS") || request.getProperty("isTestCall", "").toLowerCase().equals("true")) {
+            item = null;
+            int x = 0;
+            while (x < tempVFS.homes.size()) {
+                String root_path;
+                Properties tempVirtual = (Properties)tempVFS.homes.elementAt(x);
+                if (tempVirtual.containsKey(root_path = tempVFS.getRootVFS(path, x))) {
+                    VRL vrl2;
+                    Properties p = (Properties)tempVirtual.get(root_path);
+                    Properties vItem = null;
+                    try {
+                        vItem = tempVFS.vItemPick((Vector)p.get("vItems"));
+                    }
+                    catch (Exception e) {
+                        Log.log("SERVER", 0, "Invalid VFS item config:" + path);
+                        Log.log("SERVER", 1, e);
+                        throw e;
+                    }
+                    if (vItem != null && vItem.containsKey("url") && (vrl2 = new VRL(vItem.getProperty("url"))).getProtocol().toLowerCase().equals("s3")) {
+                        String error = "";
+                        if (!vrl2.getPath().endsWith("/")) {
+                            error = "VFS item:" + path + " Missing slash from the end of the url!";
+                        }
+                        if (vrl2.toString().substring(4).contains("//")) {
+                            error = "VFS item: Double slash in url!";
+                        }
+                        if (!error.equals("")) {
+                            Properties ep = new Properties();
+                            ep.put("error", error);
+                            return ep;
+                        }
+                    }
+                }
+                ++x;
+            }
         }
         if (request.getProperty("command", "").equals("testVFS")) {
             Properties parent_item = tempVFS.get_item_parent(path);
@@ -2816,18 +3166,18 @@ lbl192:
 
     public static Properties getAdminXMLListing(Properties request, SessionCrush thisSession, String site) throws Exception {
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             Properties p = DMZServerCommon.getResponse(id, 20);
             return (Properties)p.get("data");
         }
-        String path = Common.url_decode(request.getProperty("path", "").replace('+', ' '));
+        String path = crushftp.handlers.Common.url_decode(request.getProperty("path", "").replace('+', ' '));
         if (path.startsWith("///") && !path.startsWith("////")) {
             path = "/" + path;
         }
         if (path.startsWith("~")) {
-            path = Common.replace_str(path, "~", System.getProperty("user.home"));
+            path = crushftp.handlers.Common.replace_str(path, "~", System.getProperty("user.home"));
         }
         if (!path.startsWith("/")) {
             path = "/" + path;
@@ -2838,16 +3188,16 @@ lbl192:
         try {
             File_B[] items = new File_B[]{};
             if (request.getProperty("file_mode", "").equals("server")) {
-                if (!new File_S(path).exists() && Common.machine_is_x()) {
+                if (!new File_S(path).exists() && crushftp.handlers.Common.machine_is_x()) {
                     path = "/Volumes" + path;
                 }
-                path = com.crushftp.client.Common.dots(path);
+                path = Common.dots(path);
                 items = AdminControls.getFileItems(path);
             } else {
-                if (!new File_U(path).exists() && Common.machine_is_x()) {
+                if (!new File_U(path).exists() && crushftp.handlers.Common.machine_is_x()) {
                     path = "/Volumes" + path;
                 }
-                path = com.crushftp.client.Common.dots(path);
+                path = Common.dots(path);
                 items = AdminControls.getFileItems_U(path);
             }
             Vector<Properties> listing = new Vector<Properties>();
@@ -2855,14 +3205,14 @@ lbl192:
             while (x < items.length) {
                 Properties p = new Properties();
                 p.put("name", items[x].getName());
-                p.put("path", Common.all_but_last(items[x].getPath()));
+                p.put("path", crushftp.handlers.Common.all_but_last(items[x].getPath()));
                 p.put("type", items[x].isDirectory() ? "DIR" : "FILE");
                 p.put("size", String.valueOf(items[x].length()));
-                if (Common.machine_is_windows() && path.equals("/")) {
+                if (crushftp.handlers.Common.machine_is_windows() && path.equals("/")) {
                     p.put("name", items[x].getPath().substring(0, 2));
                     p.put("path", "/");
                 }
-                p.put("boot", String.valueOf(path.equals("/") && Common.machine_is_x() && !items[x].getCanonicalPath().startsWith("/Volumes/")));
+                p.put("boot", String.valueOf(path.equals("/") && crushftp.handlers.Common.machine_is_x() && !items[x].getCanonicalPath().startsWith("/Volumes/")));
                 p.put("privs", "(read)(view)");
                 p.put("owner", "user");
                 p.put("group", "group");
@@ -2885,9 +3235,9 @@ lbl192:
         }
     }
 
-    public static Properties searchUserSettings(Properties request, String site, SessionCrush thisSession) {
+    public static Properties searchUserSettings(Properties request, String site, SessionCrush thisSession) throws Exception {
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -2914,6 +3264,9 @@ lbl192:
         }
         Vector<Properties> result_list = new Vector<Properties>();
         Properties inheritance = UserTools.getInheritance(request.getProperty("serverGroup"));
+        if (request.getProperty("search_text").equalsIgnoreCase("disabled")) {
+            request.put("search_text", "-1");
+        }
         int x = 0;
         while (x < list.size()) {
             String username = list.elementAt(x).toString();
@@ -2958,9 +3311,9 @@ lbl192:
 
     private static File_B[] getFileItems(String path) {
         File_B[] items = null;
-        if (path.equals("/") && Common.machine_is_x()) {
+        if (path.equals("/") && crushftp.handlers.Common.machine_is_x()) {
             try {
-                File_B[] other_volumes = Common.convert_files_to_files_both(new File_S("/Volumes/").listFiles());
+                File_B[] other_volumes = crushftp.handlers.Common.convert_files_to_files_both(new File_S("/Volumes/").listFiles());
                 if (other_volumes == null) {
                     other_volumes = new File_B[]{new File_B(new File_S("/"))};
                 }
@@ -2973,16 +3326,16 @@ lbl192:
             }
             catch (Exception exception) {}
         } else {
-            items = path.equals("/") && Common.machine_is_windows() ? Common.convert_files_to_files_both(File_S.listRoots()) : Common.convert_files_to_files_both(new File_S(path).listFiles());
+            items = path.equals("/") && crushftp.handlers.Common.machine_is_windows() ? crushftp.handlers.Common.convert_files_to_files_both(File_S.listRoots()) : crushftp.handlers.Common.convert_files_to_files_both(new File_S(path).listFiles());
         }
         return items;
     }
 
     private static File_B[] getFileItems_U(String path) {
         File_B[] items = null;
-        if (path.equals("/") && Common.machine_is_x()) {
+        if (path.equals("/") && crushftp.handlers.Common.machine_is_x()) {
             try {
-                File_B[] other_volumes = Common.convert_files_to_files_both(new File_U("/Volumes/").listFiles());
+                File_B[] other_volumes = crushftp.handlers.Common.convert_files_to_files_both(new File_U("/Volumes/").listFiles());
                 if (other_volumes == null) {
                     other_volumes = new File_B[]{new File_B(new File_U("/"))};
                 }
@@ -2995,14 +3348,14 @@ lbl192:
             }
             catch (Exception exception) {}
         } else {
-            items = path.equals("/") && Common.machine_is_windows() ? Common.convert_files_to_files_both(File_U.listRoots()) : Common.convert_files_to_files_both(new File_U(path).listFiles());
+            items = path.equals("/") && crushftp.handlers.Common.machine_is_windows() ? crushftp.handlers.Common.convert_files_to_files_both(File_U.listRoots()) : crushftp.handlers.Common.convert_files_to_files_both(new File_U(path).listFiles());
         }
         return items;
     }
 
     public static Properties getLog(Properties request, String site) throws IOException {
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -3018,8 +3371,8 @@ lbl192:
             return null;
         }
         if (site.indexOf("(LOG_ACCESS)") < 0 && (site.indexOf("(JOB_LIST_HISTORY)") >= 0 || site.indexOf("(JOB_VIEW)") >= 0 || site.indexOf("(JOB_RUN)") >= 0)) {
-            String job_log_path = String.valueOf(new File_S(Common.all_but_last(System.getProperty("crushftp.log_location", "./"))).getCanonicalFile().getPath().replace('\\', '/')) + "/logs/jobs/";
-            String user_log = Common.dots(request.getProperty("log_file", ""));
+            String job_log_path = String.valueOf(new File_S(crushftp.handlers.Common.all_but_last(System.getProperty("crushftp.log_location", "./"))).getCanonicalFile().getPath().replace('\\', '/')) + "/logs/jobs/";
+            String user_log = crushftp.handlers.Common.dots(request.getProperty("log_file", ""));
             if (!request.getProperty("log_file", "").equals("") && !user_log.startsWith(job_log_path)) {
                 Properties log = new Properties();
                 log.put("log_start_date", "" + new Date());
@@ -3035,6 +3388,35 @@ lbl192:
         return LoggingProviderDisk.getLogSegmentStatic(Long.parseLong(request.getProperty("segment_start", "0")), Long.parseLong(request.getProperty("segment_len", "32768")), request.getProperty("log_file", ""));
     }
 
+    public static Properties getLogSnippet(Properties request, String site) throws Exception {
+        if (!request.getProperty("instance", "").equals("")) {
+            String id = crushftp.handlers.Common.makeBoundary();
+            String instance = request.remove("instance").toString();
+            DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
+            try {
+                Properties p = DMZServerCommon.getResponse(id, 20);
+                return (Properties)p.get("data");
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+                return null;
+            }
+        }
+        if (site.indexOf("(CONNECT)") < 0 && site.indexOf("(LOG_ACCESS)") < 0) {
+            Properties log = new Properties();
+            log.put("log_start_date", "" + new Date());
+            log.put("log_end_date", "" + new Date());
+            log.put("log_segment", "********************************************************************************************************************\r\nAccess denied!\r\n********************************************************************************************************************\r\n");
+            log.put("log_start", "0");
+            log.put("log_end", "0");
+            log.put("log_max", "0");
+            log.put("log_data", "");
+            return log;
+        }
+        SimpleDateFormat log_date_format = new SimpleDateFormat(ServerStatus.SG("log_date_format"), Locale.US);
+        return LoggingProviderDisk.getLogSnippet(request.getProperty("start", "0"), request.getProperty("end", "0"));
+    }
+
     static String buildXML(Object o, String key, String status) {
         String xml = "";
         if (o instanceof String) {
@@ -3043,8 +3425,8 @@ lbl192:
         }
         try {
             if (o != null) {
-                Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
-                xml = Common.getXMLString(o, key, null);
+                crushftp.handlers.Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
+                xml = crushftp.handlers.Common.getXMLString(o, key, null);
                 if (xml.startsWith("<?")) {
                     xml = xml.substring(xml.indexOf("?>") + 2).trim();
                 }
@@ -3076,7 +3458,7 @@ lbl192:
         String[] admin_ips = ("127.0.0.1," + ServerStatus.SG("admin_ips")).split(",");
         int x = 0;
         while (x < admin_ips.length && !allowed) {
-            if (!admin_ips[x].trim().equals("") && com.crushftp.client.Common.do_search(admin_ips[x].trim(), user_ip, false, 0)) {
+            if (!admin_ips[x].trim().equals("") && Common.do_search(admin_ips[x].trim(), user_ip, false, 0)) {
                 allowed = true;
             }
             ++x;
@@ -3114,6 +3496,9 @@ lbl192:
         if (command.equalsIgnoreCase("addJob") && site.indexOf("(JOB_EDIT)") >= 0) {
             return true;
         }
+        if (command.equalsIgnoreCase("addToJobs") && site.indexOf("(JOB_EDIT)") >= 0) {
+            return true;
+        }
         if (command.equalsIgnoreCase("getStatHistory") && site.indexOf("(SERVER_VIEW)") >= 0) {
             return true;
         }
@@ -3135,6 +3520,9 @@ lbl192:
         if (command.equalsIgnoreCase("getLog") && (site.indexOf("(LOG_ACCESS)") >= 0 || site.indexOf("(JOB_LIST_HISTORY)") >= 0 || site.indexOf("(JOB_VIEW)") >= 0 || site.indexOf("(JOB_RUN)") >= 0)) {
             return true;
         }
+        if (command.equalsIgnoreCase("getLogSnippet") && site.indexOf("(LOG_ACCESS)") >= 0) {
+            return true;
+        }
         if (command.equalsIgnoreCase("getServerRoots") && (site.indexOf("(JOB_EDIT)") >= 0 || site.indexOf("(JOB_VIEW)") >= 0 || site.indexOf("(JOB_LIST_HISTORY)") >= 0 || site.indexOf("(JOB_MONITOR)") >= 0 || site.indexOf("(JOB_RUN)") >= 0)) {
             return true;
         }
@@ -3144,10 +3532,13 @@ lbl192:
         if (command.equalsIgnoreCase("getDashboardHistory") && (site.indexOf("(SERVER_VIEW)") >= 0 || site.indexOf("(SERVER_EDIT)") >= 0)) {
             return true;
         }
+        if (command.equalsIgnoreCase("getDataFlowItems") && (site.indexOf("(SERVER_VIEW)") >= 0 || site.indexOf("(SERVER_EDIT)") >= 0)) {
+            return true;
+        }
         if (command.equalsIgnoreCase("getServerInfoItems") && (site.indexOf("(USER_ADMIN)") >= 0 || site.indexOf("(SERVER_VIEW)") >= 0 || site.indexOf("(SERVER_EDIT)") >= 0)) {
             return true;
         }
-        if (command.equalsIgnoreCase("getServerSettingItems") && (site.indexOf("(USER_EDIT)") >= 0 || site.indexOf("(SERVER_VIEW)") >= 0 || site.indexOf("(SERVER_EDIT)") >= 0 || site.indexOf("(USER_ADMIN)") >= 0)) {
+        if (command.equalsIgnoreCase("getServerSettingItems") && (site.indexOf("(USER_EDIT)") >= 0 || site.indexOf("(USER_VIEW)") >= 0 || site.indexOf("(SERVER_VIEW)") >= 0 || site.indexOf("(SERVER_EDIT)") >= 0 || site.indexOf("(USER_ADMIN)") >= 0)) {
             return true;
         }
         if (command.equalsIgnoreCase("setServerItem") && site.indexOf("(PREF_EDIT)") >= 0) {
@@ -3187,6 +3578,9 @@ lbl192:
             return true;
         }
         if (command.equalsIgnoreCase("getUserInfo") && (site.indexOf("(SERVER_EDIT)") >= 0 || site.indexOf("(SERVER_VIEW)") >= 0)) {
+            return true;
+        }
+        if (command.equalsIgnoreCase("msgUser") && (site.indexOf("(SERVER_EDIT)") >= 0 || site.indexOf("(SERVER_VIEW)") >= 0)) {
             return true;
         }
         if (command.equalsIgnoreCase("startAllServers") && (site.indexOf("(SERVER_EDIT)") >= 0 || site.indexOf("(PREF_EDIT)") >= 0)) {
@@ -3243,6 +3637,9 @@ lbl192:
         if (command.equalsIgnoreCase("getRestartShutdownIdleStatus") && site.indexOf("(UPDATE_RUN)") >= 0) {
             return true;
         }
+        if (command.equalsIgnoreCase("updateIdle") && site.indexOf("(UPDATE_RUN)") >= 0) {
+            return true;
+        }
         if (command.equalsIgnoreCase("restartIdle") && site.indexOf("(UPDATE_RUN)") >= 0) {
             return true;
         }
@@ -3255,10 +3652,16 @@ lbl192:
         if (command.equalsIgnoreCase("startLogins") && site.indexOf("(UPDATE_RUN)") >= 0) {
             return true;
         }
+        if (command.equalsIgnoreCase("unblockUsername") && site.indexOf("(USER_ADMIN)") >= 0) {
+            return true;
+        }
         if (command.equalsIgnoreCase("checkForUpdate") && site.indexOf("(UPDATE_RUN)") >= 0) {
             return true;
         }
         if (command.equalsIgnoreCase("updateWebNow") && site.indexOf("(UPDATE_RUN)") >= 0) {
+            return true;
+        }
+        if (command.equalsIgnoreCase("prometheusMetrics") && (site.indexOf("(SERVER_VIEW)") >= 0 || site.indexOf("(SERVER_EDIT)") >= 0)) {
             return true;
         }
         if (command.equalsIgnoreCase("updateNowProgress") && site.indexOf("(UPDATE_RUN)") >= 0) {
@@ -3354,7 +3757,7 @@ lbl192:
         if (command.equalsIgnoreCase("convertXMLSQLUsers") && site.indexOf("(PREF_EDIT)") >= 0) {
             return true;
         }
-        if (command.equalsIgnoreCase("registerCrushFTP") && (site.indexOf("(SERVER_EDIT)") >= 0 || site.indexOf("(PREF_EDIT)") >= 0)) {
+        if (command.equalsIgnoreCase("register" + System.getProperty("appname", "CrushFTP")) && (site.indexOf("(SERVER_EDIT)") >= 0 || site.indexOf("(PREF_EDIT)") >= 0)) {
             return true;
         }
         if (command.equalsIgnoreCase("setReportSchedules") && (site.indexOf("(REPORT_EDIT)") >= 0 || site.indexOf("(PREF_EDIT)") >= 0)) {
@@ -3363,16 +3766,31 @@ lbl192:
         if (command.equalsIgnoreCase("deleteReportSchedules") && (site.indexOf("(REPORT_EDIT)") >= 0 || site.indexOf("(PREF_EDIT)") >= 0)) {
             return true;
         }
-        return command.equalsIgnoreCase("searchUserSettings") && (site.indexOf("(USER_ADMIN)") >= 0 || site.indexOf("(USER_EDIT)") >= 0 || site.indexOf("(USER_VIEW)") >= 0);
+        if (command.equalsIgnoreCase("searchUserSettings") && (site.indexOf("(USER_ADMIN)") >= 0 || site.indexOf("(USER_EDIT)") >= 0 || site.indexOf("(USER_VIEW)") >= 0)) {
+            return true;
+        }
+        if (command.equalsIgnoreCase("loadKeyStores") && site.indexOf("(SERVER_EDIT)") >= 0) {
+            return true;
+        }
+        if (command.equalsIgnoreCase("saveKeyStores") && site.indexOf("(SERVER_EDIT)") >= 0) {
+            return true;
+        }
+        if (command.equalsIgnoreCase("clearCache") && site.indexOf("(SERVER_EDIT)") >= 0) {
+            return true;
+        }
+        if (command.equalsIgnoreCase("testAllVFS") && (site.indexOf("(USER_ADMIN)") >= 0 || site.indexOf("(USER_EDIT)") >= 0)) {
+            return true;
+        }
+        return command.equalsIgnoreCase("agentList") && (site.indexOf("(JOB_RUN)") >= 0 || site.indexOf("(JOB_EDIT)") >= 0);
     }
 
     public static Object adminAction(Properties request, String site, String user_ip) {
         String status;
-        block49: {
+        block64: {
             status = "";
             try {
                 if (!request.getProperty("instance", "").equals("") && AdminControls.checkRole("getServerItem", site, user_ip)) {
-                    String id = Common.makeBoundary();
+                    String id = crushftp.handlers.Common.makeBoundary();
                     String instance = request.remove("instance").toString();
                     DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
                     Properties p = DMZServerCommon.getResponse(id, 20);
@@ -3414,7 +3832,7 @@ lbl192:
                         }
                         --x2;
                     }
-                    break block49;
+                    break block64;
                 }
                 if ((request.getProperty("action", "").equals("ban") || request.getProperty("action", "").equals("temporaryBan")) && AdminControls.checkRole("ban", site, user_ip)) {
                     v.addAll(ServerStatus.siVG("recent_user_list"));
@@ -3462,7 +3880,7 @@ lbl192:
                         }
                         --x3;
                     }
-                    break block49;
+                    break block64;
                 }
                 if (request.getProperty("action", "").equals("getUserInfo") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip)) {
                     v.addAll(ServerStatus.siVG("recent_user_list"));
@@ -3478,6 +3896,25 @@ lbl192:
                             ++xx;
                         }
                         --x4;
+                    }
+                } else if (request.getProperty("action", "").equals("msgUser") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip)) {
+                    status = "Not found";
+                    v.addAll(ServerStatus.siVG("recent_user_list"));
+                    int x5 = v.size() - 1;
+                    while (x5 >= 0) {
+                        Properties user_info = (Properties)v.elementAt(x5);
+                        int xx = 0;
+                        while (xx < indexes.size()) {
+                            if (user_info.getProperty("user_number").equals(indexes.elementAt(xx).toString())) {
+                                String msg = user_info.getProperty("admin_message", "");
+                                msg = String.valueOf(msg) + "\r\n\r\n" + request.getProperty("message", "");
+                                msg = msg.trim();
+                                user_info.put("admin_message", msg);
+                                status = "OK";
+                            }
+                            ++xx;
+                        }
+                        --x5;
                     }
                 } else if (request.getProperty("action", "").equals("startAllServers") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip)) {
                     ServerStatus.thisObj.start_all_servers();
@@ -3519,8 +3956,34 @@ lbl192:
                 } else if (request.getProperty("action", "").equals("clearMaxTransferAmounts") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip)) {
                     ServerStatus.thisObj.statTools.clearMaxTransferAmounts(request);
                     status = "OK";
-                } else if (request.getProperty("action", "").equals("newFolder") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip) ? !(status = AdminControls.newFolder(request, site, true)).equalsIgnoreCase("OK") : (request.getProperty("action", "").equals("renameItem") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip) ? !(status = AdminControls.renameItem(request, site, true)).equalsIgnoreCase("OK") : (request.getProperty("action", "").equals("duplicateItem") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip) ? !(status = AdminControls.duplicateItem(request, site, true)).equalsIgnoreCase("OK") : request.getProperty("action", "").equals("deleteItem") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip) && !(status = AdminControls.deleteItem(request, site, true)).equalsIgnoreCase("OK")))) {
-                    throw new Exception(status);
+                } else if (request.getProperty("action", "").equals("newFolder") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip)) {
+                    String path = crushftp.handlers.Common.url_decode(request.getProperty("path", ""));
+                    request.put("path", path);
+                    status = AdminControls.newFolder(request, site, true);
+                    if (!status.equalsIgnoreCase("OK")) {
+                        throw new Exception(status);
+                    }
+                } else if (request.getProperty("action", "").equals("renameItem") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip)) {
+                    String path = crushftp.handlers.Common.url_decode(request.getProperty("path", ""));
+                    request.put("path", path);
+                    status = AdminControls.renameItem(request, site, true);
+                    if (!status.equalsIgnoreCase("OK")) {
+                        throw new Exception(status);
+                    }
+                } else if (request.getProperty("action", "").equals("duplicateItem") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip)) {
+                    String path = crushftp.handlers.Common.url_decode(request.getProperty("path", ""));
+                    request.put("path", path);
+                    status = AdminControls.duplicateItem(request, site, true);
+                    if (!status.equalsIgnoreCase("OK")) {
+                        throw new Exception(status);
+                    }
+                } else if (request.getProperty("action", "").equals("deleteItem") && AdminControls.checkRole(request.getProperty("action", ""), site, user_ip)) {
+                    String path = crushftp.handlers.Common.url_decode(request.getProperty("path", ""));
+                    request.put("path", path);
+                    status = AdminControls.deleteItem(request, site, true);
+                    if (!status.equalsIgnoreCase("OK")) {
+                        throw new Exception(status);
+                    }
                 }
             }
             catch (Exception e) {
@@ -3535,11 +3998,11 @@ lbl192:
         String response = "<?xml version=\"1.0\" encoding=\"UTF-8\"?> \r\n";
         String xml = "";
         try {
-            String s = AdminControls.handleInstance(request, site);
+            String s = AdminControls.handleInstance(request, site, 120);
             if (s != null) {
                 return s;
             }
-            ServerStatus.thisObj.do_auto_update_early(false);
+            ServerStatus.thisObj.do_auto_update_early(false, request.getProperty("single_thread", "false").equals("true"));
             xml = "Success";
         }
         catch (Exception e) {
@@ -3573,7 +4036,7 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            ServerStatus.thisObj.do_auto_update_early(true);
+            ServerStatus.thisObj.do_auto_update_early(true, false);
             xml = "Success";
         }
         catch (Exception e) {
@@ -3637,6 +4100,7 @@ lbl192:
             xml2 = String.valueOf(xml2) + "<shutdown_when_idle>" + ServerStatus.siBG("shutdown_when_idle") + "</shutdown_when_idle>";
             xml2 = String.valueOf(xml2) + "<current_server_downloading_count>" + ServerStatus.thisObj.count_users_down() + "</current_server_downloading_count>";
             xml2 = String.valueOf(xml2) + "<current_server_uploading_count>" + ServerStatus.thisObj.count_users_up() + "</current_server_uploading_count>";
+            xml2 = String.valueOf(xml2) + "<current_jobs_running_count>" + ServerStatus.siVG("running_tasks").size() + "</current_jobs_running_count>";
         }
         catch (Exception e) {
             Log.log("HTTP_SERVER", 1, e);
@@ -3656,6 +4120,26 @@ lbl192:
             }
             AdminControls.stopLogins(request, site);
             ServerStatus.siPUT("restart_when_idle", "true");
+            xml = "Success";
+        }
+        catch (Exception e) {
+            Log.log("HTTP_SERVER", 1, e);
+            xml = e.toString();
+        }
+        response = String.valueOf(response) + "<result><response>" + xml + "</response></result>";
+        return response;
+    }
+
+    public static String updateIdle(Properties request, String site) {
+        String response = "<?xml version=\"1.0\" encoding=\"UTF-8\"?> \r\n";
+        String xml = "";
+        try {
+            String s = AdminControls.handleInstance(request, site);
+            if (s != null) {
+                return s;
+            }
+            AdminControls.stopLogins(request, site);
+            ServerStatus.siPUT("update_when_idle", "true");
             xml = "Success";
         }
         catch (Exception e) {
@@ -3736,8 +4220,157 @@ lbl192:
             Log.log("HTTP_SERVER", 1, e);
             response = String.valueOf(response) + e.toString();
         }
-        response = String.valueOf(response) + com.crushftp.client.Common.dumpStack(String.valueOf(ServerStatus.version_info_str) + ServerStatus.sub_version_info_str);
+        response = String.valueOf(response) + Common.dumpStack(String.valueOf(ServerStatus.version_info_str) + ServerStatus.sub_version_info_str);
         return response;
+    }
+
+    public static String prometheusMetrics(Properties request, String site) {
+        Enumeration<Object> keys;
+        String response = "";
+        try {
+            String s = AdminControls.handleInstance(request, site);
+            if (s != null) {
+                return s;
+            }
+        }
+        catch (Exception e) {
+            Log.log("HTTP_SERVER", 1, e);
+            response = String.valueOf(response) + e.toString();
+        }
+        response = String.valueOf(response) + "# HELP " + System.getProperty("appname", "CrushFTP").toLowerCase() + "_info version and build info.\n";
+        response = String.valueOf(response) + "# TYPE " + System.getProperty("appname", "CrushFTP").toLowerCase() + "_info untyped\n";
+        response = String.valueOf(response) + System.getProperty("appname", "CrushFTP") + "_info{version=\"" + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str") + "\", jvm_version=\"" + System.getProperty("java.version") + "\", jvm_bit=\"" + System.getProperty("sun.arch.data.model") + "\", jvm_os=\"" + System.getProperties().getProperty("os.name") + "\", jvm_cores=\"" + Runtime.getRuntime().availableProcessors() + "\"} 1.0\n";
+        response = String.valueOf(response) + "\n";
+        if (request.getProperty("type", "").indexOf("server_info") >= 0) {
+            keys = ServerStatus.thisObj.server_info.keys();
+            while (keys.hasMoreElements()) {
+                String key = "" + keys.nextElement();
+                if (key.indexOf("registration") >= 0 || key.indexOf("max_max") >= 0 || key.indexOf("server_list") >= 0) continue;
+                response = String.valueOf(response) + AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_" + key, ServerStatus.thisObj.server_info.getProperty(key), "gauge");
+            }
+            response = String.valueOf(response) + AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_" + "version_info", String.valueOf(crushftp.handlers.Common.replace_str(ServerStatus.thisObj.server_info.getProperty("version_info_str"), ".", "")) + "." + ServerStatus.thisObj.server_info.getProperty("sub_version_info_str"), "gauge");
+            response = String.valueOf(response) + AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_" + "update_version_info", crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(ServerStatus.thisObj.server_info.getProperty("update_available_version"), ".", ""), "_", "."), "gauge");
+            try {
+                int dmz_num = 0;
+                int x = 0;
+                while (x < ServerStatus.thisObj.main_servers.size()) {
+                    GenericServer o = (GenericServer)ServerStatus.thisObj.main_servers.elementAt(x);
+                    if (o instanceof DMZServer5) {
+                        ++dmz_num;
+                        Properties dmz5_info = ((DMZServer5)o).dmz_tunnel_client_d5.dmz5_info;
+                        keys = dmz5_info.keys();
+                        while (keys.hasMoreElements()) {
+                            String key = "" + keys.nextElement();
+                            response = String.valueOf(response) + AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_dmz" + dmz_num + "_" + key, dmz5_info.getProperty(key), "gauge");
+                        }
+                        response = String.valueOf(response) + AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_dmz" + dmz_num + "_" + "version_info", String.valueOf(crushftp.handlers.Common.replace_str(dmz5_info.getProperty("version_info_str"), ".", "")) + "." + dmz5_info.getProperty("sub_version_info_str"), "gauge");
+                        response = String.valueOf(response) + AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_dmz" + dmz_num + "_" + "update_version_info", crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(dmz5_info.getProperty("update_available_version"), ".", ""), "_", "."), "gauge");
+                    }
+                    ++x;
+                }
+            }
+            catch (Throwable t) {
+                Log.log("SERVER", 1, t);
+            }
+        }
+        if (request.getProperty("type", "").indexOf("server_list") >= 0 || request.getProperty("type", "").indexOf("server_info") >= 0) {
+            Vector server_list = ServerStatus.VG("server_list");
+            int x = 0;
+            while (x < server_list.size()) {
+                Properties p2 = (Properties)server_list.elementAt(x);
+                p2 = (Properties)p2.clone();
+                String key = "";
+                key = "running";
+                AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_server_list_" + x + "_" + key, "" + p2.remove(key), "gauge");
+                key = "connected_users";
+                AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_server_list_" + x + "_" + key, "" + p2.remove(key), "gauge");
+                key = "enabled";
+                AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_server_list_" + x + "_" + key, "" + p2.remove(key), "gauge");
+                GenericServer the_server = (GenericServer)ServerStatus.thisObj.main_servers.elementAt(x);
+                AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_server_list_" + x + "_connection_number", String.valueOf(the_server.connection_number), "gauge");
+                key = "connection_number";
+                p2.remove(key);
+                response = String.valueOf(response) + AdminControls.prometheus_properties_entry(p2, String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_info_server_list");
+                ++x;
+            }
+        }
+        if (request.getProperty("type", "").indexOf("server_prefs") >= 0) {
+            keys = ServerStatus.server_settings.keys();
+            while (keys.hasMoreElements()) {
+                String key = "" + keys.nextElement();
+                if (key.indexOf("registration") >= 0 || key.indexOf("max_max") >= 0) continue;
+                response = String.valueOf(response) + AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_prefs_" + key, ServerStatus.server_settings.getProperty(key), "gauge");
+            }
+        }
+        if (request.getProperty("type", "").indexOf("system_properties") >= 0) {
+            keys = System.getProperties().keys();
+            while (keys.hasMoreElements()) {
+                String key = "" + keys.nextElement();
+                response = String.valueOf(response) + AdminControls.prometheus_entry(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_prefs_" + key, String.valueOf(System.getProperties().getProperty(key)), "gauge");
+            }
+        }
+        if (request.getProperty("type", "").indexOf("crushbalance") >= 0) {
+            String key = "server_cpu";
+            response = String.valueOf(response) + AdminControls.prometheus_entry(key, ServerStatus.thisObj.server_info.getProperty(key), "gauge");
+            key = "os_cpu";
+            response = String.valueOf(response) + AdminControls.prometheus_entry(key, ServerStatus.thisObj.server_info.getProperty(key), "gauge");
+            key = "ram_used_percent";
+            response = String.valueOf(response) + AdminControls.prometheus_entry(key, ServerStatus.thisObj.server_info.getProperty(key), "gauge");
+            key = "thread_pool_busy";
+            response = String.valueOf(response) + AdminControls.prometheus_entry(key, ServerStatus.thisObj.server_info.getProperty(key), "gauge");
+            key = "server_total_throughput";
+            response = String.valueOf(response) + AdminControls.prometheus_entry(key, String.valueOf(ServerStatus.calc_server_speeds(null, null)), "gauge");
+        }
+        return response;
+    }
+
+    public static String prometheus_entry(String key, String val, String type) {
+        String original_key = key;
+        if (val == null) {
+            return "";
+        }
+        try {
+            if (val.equals("false")) {
+                key = String.valueOf(key) + "_bool";
+                val = "0";
+            } else if (val.equals("true")) {
+                key = String.valueOf(key) + "_bool";
+                val = "1";
+            }
+            Float.parseFloat(val);
+        }
+        catch (Exception e) {
+            return "";
+        }
+        key = key.replace('.', '_');
+        key = key.toLowerCase();
+        String s = "";
+        s = String.valueOf(s) + "# HELP " + key + " " + original_key + ".\n";
+        s = String.valueOf(s) + "# TYPE " + key + " " + type + "\n";
+        s = String.valueOf(s) + key + " " + val + "\n";
+        s = String.valueOf(s) + "\n";
+        return s;
+    }
+
+    public static String prometheus_properties_entry(Properties p, String key_name) {
+        String type = "gauge";
+        String s = "";
+        s = String.valueOf(s) + "# HELP " + key_name + " " + key_name + ".\n";
+        s = String.valueOf(s) + "# TYPE " + key_name + " " + type + "\n";
+        s = String.valueOf(s) + key_name + " {";
+        Enumeration<Object> keys = p.keys();
+        int count = 0;
+        while (keys.hasMoreElements()) {
+            String key = "" + keys.nextElement();
+            String val = String.valueOf(p.getProperty(key));
+            if (count > 0) {
+                s = String.valueOf(s) + ", ";
+            }
+            s = String.valueOf(s) + key + "=\"" + val.replace('\"', '_') + "\"";
+            ++count;
+        }
+        s = String.valueOf(s) + "} 1\n";
+        return s;
     }
 
     public static String dumpHeap(Properties request, String site) {
@@ -3756,6 +4389,252 @@ lbl192:
         return response;
     }
 
+    static String upload_debug_info(Properties request, String site) {
+        try {
+            File_S log_file;
+            GenericClient c = null;
+            String filename = "debug_" + crushftp.handlers.Common.dots(ServerStatus.SG("registration_email")) + "_" + ServerStatus.hostname + "_" + new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date()) + "_" + crushftp.handlers.Common.makeBoundary(3) + (Common.dmz_mode ? "_dmz" : "") + ".zip";
+            OutputStream dump_out = (OutputStream)request.remove("outputstream");
+            InputStream dump_in = (InputStream)request.remove("inputstream");
+            ByteArrayOutputStream baos = null;
+            String s = AdminControls.handleInstance(request, site, 300);
+            if (s != null && s.length() > 200) {
+                ObjectInputStream oois = new ObjectInputStream(new ByteArrayInputStream(Base64.decode(s)));
+                Properties response = (Properties)oois.readObject();
+                byte[] b = (byte[])response.remove("b");
+                filename = response.getProperty("filename");
+                String fake_headers = "HTTP/1.0 200 OK\r\nContent-Type: application/binary\r\nConnection: close\r\nContent-Disposition: attachment; filename=\"" + filename + "\"\r\nX-UA-Compatible: chrome=1\r\n\r\n";
+                if (dump_out != null) {
+                    dump_out.write(fake_headers.getBytes("UTF8"));
+                }
+                if (dump_out != null) {
+                    dump_out.write(b);
+                }
+                if (request.getProperty("send", "true").equals("true")) {
+                    c = crushftp.handlers.Common.getClient("https://www." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".com/", "debug upload", null);
+                    c.login("supportfiles_auto", "8UAn3Qd62Z", "");
+                    OutputStream out2 = c.upload("/" + filename, 0L, true, true);
+                    out2.write(b);
+                    out2.close();
+                    try {
+                        c.close();
+                    }
+                    catch (Exception exception) {
+                        // empty catch block
+                    }
+                }
+                if (dump_out != null) {
+                    dump_out.close();
+                }
+                return filename;
+            }
+            if (s != null) {
+                return s;
+            }
+            ZipArchiveOutputStream zout1 = null;
+            ZipArchiveOutputStream zout2 = null;
+            if (request.getProperty("send", "true").equals("true") || Common.dmz_mode) {
+                try {
+                    if (Common.dmz_mode) {
+                        throw new Exception("dmz");
+                    }
+                    c = crushftp.handlers.Common.getClient("https://www." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".com/", "debug upload", null);
+                    c.login("supportfiles_auto", "8UAn3Qd62Z", "");
+                    zout1 = new ZipArchiveOutputStream(c.upload("/" + filename, 0L, true, true));
+                    zout1.setLevel(9);
+                }
+                catch (Exception e) {
+                    baos = new ByteArrayOutputStream();
+                    zout1 = new ZipArchiveOutputStream((OutputStream)baos);
+                    zout1.setLevel(9);
+                    e.printStackTrace();
+                    Log.log("SERVER", 1, e);
+                }
+            }
+            if (dump_in != null) {
+                BufferedInputStream bin = new BufferedInputStream(dump_in);
+                while (bin.available() > 0) {
+                    bin.read();
+                }
+            }
+            if (dump_out != null) {
+                String fake_headers = "HTTP/1.0 200 OK\r\nContent-Type: application/binary\r\nConnection: close\r\nContent-Disposition: attachment; filename=\"" + filename + "\"\r\nX-UA-Compatible: chrome=1\r\n\r\n";
+                dump_out.write(fake_headers.getBytes("UTF8"));
+                dump_out.flush();
+                zout2 = new ZipArchiveOutputStream(dump_out);
+                zout2.setLevel(9);
+            }
+            int x = 0;
+            while (x < Integer.parseInt(request.getProperty("threads", "30"))) {
+                String dump = Common.dumpStack("Thread Dump by Port");
+                ZipArchiveEntry zae = new ZipArchiveEntry("thread_dump_" + x + ".txt");
+                if (zout1 != null) {
+                    zout1.putArchiveEntry((ArchiveEntry)zae);
+                }
+                if (zout2 != null) {
+                    zout2.putArchiveEntry((ArchiveEntry)zae);
+                }
+                if (zout1 != null) {
+                    zout1.write(dump.getBytes("UTF8"));
+                }
+                if (zout2 != null) {
+                    zout2.write(dump.getBytes("UTF8"));
+                }
+                if (zout1 != null) {
+                    zout1.closeArchiveEntry();
+                }
+                if (zout2 != null) {
+                    zout2.closeArchiveEntry();
+                }
+                if (zout1 != null) {
+                    zout1.flush();
+                }
+                if (zout2 != null) {
+                    zout2.flush();
+                }
+                Thread.sleep(3000L);
+                ++x;
+            }
+            String memory_threads = "Server Memory Stats: Max=" + Common.format_bytes_short2(ServerStatus.siLG("ram_max")) + ", Free=" + Common.format_bytes_short2(ServerStatus.siLG("ram_free")) + ", Threads:" + Worker.busyWorkers.size() + ", " + System.getProperty("java.version") + ":" + System.getProperty("sun.arch.data.model") + " bit," + Runtime.getRuntime().availableProcessors() + "cores  OS:" + System.getProperties().getProperty("os.name") + " CPU usage Server/OS:" + ServerStatus.siSG("server_cpu") + "/" + ServerStatus.siSG("os_cpu") + " OpenFiles:" + ServerStatus.siSG("open_files") + "/" + ServerStatus.siSG("max_open_files") + ", statsDB size=" + Common.format_bytes_short(Common.recurseSize("./statsDB", 0L)) + " :" + ServerStatus.siSG("version_info_str") + ServerStatus.siSG("sub_version_info_str");
+            ZipArchiveEntry zae = new ZipArchiveEntry("info.txt");
+            if (zout1 != null) {
+                zout1.putArchiveEntry((ArchiveEntry)zae);
+            }
+            if (zout2 != null) {
+                zout2.putArchiveEntry((ArchiveEntry)zae);
+            }
+            if (zout1 != null) {
+                zout1.write(memory_threads.getBytes());
+            }
+            if (zout1 != null) {
+                zout1.write("\r\n".getBytes());
+            }
+            if (zout1 != null) {
+                zout1.write(crushftp.handlers.Common.url_decode(ServerStatus.SG("registration_name")).getBytes());
+            }
+            if (zout1 != null) {
+                zout1.write("\r\n".getBytes());
+            }
+            if (zout1 != null) {
+                zout1.write(ServerStatus.SG("registration_email").getBytes());
+            }
+            if (zout1 != null) {
+                zout1.write("\r\n".getBytes());
+            }
+            if (zout1 != null) {
+                zout1.write(ServerStatus.SG("registration_code").getBytes());
+            }
+            if (zout1 != null) {
+                zout1.write("\r\n".getBytes());
+            }
+            if (zout2 != null) {
+                zout2.write(memory_threads.getBytes());
+            }
+            if (zout2 != null) {
+                zout2.write("\r\n".getBytes());
+            }
+            if (zout2 != null) {
+                zout2.write(crushftp.handlers.Common.url_decode(ServerStatus.SG("registration_name")).getBytes());
+            }
+            if (zout2 != null) {
+                zout2.write("\r\n".getBytes());
+            }
+            if (zout2 != null) {
+                zout2.write(ServerStatus.SG("registration_email").getBytes());
+            }
+            if (zout2 != null) {
+                zout2.write("\r\n".getBytes());
+            }
+            if (zout2 != null) {
+                zout2.write(ServerStatus.SG("registration_code").getBytes());
+            }
+            if (zout2 != null) {
+                zout2.write("\r\n".getBytes());
+            }
+            if (zout1 != null) {
+                zout1.closeArchiveEntry();
+            }
+            if (zout1 != null) {
+                zout1.flush();
+            }
+            if (zout2 != null) {
+                zout2.closeArchiveEntry();
+            }
+            if (zout2 != null) {
+                zout2.flush();
+            }
+            if ((log_file = new File_S(ServerStatus.change_vars_to_values_static(ServerStatus.SG("log_location"), null, null, null))).exists()) {
+                RandomAccessFile raf;
+                zae = new ZipArchiveEntry(String.valueOf(System.getProperty("appname", "CrushFTP")) + "_" + ServerStatus.hostname + "_recent" + (Common.dmz_mode ? "_dmz" : "") + ".log");
+                if (zout1 != null) {
+                    zout1.putArchiveEntry((ArchiveEntry)zae);
+                }
+                if (zout2 != null) {
+                    zout2.putArchiveEntry((ArchiveEntry)zae);
+                }
+                if ((raf = new RandomAccessFile(log_file.getPath(), "r")).length() > 0x3200000L) {
+                    raf.seek(raf.length() - 0x3200000L);
+                }
+                int bytes_read = 0;
+                byte[] b = new byte[32768];
+                while (bytes_read >= 0) {
+                    bytes_read = raf.read(b);
+                    if (zout1 != null && bytes_read > 0) {
+                        zout1.write(b, 0, bytes_read);
+                    }
+                    if (zout2 == null || bytes_read <= 0) continue;
+                    zout2.write(b, 0, bytes_read);
+                }
+                if (zout1 != null) {
+                    zout1.closeArchiveEntry();
+                }
+                if (zout2 != null) {
+                    zout2.closeArchiveEntry();
+                }
+            }
+            if (zout1 != null) {
+                zout1.flush();
+            }
+            if (zout2 != null) {
+                zout2.flush();
+            }
+            if (zout1 != null) {
+                zout1.finish();
+            }
+            if (zout2 != null) {
+                zout2.finish();
+            }
+            if (zout1 != null) {
+                zout1.close();
+            }
+            if (zout2 != null) {
+                zout2.close();
+            }
+            if (dump_out != null) {
+                dump_out.close();
+            }
+            if (c != null) {
+                c.close();
+            }
+            if (baos != null) {
+                request.put("dmz", String.valueOf(Common.dmz_mode));
+                request.put("b", baos.toByteArray());
+                request.put("filename", filename);
+                ByteArrayOutputStream baos2 = new ByteArrayOutputStream();
+                ObjectOutputStream oos = new ObjectOutputStream(baos2);
+                oos.writeObject(request);
+                oos.close();
+                baos2.close();
+                return Base64.encodeBytes(baos2.toByteArray());
+            }
+            return filename;
+        }
+        catch (Exception e) {
+            Log.log("SERVER", 1, e);
+            return e.toString();
+        }
+    }
+
     public static String pgpGenerateKeyPair(Properties request, String site) {
         String xml = "";
         try {
@@ -3763,13 +4642,13 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            String pass = VRL.vrlDecode(Common.url_decode(request.getProperty("pgpPrivateKeyPasswordGenerate")));
-            String url = Common.url_decode(request.getProperty("pgpPivateKeyPathGenerate").replace('+', ' '));
+            String pass = VRL.vrlDecode(crushftp.handlers.Common.url_decode(request.getProperty("pgpPrivateKeyPasswordGenerate")));
+            String url = crushftp.handlers.Common.url_decode(request.getProperty("pgpPivateKeyPathGenerate").replace('+', ' '));
             String pgp_key_path = new VRL(url).getPath();
             if (request.containsKey("encryption_cypher")) {
-                com.crushftp.client.Common.generateKeyPair(pgp_key_path, Integer.parseInt(request.getProperty("pgpKeySizeGenerate")), Integer.parseInt(request.getProperty("pgpKeyDaysGenerate")), pass, Common.url_decode(request.getProperty("pgpCommonNameGenerate").replace('+', ' ')), request.getProperty("encryption_cypher").split(";"));
+                Common.generateKeyPair(pgp_key_path, Integer.parseInt(request.getProperty("pgpKeySizeGenerate")), Integer.parseInt(request.getProperty("pgpKeyDaysGenerate")), pass, crushftp.handlers.Common.url_decode(request.getProperty("pgpCommonNameGenerate").replace('+', ' ')), request.getProperty("encryption_cypher").split(";"));
             } else {
-                com.crushftp.client.Common.generateKeyPair(pgp_key_path, Integer.parseInt(request.getProperty("pgpKeySizeGenerate")), Integer.parseInt(request.getProperty("pgpKeyDaysGenerate")), pass, Common.url_decode(request.getProperty("pgpCommonNameGenerate").replace('+', ' ')));
+                Common.generateKeyPair(pgp_key_path, Integer.parseInt(request.getProperty("pgpKeySizeGenerate")), Integer.parseInt(request.getProperty("pgpKeyDaysGenerate")), pass, crushftp.handlers.Common.url_decode(request.getProperty("pgpCommonNameGenerate").replace('+', ' ')));
             }
             xml = "Success";
         }
@@ -3795,7 +4674,7 @@ lbl192:
                     return s;
                 }
                 if (request.containsKey("report_token")) {
-                    String report_token = Common.dots(request.getProperty("report_token")).trim();
+                    String report_token = crushftp.handlers.Common.dots(request.getProperty("report_token")).trim();
                     if (new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "SavedReports/" + report_token).exists()) {
                         byte[] b = new byte[]{};
                         try (RandomAccessFile in = new RandomAccessFile(new File_S(String.valueOf(System.getProperty("crushftp.prefs")) + "SavedReports/" + report_token), "r");){
@@ -3813,7 +4692,7 @@ lbl192:
                 Properties params = request;
                 Vector<String> v = new Vector<String>();
                 if (request.containsKey("usernames")) {
-                    String[] usernames = com.crushftp.client.Common.html_clean_usernames(request.getProperty("usernames").split(","));
+                    String[] usernames = Common.html_clean_usernames(request.getProperty("usernames").split(","));
                     int x = 0;
                     while (x < usernames.length) {
                         s = usernames[x].trim();
@@ -3842,11 +4721,16 @@ lbl192:
     }
 
     public static String handleInstance(Properties request, String site) throws Exception {
+        return AdminControls.handleInstance(request, site, 20);
+    }
+
+    public static String handleInstance(Properties request, String site, int timeout) throws Exception {
+        Log.log("SERVER", 2, "" + request);
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
-            Properties p = DMZServerCommon.getResponse(id, 20);
+            Properties p = DMZServerCommon.getResponse(id, timeout);
             return p.get("data").toString();
         }
         return null;
@@ -3903,20 +4787,17 @@ lbl192:
                 pgp.setUseExpiredKeys(true);
                 ByteArrayOutputStream baos_key = new ByteArrayOutputStream();
                 boolean pbe = false;
-                String keyLocation = request.getProperty("publicKey");
+                String keyLocation = crushftp.handlers.Common.url_decode(request.getProperty("publicKey"));
                 if (keyLocation.toLowerCase().startsWith("password:")) {
                     pbe = true;
                 } else {
-                    if (keyLocation.indexOf(":") < 0 || keyLocation.indexOf(":") < 3 && !keyLocation.toLowerCase().startsWith("s3:") && !keyLocation.toLowerCase().startsWith("b2:")) {
-                        keyLocation = "FILE://" + keyLocation;
-                    }
                     VRL key_vrl = new VRL(keyLocation);
-                    GenericClient c_key = com.crushftp.client.Common.getClient(Common.getBaseUrl(key_vrl.toString()), "CrushFTP", new Vector());
+                    GenericClient c_key = Common.getClient(crushftp.handlers.Common.getBaseUrl(key_vrl.toString()), System.getProperty("appname", "CrushFTP"), new Vector());
                     if (ServerStatus.BG("v10_beta") && key_vrl.getConfig() != null && key_vrl.getConfig().size() > 0) {
                         c_key.setConfigObj(key_vrl.getConfig());
                     }
                     c_key.login(key_vrl.getUsername(), key_vrl.getPassword(), "");
-                    Common.streamCopier(c_key.download(key_vrl.getPath(), 0L, -1L, true), baos_key, false, true, true);
+                    crushftp.handlers.Common.streamCopier(c_key.download(key_vrl.getPath(), 0L, -1L, true, true), baos_key, false, true, true);
                     c_key.logout();
                 }
                 ByteArrayInputStream bytesInKey = new ByteArrayInputStream(baos_key.toByteArray());
@@ -3925,41 +4806,46 @@ lbl192:
                 ByteArrayOutputStream baos_encrypted = new ByteArrayOutputStream();
                 ByteArrayInputStream bais_source = new ByteArrayInputStream(source_data.getBytes());
                 if (pbe) {
-                    pgp.encryptStreamPBE((InputStream)bais_source, "test_data", com.crushftp.client.Common.encryptDecrypt(keyLocation.substring(keyLocation.indexOf(":") + 1), false), (OutputStream)baos_encrypted, false, false);
+                    pgp.encryptStreamPBE(bais_source, "test_data", Common.encryptDecrypt(keyLocation.substring(keyLocation.indexOf(":") + 1), false), baos_encrypted, false, false);
                 } else {
-                    pgp.encryptStream((InputStream)bais_source, "test_data", (InputStream)bytesInKey, (OutputStream)baos_encrypted, false, false);
+                    pgp.encryptStream((InputStream)bais_source, "test_data", bytesInKey, (OutputStream)baos_encrypted, false, false);
                 }
                 bytesInKey.close();
                 String encrypted_data = Base64.encodeBytes(baos_encrypted.toByteArray());
                 baos_key = new ByteArrayOutputStream();
                 pbe = false;
-                keyLocation = request.getProperty("privateKey");
+                keyLocation = crushftp.handlers.Common.url_decode(request.getProperty("privateKey"));
                 bais_source = new ByteArrayInputStream(baos_encrypted.toByteArray());
                 ByteArrayOutputStream baos_decrypted = new ByteArrayOutputStream();
                 if (keyLocation.toLowerCase().startsWith("password:")) {
                     pbe = true;
                 } else {
-                    if (keyLocation.indexOf(":") < 0 || keyLocation.indexOf(":") < 3 && !keyLocation.toLowerCase().startsWith("s3:") && !keyLocation.toLowerCase().startsWith("b2:")) {
-                        keyLocation = "FILE://" + keyLocation;
-                    }
                     VRL key_vrl = new VRL(keyLocation);
-                    GenericClient c_key = com.crushftp.client.Common.getClient(Common.getBaseUrl(key_vrl.toString()), "CrushFTP", new Vector());
+                    GenericClient c_key = Common.getClient(crushftp.handlers.Common.getBaseUrl(key_vrl.toString()), System.getProperty("appname", "CrushFTP"), new Vector());
                     if (ServerStatus.BG("v10_beta") && key_vrl.getConfig() != null && key_vrl.getConfig().size() > 0) {
                         c_key.setConfigObj(key_vrl.getConfig());
                     }
                     c_key.login(key_vrl.getUsername(), key_vrl.getPassword(), "");
-                    Common.streamCopier(c_key.download(key_vrl.getPath(), 0L, -1L, true), baos_key, false, true, true);
+                    crushftp.handlers.Common.streamCopier(c_key.download(key_vrl.getPath(), 0L, -1L, true, true), baos_key, false, true, true);
                     c_key.logout();
                 }
                 ByteArrayInputStream bytesIn1 = new ByteArrayInputStream(baos_key.toByteArray());
                 ByteArrayInputStream bytesIn2 = new ByteArrayInputStream(baos_key.toByteArray());
+                ByteArrayInputStream bytesIn3 = new ByteArrayInputStream(baos_key.toByteArray());
                 pgp.setCompression("UNCOMPRESSED");
                 if (pbe) {
-                    pgp.decryptStreamPBE((InputStream)bais_source, com.crushftp.client.Common.encryptDecrypt(keyLocation.substring(keyLocation.indexOf(":") + 1), false), (OutputStream)baos_decrypted);
-                } else if (new com.didisoft.pgp.KeyStore().importPrivateKey((InputStream)bytesIn1)[0].checkPassword(request.getProperty("privateKeyPass"))) {
-                    pgp.decryptStream((InputStream)bais_source, (InputStream)bytesIn2, request.getProperty("privateKeyPass"), (OutputStream)baos_decrypted);
+                    pgp.decryptStreamPBE(bais_source, Common.encryptDecrypt(keyLocation.substring(keyLocation.indexOf(":") + 1), false), baos_decrypted);
                 } else {
-                    pgp.decryptStream((InputStream)bais_source, (InputStream)bytesIn2, com.crushftp.client.Common.encryptDecrypt(request.getProperty("privateKeyPass"), false), (OutputStream)baos_decrypted);
+                    try {
+                        if (new KeyStore().importPrivateKey(bytesIn1)[0].checkPassword(request.getProperty("privateKeyPass"))) {
+                            pgp.decryptStream((InputStream)bais_source, bytesIn2, request.getProperty("privateKeyPass"), (OutputStream)baos_decrypted);
+                        } else {
+                            pgp.decryptStream((InputStream)bais_source, bytesIn2, Common.encryptDecrypt(request.getProperty("privateKeyPass"), false), (OutputStream)baos_decrypted);
+                        }
+                    }
+                    catch (Exception e) {
+                        pgp.decryptStream((InputStream)bais_source, bytesIn3, Common.encryptDecrypt(request.getProperty("privateKeyPass"), false), (OutputStream)baos_decrypted);
+                    }
                 }
                 bytesIn1.close();
                 bytesIn2.close();
@@ -3989,26 +4875,26 @@ lbl192:
     public static Object changeJobStatus(Properties request, String site) {
         if (request.getProperty("status", "").equals("restart")) {
             Vector vv = new Vector();
-            String[] schedule_names = com.crushftp.client.Common.dots(request.getProperty("scheduleName", "")).split(";");
-            String[] job_ids = com.crushftp.client.Common.dots(request.getProperty("job_id", "")).split(";");
+            String[] schedule_names = Common.dots(request.getProperty("scheduleName", "")).split(";");
+            String[] job_ids = Common.dots(request.getProperty("job_id", "")).split(";");
             String summary_name = "";
-            int x = 0;
-            while (x < schedule_names.length) {
+            int xx = 0;
+            while (xx < schedule_names.length) {
                 request = (Properties)request.clone();
-                request.put("scheduleName", schedule_names[x].trim());
-                request.put("job_id", job_ids[x]);
+                request.put("scheduleName", schedule_names[xx].trim());
+                request.put("job_id", job_ids[xx]);
                 if (summary_name.length() < 100) {
-                    summary_name = String.valueOf(summary_name) + schedule_names[x].trim() + ",";
+                    summary_name = String.valueOf(summary_name) + schedule_names[xx].trim() + ",";
                 } else if (summary_name.length() >= 100 && summary_name.indexOf("...") < 0) {
                     summary_name = String.valueOf(summary_name) + "...(and more)...";
                 }
                 try {
-                    File_S f1 = new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + schedule_names[x].trim());
+                    File_S f1 = new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/" + schedule_names[xx].trim());
                     AdminControls.checkJobFolder(site, request, vv, f1);
                     if (vv.size() > 1) {
-                        return "FAILURE:Job ID not found! " + vv.size() + ":" + schedule_names[x].trim();
+                        return "FAILURE:Job ID not found! " + vv.size() + ":" + schedule_names[xx].trim();
                     }
-                    Log.log("SERVER", 0, "Restarting job:" + schedule_names[x].trim() + ": Matching ids:" + vv.size());
+                    Log.log("SERVER", 0, "Restarting job:" + schedule_names[xx].trim() + ": Matching ids:" + vv.size());
                     Properties tracker = (Properties)vv.remove(0);
                     if (!tracker.getProperty("status", "").equalsIgnoreCase("completed-errors") && !tracker.getProperty("status", "").equalsIgnoreCase("cancelled")) {
                         return "FAILURE:Only jobs in a cancelled or completed-errors status can be restarted. (" + tracker.getProperty("status") + ")";
@@ -4022,7 +4908,7 @@ lbl192:
                         task_item.remove("error");
                     }
                     try {
-                        Common.writeXMLObject(tracker.getProperty("job_history_obj_path"), (Object)tracker, "tracker");
+                        JobFilesHandler.writeXMLObject(tracker.getProperty("job_history_obj_path"), tracker, "tracker");
                     }
                     catch (Exception e) {
                         Log.log("SERVER", 1, e);
@@ -4035,95 +4921,163 @@ lbl192:
                 catch (Exception e) {
                     Log.log("SERVER", 1, e);
                 }
-                ++x;
+                ++xx;
             }
             return "SUCCESS:" + summary_name + " restarted.";
         }
+        String[] schedule_names = Common.dots(request.getProperty("scheduleName", "")).split(";");
+        String summary_name = "";
         Vector jobs = ServerStatus.siVG("running_tasks");
-        int x = jobs.size() - 1;
-        while (x >= 0) {
-            Properties tracker = (Properties)jobs.elementAt(x);
-            if (request.getProperty("job_id", "").equalsIgnoreCase(tracker.getProperty("id"))) {
-                if (tracker.getProperty("status").equalsIgnoreCase("running") || tracker.getProperty("status").toLowerCase().indexOf("paused") >= 0) {
-                    tracker.put("status", request.getProperty("status"));
-                    if (tracker.getProperty("restore_job", "false").equals("true") && request.getProperty("status").equalsIgnoreCase("running")) {
-                        request.put("restore_job", "true");
-                        AdminControls.testJobSchedule(request, site);
-                    }
-                    tracker.remove("restore_job");
-                }
-                return "SUCCESS:" + tracker.getProperty("status");
-            }
-            --x;
-        }
-        return "FAILURE:Job not found.";
-    }
-
-    /*
-     * Enabled force condition propagation
-     * Lifted jumps to return sites
-     */
-    public static String testJobSchedule(Properties request, String site) {
-        StringBuffer jobid;
-        File job;
-        String response;
-        block9: {
-            if (ServerStatus.siIG("enterprise_level") <= 0) {
-                return "ERROR:Enterprise License only feature.";
-            }
-            response = "";
-            try {
-                String s = AdminControls.handleInstance(request, site);
-                if (s != null) {
-                    return s;
-                }
-                Vector jobs = JobScheduler.getJobList(false);
-                job = null;
+        if (!request.getProperty("job_id", "").equals("")) {
+            String[] job_ids = Common.dots(request.getProperty("job_id", "")).split(";");
+            int xx = jobs.size() - 1;
+            while (xx >= 0) {
+                Properties tracker = (Properties)jobs.elementAt(xx);
                 int x = 0;
-                while (job == null && x < jobs.size()) {
-                    File_S f = (File_S)jobs.elementAt(x);
-                    if (AdminControls.jobName(f).equalsIgnoreCase(request.getProperty("scheduleName"))) {
-                        job = f;
+                while (x < schedule_names.length) {
+                    request = (Properties)request.clone();
+                    request.put("scheduleName", schedule_names[x].trim());
+                    request.put("job_id", job_ids[x]);
+                    if (request.getProperty("job_id", "").equalsIgnoreCase(tracker.getProperty("id")) && (tracker.getProperty("status").equalsIgnoreCase("running") || tracker.getProperty("status").toLowerCase().indexOf("paused") >= 0)) {
+                        if (summary_name.length() < 100) {
+                            summary_name = String.valueOf(summary_name) + schedule_names[x].trim() + ",";
+                        } else if (summary_name.length() >= 100 && summary_name.indexOf("...") < 0) {
+                            summary_name = String.valueOf(summary_name) + "...(and more)...";
+                        }
+                        tracker.put("status", request.getProperty("status"));
+                        if (tracker.getProperty("restore_job", "false").equals("true") && request.getProperty("status").equalsIgnoreCase("running")) {
+                            request.put("restore_job", "true");
+                            AdminControls.testJobSchedule(request, site);
+                        }
+                        tracker.remove("restore_job");
                     }
                     ++x;
                 }
-                jobid = new StringBuffer();
-                if (site.indexOf("(USER_ADMIN)") >= 0) {
-                    UserTools.testLimitedTasks((Properties)Common.readXMLObject(String.valueOf(job.getPath()) + "/job.XML"), request);
+                --xx;
+            }
+        } else {
+            if (request.getProperty("status").equalsIgnoreCase("stop")) {
+                request.put("status", "cancelled");
+            }
+            int xx = jobs.size() - 1;
+            while (xx >= 0) {
+                Properties tracker = (Properties)jobs.elementAt(xx);
+                int x = 0;
+                while (x < schedule_names.length) {
+                    request = (Properties)request.clone();
+                    request.put("scheduleName", schedule_names[x].trim());
+                    if (request.getProperty("scheduleName", "").equalsIgnoreCase(tracker.getProperty("scheduleName")) && (tracker.getProperty("status").equalsIgnoreCase("running") || tracker.getProperty("status").toLowerCase().indexOf("paused") >= 0)) {
+                        if (summary_name.length() < 100) {
+                            summary_name = String.valueOf(summary_name) + schedule_names[x].trim() + ",";
+                        } else if (summary_name.length() >= 100 && summary_name.indexOf("...") < 0) {
+                            summary_name = String.valueOf(summary_name) + "...(and more)...";
+                        }
+                        tracker.put("status", request.getProperty("status"));
+                        if (tracker.getProperty("restore_job", "false").equals("true") && request.getProperty("status").equalsIgnoreCase("running")) {
+                            request.put("restore_job", "true");
+                            AdminControls.testJobSchedule(request, site);
+                        }
+                        tracker.remove("restore_job");
+                    }
+                    ++x;
                 }
-                if (site.indexOf("(CONNECT)") > 0 && site.indexOf("(JOB_EDIT)") > 0 || site.indexOf("(JOB_MONITOR)") < 0) break block9;
-                if (!new File_S(String.valueOf(job.getPath()) + "/job.XML").exists()) return "<commandResult><response>" + response + "</response><jobid>" + jobid.toString() + "</jobid></commandResult>";
-                Properties p = (Properties)Common.readXMLObject(String.valueOf(job.getPath()) + "/job.XML");
-                if (p == null) {
-                    return "<commandResult><response>ERROR:Could not find job : " + request.getProperty("scheduleName", "") + "</response></commandResult>";
+                --xx;
+            }
+        }
+        if (summary_name.length() > 0) {
+            return "SUCCESS:" + summary_name + " " + request.getProperty("status") + ".";
+        }
+        return "FAILURE:Jobs not found:";
+    }
+
+    /*
+     * Enabled aggressive block sorting
+     * Enabled unnecessary exception pruning
+     * Enabled aggressive exception aggregation
+     */
+    public static String testJobSchedule(Properties request, String site) {
+        if (ServerStatus.siIG("enterprise_level") <= 0) {
+            return "ERROR:Enterprise License only feature.";
+        }
+        String response = "";
+        try {
+            String s = AdminControls.handleInstance(request, site);
+            if (s != null) {
+                return s;
+            }
+        }
+        catch (Exception e) {
+            Log.log("HTTP_SERVER", 1, e);
+            response = "ERROR:" + e;
+            return "<commandResult><response>ERROR:" + e.getMessage() + "</response></commandResult>";
+        }
+        String[] schedule_names = Common.dots(request.getProperty("scheduleName", "")).split(";");
+        Vector jobs = JobScheduler.getJobList(false);
+        int xx = 0;
+        while (xx < schedule_names.length) {
+            Properties request2 = (Properties)request.clone();
+            request2.put("scheduleName", schedule_names[xx]);
+            try {
+                StringBuffer jobid;
+                block14: {
+                    File job;
+                    block13: {
+                        Properties p;
+                        job = null;
+                        int x = 0;
+                        while (true) {
+                            if (job != null || x >= jobs.size()) {
+                                jobid = new StringBuffer();
+                                if (site.indexOf("(USER_ADMIN)") >= 0) {
+                                    UserTools.testLimitedTasks((Properties)JobFilesHandler.readXMLObject(String.valueOf(job.getPath()) + "/job.XML"), request2);
+                                }
+                                if (site.indexOf("(CONNECT)") > 0 && site.indexOf("(JOB_EDIT)") > 0 || site.indexOf("(JOB_MONITOR)") < 0) break block13;
+                                if (new File_S(String.valueOf(job.getPath()) + "/job.XML").exists()) {
+                                    p = (Properties)JobFilesHandler.readXMLObject(String.valueOf(job.getPath()) + "/job.XML");
+                                    if (p != null) break;
+                                    return "<commandResult><response>ERROR:Could not find job : " + request2.getProperty("scheduleName", "") + "</response></commandResult>";
+                                }
+                                break block14;
+                            }
+                            File_S f = (File_S)jobs.elementAt(x);
+                            if (AdminControls.jobName(f).equalsIgnoreCase(request2.getProperty("scheduleName"))) {
+                                job = f;
+                            }
+                            ++x;
+                        }
+                        if (AdminControls.expandUsernames(p.getProperty("allowed_usernames", "")).indexOf(request2.getProperty("calling_user", "~NONE~").toUpperCase()) < 0) {
+                            return "<commandResult><response>ERROR:Access denied.</response></commandResult>";
+                        }
+                        response = AdminControls.startJob((File_S)job, request2.getProperty("restore_job", "").equals("true"), jobid, request2);
+                        break block14;
+                    }
+                    response = AdminControls.startJob((File_S)job, request2.getProperty("restore_job", "").equals("true"), jobid, request2);
                 }
-                if (AdminControls.expandUsernames(p.getProperty("allowed_usernames", "")).indexOf(request.getProperty("calling_user", "~NONE~").toUpperCase()) < 0) return "<commandResult><response>ERROR:Access denied.</response></commandResult>";
-                response = AdminControls.startJob((File_S)job, request.getProperty("restore_job", "").equals("true"), jobid, request);
-                return "<commandResult><response>" + response + "</response><jobid>" + jobid.toString() + "</jobid></commandResult>";
+                response = "<commandResult><response>" + response + "</response><jobid>" + jobid.toString() + "</jobid></commandResult>";
             }
             catch (Exception e) {
                 Log.log("HTTP_SERVER", 1, e);
                 response = "ERROR:" + e;
-                return "<commandResult><response>ERROR:" + e.getMessage() + "</response></commandResult>";
+                response = "<commandResult><response>ERROR:" + e.getMessage() + "</response></commandResult>";
             }
+            ++xx;
         }
-        response = AdminControls.startJob((File_S)job, request.getProperty("restore_job", "").equals("true"), jobid, request);
-        return "<commandResult><response>" + response + "</response><jobid>" + jobid.toString() + "</jobid></commandResult>";
+        return response;
     }
 
     static String startJob(File_S job, final boolean restore, StringBuffer jobid, final Properties request) {
         String response = "";
-        final Properties params = (Properties)Common.readXMLObject(String.valueOf(job.getPath()) + "/job.XML");
+        final Properties params = (Properties)JobFilesHandler.readXMLObject(String.valueOf(job.getPath()) + "/job.XML");
         params.put("scheduleName", AdminControls.jobName(job));
         boolean ok = true;
         if (params.getProperty("scheduleName", "").toUpperCase().endsWith("_SINGLE") || params.getProperty("single", "").equalsIgnoreCase("true")) {
-            boolean bl = ok = restore || !JobScheduler.jobRunning(params.getProperty("scheduleName", ""));
+            boolean bl = ok = restore || JobScheduler.jobRunningCount(params.getProperty("scheduleName", "")) == 0;
         }
         if (ok && params.getProperty("singleServer", "").equals("true")) {
             Properties pp = new Properties();
             pp.put("scheduleName", params.getProperty("scheduleName", ""));
             pp.put("need_response", "true");
-            SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.JobScheduler.jobRunning", "info", pp);
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.JobScheduler.jobRunningCount", "info", pp);
             long start = System.currentTimeMillis();
             while (pp.getProperty("response_num", "0").equals("0") && System.currentTimeMillis() - start < 5000L) {
                 try {
@@ -4138,7 +5092,7 @@ lbl192:
                 Enumeration<Object> keys = val.keys();
                 while (keys.hasMoreElements()) {
                     String key = keys.nextElement().toString();
-                    if (!key.startsWith("running_") || !val.getProperty(key).equalsIgnoreCase("true")) continue;
+                    if (!key.startsWith("running_") || Integer.parseInt(val.getProperty(key, "0")) <= 0) continue;
                     ok = false;
                 }
             }
@@ -4147,7 +5101,7 @@ lbl192:
         Log.log("SERVER", 1, "Job Schedule:" + params.getProperty("scheduleName") + ":" + response);
         if (ok) {
             if (jobid.length() == 0) {
-                jobid.append(Common.makeBoundary(20));
+                jobid.append(crushftp.handlers.Common.makeBoundary(20));
             }
             params.put("new_job_id_run", jobid.toString());
             try {
@@ -4190,7 +5144,7 @@ lbl192:
                         if (request.getProperty("response_type", "simple").equals("all")) {
                             tracker.put("full_log", AdminControls.getJobLog(tracker));
                         }
-                        response = Common.getXMLString(tracker, "job", "");
+                        response = crushftp.handlers.Common.getXMLString(tracker, "job", "");
                         response = response.substring(response.indexOf("<job")).trim();
                     }
                 }
@@ -4213,7 +5167,7 @@ lbl192:
                 skip = len - 0x100000L;
             }
             in.skip(skip);
-            com.crushftp.client.Common.copyStreams(in, baos, true, true);
+            Common.copyStreams(in, baos, true, true);
             full_log = new String(baos.toByteArray(), "UTF8");
         }
         catch (IOException e) {
@@ -4231,8 +5185,8 @@ lbl192:
                 return s;
             }
             Properties p = request;
-            String results = com.crushftp.client.Common.send_mail(ServerStatus.SG("discovered_ip"), p.getProperty("to", ""), p.getProperty("cc", ""), p.getProperty("bcc", ""), p.getProperty("from", ""), p.getProperty("subject", ""), p.getProperty("body", ""), p.getProperty("server", ""), p.getProperty("user", ""), p.getProperty("pass", ""), p.getProperty("ssl", "").equals("true"), p.getProperty("html", "").equals("true"), null);
-            response = String.valueOf(response) + Common.url_encode(results);
+            String results = Common.send_mail(ServerStatus.SG("discovered_ip"), p.getProperty("to", ""), p.getProperty("cc", ""), p.getProperty("bcc", ""), p.getProperty("from", ""), p.getProperty("subject", ""), p.getProperty("body", ""), p.getProperty("server", ""), p.getProperty("user", ""), p.getProperty("pass", ""), p.getProperty("ssl", "").equals("true"), p.getProperty("html", "").equals("true"), null);
+            response = String.valueOf(response) + crushftp.handlers.Common.url_encode(results);
             response = String.valueOf(response) + "</response></commandResult>";
         }
         catch (Exception e) {
@@ -4248,7 +5202,7 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            Common.send_otp_for_auth_sms(request.getProperty("otp_to", ""), "Test sms!");
+            crushftp.handlers.Common.send_otp_for_auth_sms(request.getProperty("otp_to", ""), "Test sms!");
             response = String.valueOf(response) + "Success!";
         }
         catch (Exception e) {
@@ -4261,7 +5215,7 @@ lbl192:
 
     public static String sendEventEmail(Properties request, String site) {
         String response = "<commandResult><response>";
-        Common.urlDecodePost(request);
+        crushftp.handlers.Common.urlDecodePost(request);
         try {
             String s = AdminControls.handleInstance(request, site);
             if (s != null) {
@@ -4269,10 +5223,10 @@ lbl192:
             }
             Properties fake_event = new Properties();
             fake_event.put("name", "fake_event");
-            fake_event.put("to", Common.replace_str(Common.replace_str(request.getProperty("email_to"), "&gt;", ">"), "&lt;", "<"));
-            fake_event.put("from", Common.replace_str(Common.replace_str(request.getProperty("email_from"), "&gt;", ">"), "&lt;", "<"));
-            fake_event.put("cc", Common.replace_str(Common.replace_str(request.getProperty("email_cc"), "&gt;", ">"), "&lt;", "<"));
-            fake_event.put("bcc", Common.replace_str(Common.replace_str(request.getProperty("email_bcc"), "&gt;", ">"), "&lt;", "<"));
+            fake_event.put("to", crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(request.getProperty("email_to"), "&gt;", ">"), "&lt;", "<"));
+            fake_event.put("from", crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(request.getProperty("email_from"), "&gt;", ">"), "&lt;", "<"));
+            fake_event.put("cc", crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(request.getProperty("email_cc"), "&gt;", ">"), "&lt;", "<"));
+            fake_event.put("bcc", crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(request.getProperty("email_bcc"), "&gt;", ">"), "&lt;", "<"));
             fake_event.put("body", request.getProperty("email_body"));
             fake_event.put("subject", request.getProperty("email_subject"));
             fake_event.put("event_user_action_list", "(disconnect)");
@@ -4290,7 +5244,7 @@ lbl192:
             p.put("type", "FILE");
             p.put("size", "500");
             p.put("modified", String.valueOf(System.currentTimeMillis()));
-            p.put("sizeFormatted", com.crushftp.client.Common.format_bytes2(p.getProperty("size")));
+            p.put("sizeFormatted", Common.format_bytes2(p.getProperty("size")));
             p.put("privs", "(read)(write)(delete)(view)(resume)");
             p.put("path", "/fake_uploads/");
             p.put("the_file_path", "/fake_uploads/");
@@ -4311,7 +5265,7 @@ lbl192:
             p.put("the_file_start", String.valueOf(System.currentTimeMillis()));
             p.put("the_file_end", String.valueOf(System.currentTimeMillis()));
             p.put("the_file_resume_loc", "0");
-            p.put("the_file_md5", Common.getMD5(new ByteArrayInputStream("a".getBytes())));
+            p.put("the_file_md5", crushftp.handlers.Common.getMD5(new ByteArrayInputStream("a".getBytes())));
             p.put("the_file_resume_loc", "0");
             p.put("the_file_resume_loc", "0");
             fake_items.addElement(p);
@@ -4319,7 +5273,7 @@ lbl192:
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -4336,7 +5290,7 @@ lbl192:
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -4362,7 +5316,7 @@ lbl192:
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -4376,7 +5330,7 @@ lbl192:
                 return s;
             }
             Connection conn = null;
-            if (!request.getProperty("db_driver").equalsIgnoreCase("org.apache.derby.jdbc.EmbeddedDriver")) {
+            if (!request.getProperty("db_driver").equalsIgnoreCase("org.apache.derby.jdbc.EmbeddedDriver") && System.getProperty("crushftp.security.classloader", "false").equals("true")) {
                 String[] db_drv_files = request.getProperty("db_driver_file").split(";");
                 URL[] urls = new URL[db_drv_files.length];
                 int x = 0;
@@ -4392,19 +5346,19 @@ lbl192:
                 props.setProperty("password", ServerStatus.thisObj.common_code.decode_pass(request.getProperty("db_pass")));
                 conn = driver.connect(request.getProperty("db_url"), props);
             } else {
-                try {
-                    conn = ServerStatus.thisObj.statTools.getConnection();
-                }
-                catch (Throwable e) {
-                    Log.log("HTTP_SERVER", 1, e);
-                }
+                Class<?> drvCls = Class.forName(request.getProperty("db_driver"), true, Thread.currentThread().getContextClassLoader());
+                Driver driver = (Driver)drvCls.newInstance();
+                Properties props = new Properties();
+                props.setProperty("user", request.getProperty("db_user"));
+                props.setProperty("password", ServerStatus.thisObj.common_code.decode_pass(request.getProperty("db_pass")));
+                conn = driver.connect(request.getProperty("db_url"), props);
             }
             conn.close();
             response = String.valueOf(response) + "Success";
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString());
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString());
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -4412,7 +5366,7 @@ lbl192:
 
     public static String testQuery(Properties request, String site) {
         String response;
-        block53: {
+        block54: {
             response = "<commandResult><response>";
             try {
                 String s = AdminControls.handleInstance(request, site);
@@ -4420,7 +5374,7 @@ lbl192:
                     return s;
                 }
                 Connection conn = null;
-                if (!request.getProperty("db_driver").equalsIgnoreCase("org.apache.derby.jdbc.EmbeddedDriver")) {
+                if (!request.getProperty("db_driver").equalsIgnoreCase("org.apache.derby.jdbc.EmbeddedDriver") && System.getProperty("crushftp.security.classloader", "false").equals("true")) {
                     String[] db_drv_files = request.getProperty("db_driver_file").split(";");
                     URL[] urls = new URL[db_drv_files.length];
                     int x = 0;
@@ -4456,13 +5410,20 @@ lbl192:
                     catch (Throwable e) {
                         Log.log("HTTP_SERVER", 1, e);
                     }
+                } else {
+                    Class<?> drvCls = Class.forName(request.getProperty("db_driver"), true, Thread.currentThread().getContextClassLoader());
+                    Driver driver = (Driver)drvCls.newInstance();
+                    Properties props = new Properties();
+                    props.setProperty("user", request.getProperty("db_user"));
+                    props.setProperty("password", ServerStatus.thisObj.common_code.decode_pass(request.getProperty("db_pass")));
+                    conn = driver.connect(request.getProperty("db_url"), props);
                 }
                 Statement st = conn.createStatement();
                 try {
                     String table;
                     String sql = request.getProperty("sql");
                     if (sql.startsWith("IMPORTCSV:")) {
-                        table = Common.last(sql.substring(sql.indexOf(":") + 1).trim());
+                        table = crushftp.handlers.Common.last(sql.substring(sql.indexOf(":") + 1).trim());
                         int count = 0;
                         try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(new File_S(table))));){
                             String line = "";
@@ -4491,14 +5452,14 @@ lbl192:
                             }
                         }
                         response = String.valueOf(response) + count + " rows inserted.";
-                        break block53;
+                        break block54;
                     }
                     if (sql.startsWith("EXPORTCSV:")) {
-                        table = Common.last(sql.substring(sql.indexOf(":") + 1).trim());
+                        table = crushftp.handlers.Common.last(sql.substring(sql.indexOf(":") + 1).trim());
                         if (!table.toUpperCase().endsWith(".CSV")) {
                             throw new Exception("Must be a CSV file.");
                         }
-                        SimpleDateFormat sdf = new SimpleDateFormat("MM/dd/yy HH:mm:ss");
+                        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
                         RandomAccessFile raf = new RandomAccessFile(new File_S(table), "rw");
                         raf.setLength(0L);
                         int count = 0;
@@ -4546,7 +5507,7 @@ lbl192:
                             raf.close();
                         }
                         response = String.valueOf(response) + count + " rows exported.";
-                        break block53;
+                        break block54;
                     }
                     boolean update = false;
                     if (sql.toUpperCase().indexOf("USE ") >= 0) {
@@ -4560,7 +5521,7 @@ lbl192:
                     } else {
                         ResultSet rs = st.executeQuery(sql);
                         Vector v = AdminControls.loadTable(rs, Integer.parseInt(request.getProperty("sql_limit")));
-                        s = Common.getXMLString(v, "SQL", null).trim();
+                        s = crushftp.handlers.Common.getXMLString(v, "SQL", null).trim();
                         response = String.valueOf(response) + s.substring(s.indexOf("<SQL"));
                     }
                 }
@@ -4571,7 +5532,7 @@ lbl192:
             }
             catch (Exception ee) {
                 Log.log("HTTP_SERVER", 1, ee);
-                response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString());
+                response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString());
             }
         }
         response = String.valueOf(response) + "</response></commandResult>";
@@ -4653,16 +5614,20 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            Object parent = Common.getPlugin(request.getProperty("pluginName"), null, request.getProperty("pluginSubItem", ""));
+            Object parent = crushftp.handlers.Common.getPlugin(request.getProperty("pluginName"), null, request.getProperty("pluginSubItem", ""));
             if (parent == null && request.getProperty("pluginSubItem", "").equals("")) {
-                parent = Common.getPlugin(request.getProperty("pluginName"), null, "false");
+                parent = crushftp.handlers.Common.getPlugin(request.getProperty("pluginName"), null, "false");
             }
             Method method = parent.getClass().getMethod(request.getProperty("method", "testSettings"), new Properties().getClass());
             response = String.valueOf(response) + method.invoke(parent, request).toString();
         }
         catch (Exception ee) {
+            if (ee.getCause() != null) {
+                Log.log("HTTP_SERVER", 1, ee.getCause());
+                response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.getCause().toString());
+            }
             Log.log("HTTP_SERVER", 1, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString());
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString());
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -4680,7 +5645,7 @@ lbl192:
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString());
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString());
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -4694,17 +5659,17 @@ lbl192:
             String instance = request.getProperty("instance", "");
             String s = AdminControls.handleInstance(request, site);
             if (s != null) {
-                String id2 = Common.makeBoundary();
+                String id2 = crushftp.handlers.Common.makeBoundary();
                 DMZServerCommon.sendCommand(instance, new Properties(), "GET:SERVER_SETTINGS", id2);
                 Properties p = DMZServerCommon.getResponse(id2, 10);
-                Common.write_server_settings((Properties)p.get("data"), instance);
+                crushftp.handlers.Common.write_server_settings((Properties)p.get("data"), instance);
                 return s;
             }
-            String registration_name = Common.url_encode_all(request.getProperty("registration_name").toUpperCase().trim());
+            String registration_name = crushftp.handlers.Common.url_encode_all(request.getProperty("registration_name").toUpperCase().trim());
             if (ServerStatus.thisObj.common_code.register(registration_name, registration_email = request.getProperty("registration_email").toUpperCase().trim(), registration_code = request.getProperty("registration_code").trim())) {
                 String v = ServerStatus.thisObj.common_code.getRegistrationAccess("V", registration_code);
                 if (v != null && (v.equals("4") || v.equals("5") || v.equals("6") || v.equals("7"))) {
-                    response = String.valueOf(response) + "CrushFTP " + v + " needs an upgrade license for CrushFTP 8.  http://www.crushftp.com/pricing.html";
+                    response = String.valueOf(response) + System.getProperty("appname", "CrushFTP") + " " + v + " needs an upgrade license for " + System.getProperty("appname", "CrushFTP") + " " + ServerStatus.version_info_str + ".  http://www." + System.getProperty("appname", "CrushFTP") + ".com/pricing.html";
                 } else {
                     ServerStatus.server_settings.put("registration_name", registration_name);
                     ServerStatus.server_settings.put("registration_email", registration_email);
@@ -4725,7 +5690,7 @@ lbl192:
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString());
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString());
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -4743,12 +5708,47 @@ lbl192:
                 }
                 ++index;
             }
-            Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
-            return Common.getXMLString(v, "prefs", null);
+            crushftp.handlers.Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
+            return crushftp.handlers.Common.getXMLString(v, "prefs", null);
         }
         ServerStatus.thisObj.prefsProvider.savePrefs(ServerStatus.thisObj.prefsProvider.getBackupPrefs(backup_id), null);
         ServerStatus.thisObj.server_info.put("currentFileDate", "0");
         Thread.sleep(3000L);
+        return "<commandResult><response>SUCCESS</response></commandResult>";
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public static String unblockUsername(Properties request, String site) throws Exception {
+        Properties login_frequency;
+        Log.log("SERVER", 0, "Unblocking username:" + request.getProperty("username"));
+        Enumeration<Object> keys = DMZServerCommon.dmzInstances.keys();
+        request.remove("instance");
+        while (keys.hasMoreElements()) {
+            String id = crushftp.handlers.Common.makeBoundary();
+            try {
+                DMZServerCommon.sendCommand(keys.nextElement().toString(), (Properties)request.clone(), site, "RUN:INSTANCE_ACTION", id);
+                DMZServerCommon.getResponse(id, 1);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+            }
+        }
+        Properties e = login_frequency = ServerStatus.siPG("login_frequency");
+        synchronized (e) {
+            Properties login_prop = new Properties();
+            login_prop.put("v", new Vector());
+            login_frequency.put(request.getProperty("username").toLowerCase(), login_prop);
+        }
+        if (ServerStatus.siPG("login_attempt_frequency").containsKey(request.getProperty("username").toLowerCase())) {
+            ServerStatus.siPG("login_attempt_frequency").remove(request.getProperty("username").toLowerCase());
+            Log.log("SERVER", 0, "Unblocked username:" + request.getProperty("username"));
+        }
+        Properties pp = new Properties();
+        pp.put("request", request);
+        pp.put("site", "");
+        SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.unblockUsername", "info", pp);
         return "<commandResult><response>SUCCESS</response></commandResult>";
     }
 
@@ -4760,7 +5760,7 @@ lbl192:
                 return s;
             }
             String the_dir = request.getProperty("the_dir");
-            if (request.getProperty("user_type").equals("Import CrushFTP3 Users...")) {
+            if (request.getProperty("user_type").equals("Import " + System.getProperty("appname", "CrushFTP") + "3 Users...")) {
                 ServerStatus.thisObj.common_code.ConvertCrushFTP3Users(the_dir, String.valueOf(request.getProperty("serverGroup")) + "/", ServerStatus.SG("password_encryption"), "");
             } else if (request.getProperty("user_type").equals("Import Folders As Users...")) {
                 ServerStatus.thisObj.common_code.ConvertFolderUsers(the_dir, String.valueOf(request.getProperty("serverGroup")) + "/");
@@ -4802,7 +5802,7 @@ lbl192:
                     response = String.valueOf(response) + "</response></commandResult>";
                     return response;
                 }
-                response = String.valueOf(response) + Common.importCSV(request, String.valueOf(request.getProperty("serverGroup")) + "/");
+                response = String.valueOf(response) + crushftp.handlers.Common.importCSV(request, String.valueOf(request.getProperty("serverGroup")) + "/");
             } else {
                 throw new Exception("User import type not supported:" + request.getProperty("user_type"));
             }
@@ -4823,17 +5823,17 @@ lbl192:
         String reply_to = "";
         String cc = "";
         String bcc = "";
-        String templateName = Common.url_decode(request.getProperty("email_template", "").replace('+', ' ')).trim();
-        Common.debug(2, "Looking up template info for admin pass email:" + templateName);
-        Properties template = Common.get_email_template(templateName);
+        String templateName = crushftp.handlers.Common.url_decode(request.getProperty("email_template", "").replace('+', ' ')).trim();
+        crushftp.handlers.Common.debug(2, "Looking up template info for admin pass email:" + templateName);
+        Properties template = crushftp.handlers.Common.get_email_template(templateName);
         if (template != null) {
-            Common.debug(2, "Found template:" + template);
-            subject = request.getProperty("emailSubject", "").equals("") ? template.getProperty("emailSubject", "") : Common.url_decode(request.getProperty("emailSubject", "").replace('+', ' ')).trim();
-            body = request.getProperty("emailBody", "").equals("") ? template.getProperty("emailBody", "") : Common.url_decode(request.getProperty("emailBody", "").replace('+', ' ')).trim();
-            from = request.getProperty("emailFrom", "").equals("") ? template.getProperty("emailFrom", from) : Common.url_decode(request.getProperty("emailFrom", "").replace('+', ' ')).trim();
-            cc = request.getProperty("emailCC", "").equals("") ? template.getProperty("emailCC", "") : Common.url_decode(request.getProperty("emailCC", "").replace('+', ' ')).trim();
-            reply_to = request.getProperty("emailReplyTo", "").equals("") ? template.getProperty("emailReplyTo", "") : Common.url_decode(request.getProperty("emailReplyTo", "").replace('+', ' ')).trim();
-            bcc = request.getProperty("emailBCC", "").equals("") ? template.getProperty("emailBCC", "") : Common.url_decode(request.getProperty("emailBCC", "").replace('+', ' ')).trim();
+            crushftp.handlers.Common.debug(2, "Found template:" + template);
+            subject = request.getProperty("emailSubject", "").equals("") ? template.getProperty("emailSubject", "") : crushftp.handlers.Common.url_decode(request.getProperty("emailSubject", "").replace('+', ' ')).trim();
+            body = request.getProperty("emailBody", "").equals("") ? template.getProperty("emailBody", "") : crushftp.handlers.Common.url_decode(request.getProperty("emailBody", "").replace('+', ' ')).trim();
+            from = request.getProperty("emailFrom", "").equals("") ? template.getProperty("emailFrom", from) : crushftp.handlers.Common.url_decode(request.getProperty("emailFrom", "").replace('+', ' ')).trim();
+            cc = request.getProperty("emailCC", "").equals("") ? template.getProperty("emailCC", "") : crushftp.handlers.Common.url_decode(request.getProperty("emailCC", "").replace('+', ' ')).trim();
+            reply_to = request.getProperty("emailReplyTo", "").equals("") ? template.getProperty("emailReplyTo", "") : crushftp.handlers.Common.url_decode(request.getProperty("emailReplyTo", "").replace('+', ' ')).trim();
+            bcc = request.getProperty("emailBCC", "").equals("") ? template.getProperty("emailBCC", "") : crushftp.handlers.Common.url_decode(request.getProperty("emailBCC", "").replace('+', ' ')).trim();
         }
         String response = "<commandResult><response>";
         try {
@@ -4845,66 +5845,66 @@ lbl192:
             if (from.equals("")) {
                 from = to;
             }
-            from = Common.replace_str(Common.replace_str(from, "&gt;", ">"), "&lt;", "<");
-            to = Common.replace_str(Common.replace_str(to, "&gt;", ">"), "&lt;", "<");
-            cc = Common.replace_str(Common.replace_str(cc, "&gt;", ">"), "&lt;", "<");
-            bcc = Common.replace_str(Common.replace_str(bcc, "&gt;", ">"), "&lt;", "<");
+            from = crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(from, "&gt;", ">"), "&lt;", "<");
+            to = crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(to, "&gt;", ">"), "&lt;", "<");
+            cc = crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(cc, "&gt;", ">"), "&lt;", "<");
+            bcc = crushftp.handlers.Common.replace_str(crushftp.handlers.Common.replace_str(bcc, "&gt;", ">"), "&lt;", "<");
             if (ServerStatus.SG("smtp_server").equals("")) {
                 response = String.valueOf(response) + LOC.G("This server is not configured to send email password reminders.") + "\r\n";
             } else if (!to.equals("")) {
                 Properties userTemp = UserTools.ut.getUser(request.getProperty("serverGroup"), request.getProperty("user_name"), false);
-                body = Common.replace_str(body, "%user_name%", request.getProperty("user_name"));
-                body = Common.replace_str(body, "%username%", request.getProperty("user_name"));
-                body = Common.replace_str(body, "%user_pass%", request.getProperty("user_pass"));
-                body = Common.replace_str(body, "%user_password%", request.getProperty("user_pass"));
-                body = Common.replace_str(body, "%user_email%", request.getProperty("user_email"));
-                body = Common.replace_str(body, "%user_first_name%", request.getProperty("user_first_name"));
-                body = Common.replace_str(body, "%user_last_name%", request.getProperty("user_last_name"));
+                body = crushftp.handlers.Common.replace_str(body, "%user_name%", request.getProperty("user_name"));
+                body = crushftp.handlers.Common.replace_str(body, "%username%", request.getProperty("user_name"));
+                body = crushftp.handlers.Common.replace_str(body, "%user_pass%", request.getProperty("user_pass"));
+                body = crushftp.handlers.Common.replace_str(body, "%user_password%", request.getProperty("user_pass"));
+                body = crushftp.handlers.Common.replace_str(body, "%user_email%", request.getProperty("user_email"));
+                body = crushftp.handlers.Common.replace_str(body, "%user_first_name%", request.getProperty("user_first_name"));
+                body = crushftp.handlers.Common.replace_str(body, "%user_last_name%", request.getProperty("user_last_name"));
                 if (session != null) {
-                    body = Common.replace_str(body, "%admin_user_name%", session.user.getProperty("username"));
+                    body = crushftp.handlers.Common.replace_str(body, "%admin_user_name%", session.user.getProperty("username"));
                 }
                 if (session != null) {
-                    body = Common.replace_str(body, "%admin_username%", session.user.getProperty("username"));
+                    body = crushftp.handlers.Common.replace_str(body, "%admin_username%", session.user.getProperty("username"));
                 }
-                body = Common.replace_str(body, "{user_name}", request.getProperty("user_name"));
-                body = Common.replace_str(body, "{username}", request.getProperty("user_name"));
-                body = Common.replace_str(body, "{user_pass}", request.getProperty("user_pass"));
-                body = Common.replace_str(body, "{user_password}", request.getProperty("user_pass"));
-                body = Common.replace_str(body, "{user_email}", request.getProperty("user_email"));
-                body = Common.replace_str(body, "{user_first_name}", request.getProperty("user_first_name"));
-                body = Common.replace_str(body, "{user_last_name}", request.getProperty("user_last_name"));
+                body = crushftp.handlers.Common.replace_str(body, "{user_name}", request.getProperty("user_name"));
+                body = crushftp.handlers.Common.replace_str(body, "{username}", request.getProperty("user_name"));
+                body = crushftp.handlers.Common.replace_str(body, "{user_pass}", request.getProperty("user_pass"));
+                body = crushftp.handlers.Common.replace_str(body, "{user_password}", request.getProperty("user_pass"));
+                body = crushftp.handlers.Common.replace_str(body, "{user_email}", request.getProperty("user_email"));
+                body = crushftp.handlers.Common.replace_str(body, "{user_first_name}", request.getProperty("user_first_name"));
+                body = crushftp.handlers.Common.replace_str(body, "{user_last_name}", request.getProperty("user_last_name"));
                 if (session != null) {
-                    body = Common.replace_str(body, "{admin_user_name}", session.user.getProperty("username"));
+                    body = crushftp.handlers.Common.replace_str(body, "{admin_user_name}", session.user.getProperty("username"));
                 }
                 if (session != null) {
-                    body = Common.replace_str(body, "{admin_username}", session.user.getProperty("username"));
+                    body = crushftp.handlers.Common.replace_str(body, "{admin_username}", session.user.getProperty("username"));
                 }
                 body = ServerStatus.change_vars_to_values_static(body, userTemp, new Properties(), session);
-                subject = Common.replace_str(subject, "%user_name%", request.getProperty("user_name"));
-                subject = Common.replace_str(subject, "%username%", request.getProperty("user_name"));
-                subject = Common.replace_str(subject, "%user_pass%", request.getProperty("user_pass"));
-                subject = Common.replace_str(subject, "%user_password%", request.getProperty("user_pass"));
-                subject = Common.replace_str(subject, "%user_email%", request.getProperty("user_email"));
-                subject = Common.replace_str(subject, "%user_first_name%", request.getProperty("user_first_name"));
-                subject = Common.replace_str(subject, "%user_last_name%", request.getProperty("user_last_name"));
+                subject = crushftp.handlers.Common.replace_str(subject, "%user_name%", request.getProperty("user_name"));
+                subject = crushftp.handlers.Common.replace_str(subject, "%username%", request.getProperty("user_name"));
+                subject = crushftp.handlers.Common.replace_str(subject, "%user_pass%", request.getProperty("user_pass"));
+                subject = crushftp.handlers.Common.replace_str(subject, "%user_password%", request.getProperty("user_pass"));
+                subject = crushftp.handlers.Common.replace_str(subject, "%user_email%", request.getProperty("user_email"));
+                subject = crushftp.handlers.Common.replace_str(subject, "%user_first_name%", request.getProperty("user_first_name"));
+                subject = crushftp.handlers.Common.replace_str(subject, "%user_last_name%", request.getProperty("user_last_name"));
                 if (session != null) {
-                    subject = Common.replace_str(subject, "%admin_user_name%", session.user.getProperty("username"));
+                    subject = crushftp.handlers.Common.replace_str(subject, "%admin_user_name%", session.user.getProperty("username"));
                 }
                 if (session != null) {
-                    subject = Common.replace_str(subject, "%admin_username%", session.user.getProperty("username"));
+                    subject = crushftp.handlers.Common.replace_str(subject, "%admin_username%", session.user.getProperty("username"));
                 }
-                subject = Common.replace_str(subject, "{user_name}", request.getProperty("user_name"));
-                subject = Common.replace_str(subject, "{username}", request.getProperty("user_name"));
-                subject = Common.replace_str(subject, "{user_pass}", request.getProperty("user_pass"));
-                subject = Common.replace_str(subject, "{user_password}", request.getProperty("user_pass"));
-                subject = Common.replace_str(subject, "{user_email}", request.getProperty("user_email"));
-                subject = Common.replace_str(subject, "{user_first_name}", request.getProperty("user_first_name"));
-                subject = Common.replace_str(subject, "{user_last_name}", request.getProperty("user_last_name"));
+                subject = crushftp.handlers.Common.replace_str(subject, "{user_name}", request.getProperty("user_name"));
+                subject = crushftp.handlers.Common.replace_str(subject, "{username}", request.getProperty("user_name"));
+                subject = crushftp.handlers.Common.replace_str(subject, "{user_pass}", request.getProperty("user_pass"));
+                subject = crushftp.handlers.Common.replace_str(subject, "{user_password}", request.getProperty("user_pass"));
+                subject = crushftp.handlers.Common.replace_str(subject, "{user_email}", request.getProperty("user_email"));
+                subject = crushftp.handlers.Common.replace_str(subject, "{user_first_name}", request.getProperty("user_first_name"));
+                subject = crushftp.handlers.Common.replace_str(subject, "{user_last_name}", request.getProperty("user_last_name"));
                 if (session != null) {
-                    subject = Common.replace_str(subject, "{admin_user_name}", session.user.getProperty("username"));
+                    subject = crushftp.handlers.Common.replace_str(subject, "{admin_user_name}", session.user.getProperty("username"));
                 }
                 if (session != null) {
-                    subject = Common.replace_str(subject, "{admin_username}", session.user.getProperty("username"));
+                    subject = crushftp.handlers.Common.replace_str(subject, "{admin_username}", session.user.getProperty("username"));
                 }
                 subject = ServerStatus.change_vars_to_values_static(subject, userTemp, new Properties(), session);
                 Properties email_info = new Properties();
@@ -4930,18 +5930,15 @@ lbl192:
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
     }
 
-    /*
-     * Enabled force condition propagation
-     * Lifted jumps to return sites
-     */
     public static String testKeystore(Properties request, String site) {
-        String response = "<commandResult><response>";
+        String response = "<commandResult><response><testResult>";
+        Vector v = null;
         try {
             String s = AdminControls.handleInstance(request, site);
             if (s != null) {
@@ -4950,83 +5947,142 @@ lbl192:
             if (request.getProperty("dump_pass", "false").equals("true")) {
                 throw new Exception("\r\nkeystore:" + ServerStatus.thisObj.common_code.decode_pass(request.getProperty("keystorePass")) + "\r\n" + "key:" + ServerStatus.thisObj.common_code.decode_pass(request.getProperty("keyPass")));
             }
-            if (!request.getProperty("keystorePath").equals("builtin") && !com.crushftp.client.Common.dmz_mode) {
-                if (ServerStatus.BG("v10_beta") && (request.getProperty("keystorePath").toUpperCase().startsWith("FILE://") || !new VRL(request.getProperty("keystorePath")).getProtocol().toUpperCase().equals("FILE"))) {
-                    VRL vrl = new VRL(request.getProperty("keystorePath"));
-                    GenericClient c = Common.getClient(Common.getBaseUrl(vrl.toString()), "SSL Key store load", new Vector());
-                    if (vrl.getConfig() != null && vrl.getConfig().size() > 0) {
-                        c.setConfigObj(vrl.getConfig());
+            String keyStorePath = request.getProperty("keystorePath");
+            if (!request.getProperty("keystorePath").equals("builtin") && !Common.dmz_mode) {
+                if (ServerStatus.BG("v10_beta") && (keyStorePath.toUpperCase().startsWith("FILE://") || !new VRL(keyStorePath).getProtocol().toUpperCase().equals("FILE"))) {
+                    VRL vrl;
+                    block31: {
+                        vrl = new VRL(keyStorePath);
+                        GenericClient c = crushftp.handlers.Common.getClient(crushftp.handlers.Common.getBaseUrl(vrl.toString()), "SSL Key store load", new Vector());
+                        if (vrl.getConfig() != null && vrl.getConfig().size() > 0) {
+                            c.setConfigObj(vrl.getConfig());
+                        }
+                        c.login(vrl.getUsername(), vrl.getPassword(), null);
+                        Properties p = null;
+                        try {
+                            if (c instanceof FileClient) {
+                                if (new File_S(vrl.getPath()).exists()) {
+                                    p = new Properties();
+                                    p.put("size", "1");
+                                }
+                            } else {
+                                p = c.stat(vrl.getPath());
+                            }
+                            if (p != null) {
+                                if (Long.parseLong(p.getProperty("size", "0")) <= 0L) {
+                                    throw new IOException("Keystore file not found:" + vrl.getPath());
+                                }
+                                break block31;
+                            }
+                            throw new IOException("Keystore file not found:" + vrl.getPath());
+                        }
+                        finally {
+                            c.logout();
+                        }
                     }
-                    c.login(vrl.getUsername(), vrl.getPassword(), null);
-                    Properties p = c.stat(vrl.getPath());
-                    if (p == null) throw new IOException("Keystore file not found:" + vrl.getPath());
-                    if (Long.parseLong(p.getProperty("size", "0")) <= 0L) {
-                        throw new IOException("Keystore file not found:" + vrl.getPath());
+                    if (vrl.getProtocol().toUpperCase().equals("FILE")) {
+                        keyStorePath = new VRL(keyStorePath).getPath();
                     }
                 } else {
-                    RandomAccessFile testIn = new RandomAccessFile(new File_S(request.getProperty("keystorePath")), "r");
+                    RandomAccessFile testIn = new RandomAccessFile(new File_S(keyStorePath), "r");
                     if (testIn.length() == 0L) {
-                        throw new IOException("Keystore file not found:" + request.getProperty("keystorePath"));
+                        throw new IOException("Keystore file not found:" + keyStorePath);
                     }
                     testIn.close();
                 }
             }
-            SSLServerSocket ss = (SSLServerSocket)ServerStatus.thisObj.common_code.getServerSocket(0, "127.0.0.1", request.getProperty("keystorePath"), request.getProperty("keystorePass"), request.getProperty("keyPass"), "", false, 10, false, true, null);
-            SSLSocketFactory factory = new Common().getSSLContext("builtin", "builtin", "", "", "TLS", false, true).getSocketFactory();
-            final SSLSocket s1 = (SSLSocket)factory.createSocket(new Socket("127.0.0.1", ss.getLocalPort()), "127.0.0.1", ss.getLocalPort(), true);
-            com.crushftp.client.Common.configureSSLTLSSocket(s1, "TLSv1,TLSv1.1,TLSv1,TLSv1.2");
-            final SSLSocket s2 = (SSLSocket)ss.accept();
-            ss.close();
-            s1.setSoTimeout(1000);
-            s2.setSoTimeout(1000);
-            s2.setUseClientMode(false);
-            s1.setUseClientMode(true);
-            Worker.startWorker(new Runnable(){
-
-                @Override
-                public void run() {
-                    try {
-                        s1.startHandshake();
-                    }
-                    catch (Exception exception) {
-                        // empty catch block
-                    }
+            v = SSLKeyManager.list(keyStorePath, ServerStatus.thisObj.common_code.decode_pass(request.getProperty("keystorePass")));
+            boolean found_private = false;
+            boolean found_alias = false;
+            String aliases = "";
+            int x = 0;
+            while (x < v.size()) {
+                Properties p = (Properties)v.elementAt(x);
+                if (p.getProperty("private", "false").equals("true")) {
+                    found_private = true;
                 }
-            });
-            Worker.startWorker(new Runnable(){
-
-                @Override
-                public void run() {
-                    try {
-                        s2.startHandshake();
-                    }
-                    catch (Exception exception) {
-                        // empty catch block
-                    }
+                if (p.getProperty("alias", "").equals(request.getProperty("alias", ""))) {
+                    found_alias = true;
                 }
-            });
-            s1.getOutputStream().write("1".getBytes());
-            s2.getOutputStream().write("1".getBytes());
-            s1.close();
-            s2.close();
-            response = String.valueOf(response) + "Cert test successful.";
-            return String.valueOf(response) + "</response></commandResult>";
+                if (x > 0) {
+                    aliases = String.valueOf(aliases) + ", ";
+                }
+                aliases = String.valueOf(aliases) + p.getProperty("alias", "");
+                ++x;
+            }
+            if (found_private && !request.getProperty("keyPass", "").equals("")) {
+                SSLServerSocket ss = (SSLServerSocket)ServerStatus.thisObj.common_code.getServerSocket(0, "127.0.0.1", keyStorePath, request.getProperty("keystorePass"), request.getProperty("keyPass"), "", false, 10, false, true, null);
+                SSLSocketFactory factory = new crushftp.handlers.Common().getSSLContext("builtin", "builtin", "", "", "TLS", false, true).getSocketFactory();
+                final SSLSocket s1 = (SSLSocket)factory.createSocket(new Socket("127.0.0.1", ss.getLocalPort()), "127.0.0.1", ss.getLocalPort(), true);
+                Common.configureSSLTLSSocket(s1, "TLSv1,TLSv1.1,TLSv1,TLSv1.2");
+                final SSLSocket s2 = (SSLSocket)ss.accept();
+                ss.close();
+                s1.setSoTimeout(1000);
+                s2.setSoTimeout(1000);
+                s2.setUseClientMode(false);
+                s1.setUseClientMode(true);
+                Worker.startWorker(new Runnable(){
+
+                    @Override
+                    public void run() {
+                        try {
+                            s1.startHandshake();
+                        }
+                        catch (Exception exception) {
+                            // empty catch block
+                        }
+                    }
+                });
+                Worker.startWorker(new Runnable(){
+
+                    @Override
+                    public void run() {
+                        try {
+                            s2.startHandshake();
+                        }
+                        catch (Exception exception) {
+                            // empty catch block
+                        }
+                    }
+                });
+                s1.getOutputStream().write("1".getBytes());
+                s2.getOutputStream().write("1".getBytes());
+                s1.close();
+                s2.close();
+                response = String.valueOf(response) + "\r\nSuccess!  Keystore loaded and private key exists.";
+            }
+            if (found_alias && !request.getProperty("alias", "").equals("")) {
+                response = String.valueOf(response) + "\r\nSuccess!  Alias exists.";
+            } else {
+                if (!found_alias && !request.getProperty("alias", "").equals("")) {
+                    throw new Exception("\r\nFailure! Alias '" + request.getProperty("alias", "") + "' not found in keystore\r\n\r\nAliases: " + aliases);
+                }
+                if (request.getProperty("alias", "").equals("") && !found_private) {
+                    throw new Exception("\r\nFailure! Private key not found in keystore.");
+                }
+            }
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
-            response = String.valueOf(response) + "Cert test failed:";
-            try {
-                if (Cipher.getMaxAllowedKeyLength("AES") < Integer.MAX_VALUE) {
-                    response = AdminControls.getCipherFix(response);
-                }
-            }
-            catch (Exception exception) {
-                // empty catch block
-            }
-            response = String.valueOf(response) + "\r\n\r\n" + Common.url_encode(ee.toString());
+            response = String.valueOf(response) + "\r\n\r\n" + crushftp.handlers.Common.url_encode(ee.getMessage().trim());
             Log.log("SERVER", 0, response);
         }
-        return String.valueOf(response) + "</response></commandResult>";
+        if (v != null) {
+            response = String.valueOf(response) + "</testResult><certInfo>";
+            try {
+                String cert_info = crushftp.handlers.Common.getXMLString(v, "SSL", null).trim();
+                response = String.valueOf(response) + cert_info.substring(cert_info.indexOf("<SSL"));
+            }
+            catch (Exception e) {
+                Log.log("HTTP_SERVER", 1, e);
+                response = String.valueOf(response) + "\r\n\r\n" + crushftp.handlers.Common.url_encode(e.getMessage().trim());
+                Log.log("SERVER", 0, response);
+            }
+            response = String.valueOf(response) + "</certInfo></response></commandResult>";
+        } else {
+            response = String.valueOf(response) + "</testResult></response></commandResult>";
+        }
+        return response;
     }
 
     public static String getCipherFix(String response) {
@@ -5057,13 +6113,13 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            csr = SSLKeyManager.buildNew(request.getProperty("key_alg"), Integer.parseInt(request.getProperty("key_size")), request.getProperty("sig_alg"), Integer.parseInt(request.getProperty("days")), request.getProperty("cn"), request.getProperty("ou"), request.getProperty("o"), request.getProperty("l"), request.getProperty("st"), request.getProperty("c"), request.getProperty("e"), request.getProperty("keystore_path"), com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass", request.getProperty("key_pass")), false), com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass", request.getProperty("key_pass")), false), request.getProperty("sans", ""));
+            csr = SSLKeyManager.buildNew(request.getProperty("key_alg"), Integer.parseInt(request.getProperty("key_size")), request.getProperty("sig_alg"), Integer.parseInt(request.getProperty("days")), request.getProperty("cn"), request.getProperty("ou"), request.getProperty("o"), request.getProperty("l"), request.getProperty("st"), request.getProperty("c"), request.getProperty("e"), request.getProperty("keystore_path"), Common.encryptDecrypt(request.getProperty("keystore_pass", request.getProperty("key_pass")), false), Common.encryptDecrypt(request.getProperty("keystore_pass", request.getProperty("key_pass")), false), request.getProperty("sans", ""));
             response = String.valueOf(response) + "\r\n" + csr + "\r\n";
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 0, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
-            response = String.valueOf(response) + "\r\n" + Common.url_encode("ERROR:" + request.getProperty("keystore_path") + " failed to be generated.") + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "\r\n" + crushftp.handlers.Common.url_encode("ERROR:" + request.getProperty("keystore_path") + " failed to be generated.") + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -5083,8 +6139,8 @@ lbl192:
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 0, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
-            response = String.valueOf(response) + "\r\n" + Common.url_encode("ERROR:" + request.getProperty("keystore_path") + " failed to be generated.") + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "\r\n" + crushftp.handlers.Common.url_encode("ERROR:" + request.getProperty("keystore_path") + " failed to be generated.") + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -5100,13 +6156,13 @@ lbl192:
             String keystore_path = new VRL(request.getProperty("keystore_path")).getPath();
             String import_path = new VRL(request.getProperty("import_path")).getPath();
             String trusted_paths = new VRL(request.getProperty("trusted_paths")).getPath();
-            String result = SSLKeyManager.importReply(keystore_path, com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass", request.getProperty("key_pass")), false), com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass", request.getProperty("key_pass")), false), import_path, trusted_paths);
+            String result = SSLKeyManager.importReply(keystore_path, Common.encryptDecrypt(request.getProperty("keystore_pass", request.getProperty("key_pass")), false), Common.encryptDecrypt(request.getProperty("keystore_pass", request.getProperty("key_pass")), false), import_path, trusted_paths);
             response = String.valueOf(response) + "\r\n" + result + "\r\n";
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 0, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
-            response = String.valueOf(response) + "\r\n" + Common.url_encode("ERROR:" + request.getProperty("import_path") + " failed to be imported into " + request.getProperty("keystore_path") + ".") + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "\r\n" + crushftp.handlers.Common.url_encode("ERROR:" + request.getProperty("import_path") + " failed to be imported into " + request.getProperty("keystore_path") + ".") + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -5119,14 +6175,14 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            Vector v = SSLKeyManager.list(request.getProperty("keystore_path"), com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass"), false));
-            s = Common.getXMLString(v, "SSL", null).trim();
+            Vector v = SSLKeyManager.list(request.getProperty("keystore_path"), Common.encryptDecrypt(request.getProperty("keystore_pass"), false));
+            s = crushftp.handlers.Common.getXMLString(v, "SSL", null).trim();
             response = String.valueOf(response) + s.substring(s.indexOf("<SSL"));
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 0, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
-            response = String.valueOf(response) + "\r\n" + Common.url_encode("ERROR:" + request.getProperty("keystore_path") + " failed to be listed.") + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "\r\n" + crushftp.handlers.Common.url_encode("ERROR:" + request.getProperty("keystore_path") + " failed to be listed.") + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -5139,13 +6195,13 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            boolean ok = SSLKeyManager.delete(request.getProperty("keystore_path"), com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias"));
+            boolean ok = SSLKeyManager.delete(request.getProperty("keystore_path"), Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias"));
             response = String.valueOf(response) + "\r\n" + ok + "\r\n";
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 0, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
-            response = String.valueOf(response) + "\r\n" + Common.url_encode("ERROR:" + request.getProperty("alias") + " failed to be deleted.") + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "\r\n" + crushftp.handlers.Common.url_encode("ERROR:" + request.getProperty("alias") + " failed to be deleted.") + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -5158,13 +6214,13 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            boolean ok = SSLKeyManager.rename(request.getProperty("keystore_path"), com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias1"), request.getProperty("alias2"));
+            boolean ok = SSLKeyManager.rename(request.getProperty("keystore_path"), Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias1"), request.getProperty("alias2"));
             response = String.valueOf(response) + "\r\n" + ok + "\r\n";
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 0, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
-            response = String.valueOf(response) + "\r\n" + Common.url_encode("ERROR:" + request.getProperty("alias1") + " failed to be generated.") + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "\r\n" + crushftp.handlers.Common.url_encode("ERROR:" + request.getProperty("alias1") + " failed to be generated.") + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -5177,13 +6233,13 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            s = SSLKeyManager.export(request.getProperty("keystore_path"), com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias"));
+            s = SSLKeyManager.export(request.getProperty("keystore_path"), Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias"));
             response = String.valueOf(response) + "\r\n" + s + "\r\n";
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 0, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
-            response = String.valueOf(response) + "\r\n" + Common.url_encode("ERROR:" + request.getProperty("alias") + " failed to be exported.") + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "\r\n" + crushftp.handlers.Common.url_encode("ERROR:" + request.getProperty("alias") + " failed to be exported.") + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -5196,13 +6252,13 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            SSLKeyManager.addPrivate(request.getProperty("keystore_path"), com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias"), request.getProperty("key_path"), com.crushftp.client.Common.encryptDecrypt(request.getProperty("key_pass"), false));
+            SSLKeyManager.addPrivate(request.getProperty("keystore_path"), Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias"), request.getProperty("key_path"), Common.encryptDecrypt(request.getProperty("key_pass"), false));
             response = String.valueOf(response) + "\r\nSUCCESS\r\n";
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 0, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
-            response = String.valueOf(response) + "\r\n" + Common.url_encode("ERROR:" + request.getProperty("alias") + " failed to be generated.") + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "\r\n" + crushftp.handlers.Common.url_encode("ERROR:" + request.getProperty("alias") + " failed to be generated.") + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -5215,13 +6271,13 @@ lbl192:
             if (s != null) {
                 return s;
             }
-            SSLKeyManager.addPublic(request.getProperty("keystore_path"), com.crushftp.client.Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias"), request.getProperty("key_path"));
+            SSLKeyManager.addPublic(request.getProperty("keystore_path"), Common.encryptDecrypt(request.getProperty("keystore_pass"), false), request.getProperty("alias"), request.getProperty("key_path"));
             response = String.valueOf(response) + "\r\nSUCCESS\r\n";
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 0, ee);
-            response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
-            response = String.valueOf(response) + "\r\n" + Common.url_encode("ERROR:" + request.getProperty("alias") + " failed to be generated.") + "\r\n";
+            response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
+            response = String.valueOf(response) + "\r\n" + crushftp.handlers.Common.url_encode("ERROR:" + request.getProperty("alias") + " failed to be generated.") + "\r\n";
         }
         response = String.valueOf(response) + "</response></commandResult>";
         return response;
@@ -5242,7 +6298,7 @@ lbl192:
                         tmp = new Socket();
                         tmp.setSoTimeout(5000);
                         tmp.connect(new InetSocketAddress(request.getProperty("host").trim(), Integer.parseInt(request.getProperty("port", "").trim())));
-                        String id = Common.makeBoundary(3);
+                        String id = crushftp.handlers.Common.makeBoundary(3);
                         tmp.setSoTimeout(500);
                         tmp_telnet_sockets.put(id, tmp);
                         response = String.valueOf(response) + "<id>" + id + "</id>";
@@ -5269,7 +6325,7 @@ lbl192:
                         catch (SocketTimeoutException socketTimeoutException) {
                             // empty catch block
                         }
-                        response = String.valueOf(response) + "<data>" + Common.url_encode(result) + "</data>";
+                        response = String.valueOf(response) + "<data>" + crushftp.handlers.Common.url_encode(result) + "</data>";
                         break block17;
                     }
                     if (request.getProperty("sub_command", "").equals("write")) {
@@ -5283,7 +6339,7 @@ lbl192:
                 }
                 catch (Exception e) {
                     Log.log("HTTP_SERVER", 0, e);
-                    response = String.valueOf(response) + "<error>ERROR:" + Common.url_encode("" + e) + "</error>";
+                    response = String.valueOf(response) + "<error>ERROR:" + crushftp.handlers.Common.url_encode("" + e) + "</error>";
                     if (tmp != null) {
                         tmp.close();
                     }
@@ -5292,7 +6348,7 @@ lbl192:
             }
             catch (Exception ee) {
                 Log.log("HTTP_SERVER", 0, ee);
-                response = String.valueOf(response) + "Error:" + Common.url_encode(ee.toString()) + "\r\n";
+                response = String.valueOf(response) + "Error:" + crushftp.handlers.Common.url_encode(ee.toString()) + "\r\n";
             }
         }
         response = String.valueOf(response) + "</response></commandResult>";
@@ -5331,7 +6387,7 @@ lbl192:
         Properties virtual_orig = null;
         Properties permission0 = null;
         if (request.containsKey("permissions")) {
-            permission0 = request.get("permissions") != null && request.get("permissions") instanceof Properties ? (Properties)request.get("permissions") : (Properties)Common.readXMLObjectError(new ByteArrayInputStream(Common.url_decode(Common.replace_str(request.getProperty("permissions").replace('+', ' '), "%26", "&amp;")).getBytes("UTF8")));
+            permission0 = request.get("permissions") != null && request.get("permissions") instanceof Properties ? (Properties)request.get("permissions") : (Properties)crushftp.handlers.Common.readXMLObjectError(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(crushftp.handlers.Common.replace_str(request.getProperty("permissions").replace('+', ' '), "%26", "&amp;")).getBytes("UTF8")));
         } else {
             VFS tempVFS2 = UserTools.ut.getVFS(request.getProperty("serverGroup"), username);
             permission0 = tempVFS2.getPermission0();
@@ -5368,7 +6424,7 @@ lbl192:
         virtual.put("vfs_permissions_object", permissions);
         if (request.containsKey("vfs_items")) {
             Object o = null;
-            o = request.get("vfs_items") != null && (request.get("vfs_items") instanceof Properties || request.get("vfs_items") instanceof Vector) ? request.get("vfs_items") : Common.readXMLObjectError(new ByteArrayInputStream(Common.url_decode(Common.replace_str(request.getProperty("vfs_items").replace('+', ' '), "%26", "&amp;")).getBytes("UTF8")));
+            o = request.get("vfs_items") != null && (request.get("vfs_items") instanceof Properties || request.get("vfs_items") instanceof Vector) ? request.get("vfs_items") : crushftp.handlers.Common.readXMLObjectError(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(crushftp.handlers.Common.replace_str(request.getProperty("vfs_items").replace('+', ' '), "%26", "&amp;")).getBytes("UTF8")));
             if (o instanceof Properties) {
                 o = null;
             }
@@ -5379,7 +6435,7 @@ lbl192:
                 Vector v = (Vector)p.get("vfs_item");
                 if (!p.getProperty("name").equals("VFS") || !p.getProperty("path").equals("")) {
                     Log.log("HTTP_SERVER", 2, "" + p);
-                    String path = com.crushftp.client.Common.dots(String.valueOf(p.getProperty("path").substring(1)) + p.getProperty("name"));
+                    String path = Common.dots(String.valueOf(p.getProperty("path").substring(1)) + p.getProperty("name"));
                     if (site.indexOf("(CONNECT)") < 0 && site.indexOf("(USER_VIEW)") < 0 && site.indexOf("(USER_EDIT)") < 0 && site.indexOf("(JOB_EDIT)") < 0) {
                         String groupName = thisSession.getAdminGroupName(request);
                         Properties pp = new Properties();
@@ -5437,7 +6493,7 @@ lbl192:
             virtual.putAll((Map<?, ?>)virtual2);
         }
         if (real_update) {
-            Common.updateObjectLog(virtual, virtual_orig, "users/" + request.getProperty("serverGroup") + "/" + username + "/vfs/", false, log_summary);
+            crushftp.handlers.Common.updateObjectLog(virtual, virtual_orig, "users/" + request.getProperty("serverGroup") + "/" + username + "/vfs/", false, log_summary);
         }
         return VFS.getVFS(virtual);
     }
@@ -5450,7 +6506,7 @@ lbl192:
                 Properties list_item = (Properties)listing.elementAt(x);
                 Log.log("HTTP_SERVER", 3, "Adding:" + list_item.getProperty("name"));
                 list_item.put("preview", "0");
-                list_item.put("sizeFormatted", com.crushftp.client.Common.format_bytes2(list_item.getProperty("size")));
+                list_item.put("sizeFormatted", Common.format_bytes2(list_item.getProperty("size")));
                 list_item.put("modified", list_item.getProperty("modified", "0"));
                 list_item.remove("url");
                 list_item.put("itemType", list_item.getProperty("type"));
@@ -5462,7 +6518,7 @@ lbl192:
         catch (Exception e) {
             Log.log("HTTP_SERVER", 1, e);
         }
-        Common.do_sort(items, "name");
+        crushftp.handlers.Common.do_sort(items, "name");
         int x = 0;
         while (x < items.size()) {
             Properties lp = (Properties)items.elementAt(x);
@@ -5503,7 +6559,7 @@ lbl192:
 
     public static String getTempAccounts(Properties request, String site) {
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -5535,7 +6591,7 @@ lbl192:
                                 pp.put(key.toUpperCase(), val);
                                 ++xx;
                             }
-                            Properties info = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
+                            Properties info = (Properties)crushftp.handlers.Common.readXMLObject_U(String.valueOf(f.getPath()) + "/INFO.XML");
                             pp.put("expire", expire_sdf.format(ex_sdf.parseObject(pp.getProperty("EX"))));
                             info.putAll((Map<?, ?>)pp);
                             Enumeration<Object> keys = info.keys();
@@ -5552,7 +6608,7 @@ lbl192:
                             ppp.put("tempaccount_pass", info.get("P"));
                             ppp.put("tempaccount_folder", f.getName());
                             if (new File_U(String.valueOf(f.getPath()) + "/VFS.XML").exists()) {
-                                Properties permissions = (Properties)Common.readXMLObject_U(String.valueOf(f.getPath()) + "/VFS.XML");
+                                Properties permissions = (Properties)crushftp.handlers.Common.readXMLObject_U(String.valueOf(f.getPath()) + "/VFS.XML");
                                 ppp.put("permissions", permissions);
                             }
                             items.addElement(ppp);
@@ -5564,8 +6620,8 @@ lbl192:
                     ++x;
                 }
             }
-            Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
-            return Common.getXMLString(items, "temp_accounts", null);
+            crushftp.handlers.Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
+            return crushftp.handlers.Common.getXMLString(items, "temp_accounts", null);
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
@@ -5584,14 +6640,14 @@ lbl192:
                 Properties p = new Properties();
                 p.put("request", request);
                 p.put("site", site);
-                SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.share.addTempAccount", "info", p);
+                SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.share.addTempAccount", "info", p);
             }
-            request.put("tempaccount_user", com.crushftp.client.Common.dots(request.getProperty("tempaccount_user")));
-            request.put("tempaccount_pass", com.crushftp.client.Common.dots(request.getProperty("tempaccount_pass")));
-            request.put("tempaccount_folder", com.crushftp.client.Common.dots(request.getProperty("tempaccount_folder")));
+            request.put("tempaccount_user", Common.dots(request.getProperty("tempaccount_user")));
+            request.put("tempaccount_pass", Common.dots(request.getProperty("tempaccount_pass")));
+            request.put("tempaccount_folder", Common.dots(request.getProperty("tempaccount_folder")));
             response = "<commandResult><response>";
             if (request.getProperty("instance", "").equals("")) break block8;
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -5606,10 +6662,10 @@ lbl192:
         try {
             new File_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/VFS/").mkdirs();
             new File_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "storage/" + request.getProperty("tempaccount_user") + request.getProperty("tempaccount_pass")).mkdirs();
-            Object permissions = Common.readXMLObject(new ByteArrayInputStream(Common.url_decode(request.getProperty("permissions").replace('+', ' ')).getBytes("UTF8")));
-            Properties info = (Properties)Common.readXMLObject(new ByteArrayInputStream(Common.url_decode(request.getProperty("info").replace('+', ' ')).getBytes("UTF8")));
-            Common.writeXMLObject_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/VFS.XML", permissions, "VFS");
-            Common.writeXMLObject_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/INFO.XML", info, "INFO");
+            Object permissions = crushftp.handlers.Common.readXMLObject(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(request.getProperty("permissions").replace('+', ' ')).getBytes("UTF8")));
+            Properties info = (Properties)crushftp.handlers.Common.readXMLObject(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(request.getProperty("info").replace('+', ' ')).getBytes("UTF8")));
+            crushftp.handlers.Common.writeXMLObject_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/VFS.XML", permissions, "VFS");
+            crushftp.handlers.Common.writeXMLObject_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/INFO.XML", info, "INFO");
             String[] part_names = request.getProperty("tempaccount_folder").split(",,");
             Date td = new SimpleDateFormat("MM/dd/yyyy hh:mm aa", Locale.US).parse(info.getProperty("expire"));
             String fname = "";
@@ -5643,14 +6699,14 @@ lbl192:
                 Properties p = new Properties();
                 p.put("request", request);
                 p.put("site", site);
-                SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.share.removeTempAccount", "info", p);
+                SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.share.removeTempAccount", "info", p);
             }
-            request.put("tempaccount_user", com.crushftp.client.Common.dots(request.getProperty("tempaccount_user")));
-            request.put("tempaccount_pass", com.crushftp.client.Common.dots(request.getProperty("tempaccount_pass")));
-            request.put("tempaccount_folder", com.crushftp.client.Common.dots(request.getProperty("tempaccount_folder")));
+            request.put("tempaccount_user", Common.dots(request.getProperty("tempaccount_user")));
+            request.put("tempaccount_pass", Common.dots(request.getProperty("tempaccount_pass")));
+            request.put("tempaccount_folder", Common.dots(request.getProperty("tempaccount_folder")));
             response = "<commandResult><response>";
             if (request.getProperty("instance", "").equals("")) break block8;
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -5663,9 +6719,9 @@ lbl192:
             }
         }
         try {
-            Properties account_files = (Properties)Common.getElements(Common.getSaxBuilder().build((InputStream)new ByteArrayInputStream(AdminControls.getTempAccountFiles(request, site).getBytes("UTF8"))).getRootElement());
-            Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder"), false);
-            Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "storage/" + request.getProperty("tempaccount_user") + request.getProperty("tempaccount_pass"), false);
+            Properties account_files = (Properties)crushftp.handlers.Common.getElements(crushftp.handlers.Common.getSaxBuilder().build((InputStream)new ByteArrayInputStream(AdminControls.getTempAccountFiles(request, site).getBytes("UTF8"))).getRootElement());
+            crushftp.handlers.Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder"), false);
+            crushftp.handlers.Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "storage/" + request.getProperty("tempaccount_user") + request.getProperty("tempaccount_pass"), false);
             response = String.valueOf(response) + "Success.";
             Vector files = (Vector)account_files.get("refFiles");
             if (files != null && files.size() > 0) {
@@ -5688,12 +6744,12 @@ lbl192:
     public static String getTempAccountFiles(Properties request, String site) {
         String response;
         block7: {
-            request.put("tempaccount_user", com.crushftp.client.Common.dots(request.getProperty("tempaccount_user")));
-            request.put("tempaccount_pass", com.crushftp.client.Common.dots(request.getProperty("tempaccount_pass")));
-            request.put("tempaccount_folder", com.crushftp.client.Common.dots(request.getProperty("tempaccount_folder")));
+            request.put("tempaccount_user", Common.dots(request.getProperty("tempaccount_user")));
+            request.put("tempaccount_pass", Common.dots(request.getProperty("tempaccount_pass")));
+            request.put("tempaccount_folder", Common.dots(request.getProperty("tempaccount_folder")));
             response = "<commandResult><response>";
             if (request.getProperty("instance", "").equals("")) break block7;
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -5711,19 +6767,21 @@ lbl192:
             Vector<String> realUrls = new Vector<String>();
             p.put("fileNames", fileNames);
             p.put("realUrls", realUrls);
-            File_U[] files = (File_U[])new File_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/VFS/").listFiles();
+            Vector files = new Vector();
+            crushftp.handlers.Common.getAllFileListing(files, String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/VFS/", 15, false);
             if (files != null) {
                 int x = 0;
-                while (x < files.length) {
-                    fileNames.addElement(files[x].getName());
-                    Vector v = (Vector)Common.readXMLObject(files[x]);
+                while (x < files.size()) {
+                    File_S f = (File_S)files.get(x);
+                    fileNames.addElement(f.getName());
+                    Vector v = (Vector)crushftp.handlers.Common.readXMLObject(f);
                     Properties item = (Properties)v.elementAt(0);
                     realUrls.addElement(new VRL(item.getProperty("url")).safe());
                     ++x;
                 }
             }
-            Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
-            return Common.getXMLString(p, "temp_accounts_files", null, true);
+            crushftp.handlers.Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
+            return crushftp.handlers.Common.getXMLString(p, "temp_accounts_files", null, true);
         }
         catch (Exception ee) {
             Log.log("HTTP_SERVER", 1, ee);
@@ -5744,15 +6802,15 @@ lbl192:
                 Properties p = new Properties();
                 p.put("request", request);
                 p.put("site", site);
-                SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.share.removeTempAccountFile", "info", p);
+                SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.share.removeTempAccountFile", "info", p);
             }
-            request.put("tempaccount_user", com.crushftp.client.Common.dots(request.getProperty("tempaccount_user")));
-            request.put("tempaccount_pass", com.crushftp.client.Common.dots(request.getProperty("tempaccount_pass")));
-            request.put("tempaccount_file", com.crushftp.client.Common.dots(request.getProperty("tempaccount_file")));
-            request.put("tempaccount_folder", com.crushftp.client.Common.dots(request.getProperty("tempaccount_folder")));
+            request.put("tempaccount_user", Common.dots(request.getProperty("tempaccount_user")));
+            request.put("tempaccount_pass", Common.dots(request.getProperty("tempaccount_pass")));
+            request.put("tempaccount_file", Common.dots(request.getProperty("tempaccount_file")));
+            request.put("tempaccount_folder", Common.dots(request.getProperty("tempaccount_folder")));
             response = "<commandResult><response>";
             if (request.getProperty("instance", "").equals("")) break block6;
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -5765,8 +6823,8 @@ lbl192:
             }
         }
         try {
-            Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/VFS/" + request.getProperty("tempaccount_file"), false);
-            Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "storage/" + request.getProperty("tempaccount_user") + request.getProperty("tempaccount_pass") + "/" + request.getProperty("tempaccount_file"), false);
+            crushftp.handlers.Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/VFS/" + request.getProperty("tempaccount_file"), false);
+            crushftp.handlers.Common.recurseDelete_U(String.valueOf(ServerStatus.SG("temp_accounts_path")) + "storage/" + request.getProperty("tempaccount_user") + request.getProperty("tempaccount_pass") + "/" + request.getProperty("tempaccount_file"), false);
             response = String.valueOf(response) + "Success.";
         }
         catch (Exception ee) {
@@ -5788,15 +6846,15 @@ lbl192:
                 Properties p = new Properties();
                 p.put("request", request);
                 p.put("site", site);
-                SharedSessionReplicated.send(Common.makeBoundary(), "crushftp.share.addTempAccountFile", "info", p);
+                SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.share.addTempAccountFile", "info", p);
             }
-            request.put("tempaccount_user", com.crushftp.client.Common.dots(request.getProperty("tempaccount_user")));
-            request.put("tempaccount_pass", com.crushftp.client.Common.dots(request.getProperty("tempaccount_pass")));
-            request.put("tempaccount_file", com.crushftp.client.Common.dots(request.getProperty("tempaccount_file")));
-            request.put("tempaccount_folder", com.crushftp.client.Common.dots(request.getProperty("tempaccount_folder")));
+            request.put("tempaccount_user", Common.dots(request.getProperty("tempaccount_user")));
+            request.put("tempaccount_pass", Common.dots(request.getProperty("tempaccount_pass")));
+            request.put("tempaccount_file", Common.dots(request.getProperty("tempaccount_file")));
+            request.put("tempaccount_folder", Common.dots(request.getProperty("tempaccount_folder")));
             response = "<commandResult><response>";
             if (request.getProperty("instance", "").equals("")) break block12;
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -5816,7 +6874,7 @@ lbl192:
                 String userHome = String.valueOf(ServerStatus.SG("temp_accounts_path")) + "accounts/" + request.getProperty("tempaccount_folder") + "/";
                 String userStorage = String.valueOf(ServerStatus.SG("temp_accounts_path")) + "storage/" + request.getProperty("tempaccount_user") + request.getProperty("tempaccount_pass") + "/";
                 if (request.getProperty("tempaccount_reference", "false").equals("false")) {
-                    Common.recurseCopyThreaded_U(fileItem.getPath(), String.valueOf(userStorage) + fileItem.getName() + (fileItem.isDirectory() ? "/" : ""), true, false);
+                    crushftp.handlers.Common.recurseCopyThreaded_U(fileItem.getPath(), String.valueOf(userStorage) + fileItem.getName() + (fileItem.isDirectory() ? "/" : ""), true, false);
                 }
                 Properties vItem = new Properties();
                 if (request.getProperty("tempaccount_reference", "false").equals("false")) {
@@ -5827,7 +6885,7 @@ lbl192:
                 vItem.put("type", fileItem.isDirectory() ? "dir" : "file");
                 Vector<Properties> v = new Vector<Properties>();
                 v.addElement(vItem);
-                Common.writeXMLObject_U(String.valueOf(userHome) + "VFS/" + fileItem.getName(), v, "VFS");
+                crushftp.handlers.Common.writeXMLObject_U(String.valueOf(userHome) + "VFS/" + fileItem.getName(), v, "VFS");
                 if (request.getProperty("tempaccount_reference", "false").equals("false")) {
                     Thread.sleep(500L);
                 }
@@ -5847,7 +6905,7 @@ lbl192:
         block7: {
             response = "<commandResult><response>";
             if (request.getProperty("instance", "").equals("")) break block7;
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -5860,13 +6918,13 @@ lbl192:
             }
         }
         try {
-            String client_id = Common.dots(request.getProperty("client_id"));
-            String item_id = Common.dots(request.getProperty("item_id"));
+            String client_id = crushftp.handlers.Common.dots(request.getProperty("client_id"));
+            String item_id = crushftp.handlers.Common.dots(request.getProperty("item_id"));
             if (client_id.length() < 3 || item_id.length() < 5) {
                 throw new Exception("Invalid client or item id!");
             }
             if (new File_S("./multi_journal/" + client_id + "/" + item_id).exists()) {
-                Common.recurseDelete("./multi_journal/" + client_id + "/" + item_id, false);
+                crushftp.handlers.Common.recurseDelete("./multi_journal/" + client_id + "/" + item_id, false);
             }
             ServerStatus.thisObj.server_info.put("replicated_vfs_ping_interval", "0");
             response = String.valueOf(response) + client_id + "/" + item_id + " deleted.";
@@ -5883,7 +6941,7 @@ lbl192:
     }
 
     public static Object getUserVersions(Properties request) throws ParseException {
-        String username = Common.url_decode(request.getProperty("username").replace('+', ' '));
+        String username = crushftp.handlers.Common.url_decode(request.getProperty("username").replace('+', ' '));
         File_S[] folders = (File_S[])new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/").listFiles();
         Vector<Properties> userVersions = new Vector<Properties>();
         int x = 0;
@@ -5907,7 +6965,7 @@ lbl192:
 
     public static Object getDeletedUsers(Properties request) throws ParseException {
         Object files;
-        String server_group = Common.url_decode(request.getProperty("serverGroup").replace('+', ' '));
+        String server_group = crushftp.handlers.Common.url_decode(request.getProperty("serverGroup").replace('+', ' '));
         File_S[] folders = (File_S[])new File_S(String.valueOf(System.getProperty("crushftp.backup")) + "backup/").listFiles();
         Vector user_list = new Vector();
         UserTools.refreshUserList(server_group, user_list);
@@ -5933,7 +6991,7 @@ lbl192:
         while (e.hasMoreElements()) {
             String key = (String)e.nextElement();
             files = ((Vector)deleted_users_files.get(key)).toArray();
-            Arrays.sort(files, Common.get_file_last_modified_Comparator());
+            Arrays.sort(files, crushftp.handlers.Common.get_file_last_modified_Comparator());
             Properties p = new Properties();
             p.put(key, ((File_S)files[((Object[])files).length - 1]).getName());
             deleted_users.add(p);
@@ -5952,27 +7010,27 @@ lbl192:
             if (!request.getProperty("instance", "").equals("")) {
                 Object object = DMZServerCommon.stop_send_prefs;
                 synchronized (object) {
-                    String id = Common.makeBoundary();
+                    String id = crushftp.handlers.Common.makeBoundary();
                     String instance = request.remove("instance").toString();
                     DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
                     Properties p = DMZServerCommon.getResponse(id, 20);
                     if (request.getProperty("key").indexOf("server_settings/") >= 0) {
-                        String id2 = Common.makeBoundary();
+                        String id2 = crushftp.handlers.Common.makeBoundary();
                         DMZServerCommon.sendCommand(instance, new Properties(), "GET:SERVER_SETTINGS", id2);
                         Properties pp = DMZServerCommon.getResponse(id2, 20);
                         SharedSessionReplicated.send("", "WRITE_PREFS", instance, (Properties)pp.get("data"));
                         Thread.sleep(200L);
-                        Common.write_server_settings((Properties)pp.get("data"), instance);
+                        crushftp.handlers.Common.write_server_settings((Properties)pp.get("data"), instance);
                     }
                     return p.get("data").toString();
                 }
             }
-            Properties new_schedule = (Properties)Common.readXMLObject(new ByteArrayInputStream(Common.url_decode(request.getProperty("data").replace('+', ' ')).getBytes("UTF8")));
+            Properties new_schedule = (Properties)crushftp.handlers.Common.readXMLObject(new ByteArrayInputStream(crushftp.handlers.Common.url_decode(request.getProperty("data").replace('+', ' ')).getBytes("UTF8")));
             Vector repoortSchdedules = (Vector)ServerStatus.server_settings.get("reportSchedules");
             String[] keys = request.getProperty("key").split("/");
             int index = Integer.parseInt(keys[2]);
             if (index < repoortSchdedules.size()) {
-                Common.updateObjectLog(new_schedule, repoortSchdedules.elementAt(index), request.getProperty("key"), true, new StringBuffer());
+                crushftp.handlers.Common.updateObjectLog(new_schedule, repoortSchdedules.elementAt(index), request.getProperty("key"), true, new StringBuffer());
             } else {
                 repoortSchdedules.add(new_schedule);
             }
@@ -5994,17 +7052,17 @@ lbl192:
             if (!request.getProperty("instance", "").equals("")) {
                 Object object = DMZServerCommon.stop_send_prefs;
                 synchronized (object) {
-                    String id = Common.makeBoundary();
+                    String id = crushftp.handlers.Common.makeBoundary();
                     String instance = request.remove("instance").toString();
                     DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
                     Properties p = DMZServerCommon.getResponse(id, 20);
                     if (request.getProperty("key").indexOf("server_settings/") >= 0) {
-                        String id2 = Common.makeBoundary();
+                        String id2 = crushftp.handlers.Common.makeBoundary();
                         DMZServerCommon.sendCommand(instance, new Properties(), "GET:SERVER_SETTINGS", id2);
                         Properties pp = DMZServerCommon.getResponse(id2, 20);
                         SharedSessionReplicated.send("", "WRITE_PREFS", instance, (Properties)pp.get("data"));
                         Thread.sleep(200L);
-                        Common.write_server_settings((Properties)pp.get("data"), instance);
+                        crushftp.handlers.Common.write_server_settings((Properties)pp.get("data"), instance);
                     }
                     return p.get("data").toString();
                 }
@@ -6023,7 +7081,7 @@ lbl192:
 
     public static String setMaxServerMemory(Properties request, String site) {
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -6033,7 +7091,7 @@ lbl192:
                 Log.log("SERVER", 0, e);
             }
         } else {
-            com.crushftp.client.Common.update_service_memory(Integer.parseInt(request.getProperty("memory", "512")), "CrushFTP");
+            Common.update_service_memory(Integer.parseInt(request.getProperty("memory", "512")), System.getProperty("appname", "CrushFTP"));
         }
         return "";
     }
@@ -6041,13 +7099,13 @@ lbl192:
     public static String setEncryptionPassword(Properties request, String site) {
         String response = "<?xml version=\"1.0\" encoding=\"UTF-8\"?> \r\n";
         response = String.valueOf(response) + "<result><response>";
-        String pass = Common.url_decode(request.getProperty("encryption_password", ""));
+        String pass = crushftp.handlers.Common.url_decode(request.getProperty("encryption_password", ""));
         while (pass.length() % 8 != 0) {
             pass = String.valueOf(pass) + "Z";
         }
         boolean ok = true;
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -6060,7 +7118,7 @@ lbl192:
             if (!ServerStatus.SG("encryption_pass_needed_test").equals("")) {
                 try {
                     String chars = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-                    String result = com.crushftp.client.Common.encryptDecrypt(ServerStatus.SG("encryption_pass_needed_test"), false, pass);
+                    String result = Common.encryptDecrypt(ServerStatus.SG("encryption_pass_needed_test"), false, pass);
                     int x = 0;
                     while (x < result.length()) {
                         if (chars.indexOf(String.valueOf(result.charAt(x))) < 0) {
@@ -6081,9 +7139,9 @@ lbl192:
                 }
             }
             if (ok) {
-                com.crushftp.client.Common.set_encryption_password(pass);
+                Common.set_encryption_password(pass);
                 try {
-                    ServerStatus.server_settings.put("encryption_pass_needed_test", com.crushftp.client.Common.encryptDecrypt(Common.makeBoundary(3), true));
+                    ServerStatus.server_settings.put("encryption_pass_needed_test", Common.encryptDecrypt(crushftp.handlers.Common.makeBoundary(3), true));
                     ServerStatus.thisObj.save_server_settings(false);
                 }
                 catch (Exception exception) {
@@ -6116,8 +7174,8 @@ lbl192:
         }
         String response = "";
         try {
-            Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
-            response = Common.getXMLString(listingProp, "listingInfo", null);
+            crushftp.handlers.Common cfr_ignored_0 = ServerStatus.thisObj.common_code;
+            response = crushftp.handlers.Common.getXMLString(listingProp, "listingInfo", null);
         }
         catch (Exception e) {
             Log.log("HTTP_SERVER", 1, e);
@@ -6130,7 +7188,7 @@ lbl192:
 
     public static String restartProcess(Properties request, String site) {
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
             try {
@@ -6148,7 +7206,7 @@ lbl192:
     public static String saveHttpChallengeToken(Properties request) {
         String result = "Success";
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, "", "RUN:INSTANCE_ACTION", id);
             try {
@@ -6197,7 +7255,7 @@ lbl192:
     public static Properties putTLSALPNChallengeJKS(Properties request) {
         Properties result = null;
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, "", "RUN:INSTANCE_ACTION", id);
             try {
@@ -6216,7 +7274,7 @@ lbl192:
                 keyGen.initialize(2048, SecureRandom.getInstance("SHA1PRNG"));
                 KeyPair keypair = keyGen.generateKeyPair();
                 X509Certificate challenage_cert = SSLKeyManager.createTlsAlpn01Certificate(keypair, request.getProperty("domain", ""), acmeValidation);
-                KeyStore jks = KeyStore.getInstance(KeyStore.getDefaultType());
+                java.security.KeyStore jks = java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType());
                 jks.load(null, null);
                 jks.setCertificateEntry(request.getProperty("domain", "").trim(), challenage_cert);
                 Certificate[] certChain = new Certificate[]{challenage_cert};
@@ -6226,20 +7284,24 @@ lbl192:
                 jks.store(baos, "tls_alpn_challenge".toCharArray());
                 Properties p = new Properties();
                 p.put("bytes", baos.toByteArray());
-                com.crushftp.client.Common.System2.put("crushftp.keystores." + (String.valueOf(System.getProperty("crushftp.prefs")) + "tls_challenge.jks").toUpperCase(), p);
+                Common.System2.put("crushftp.keystores." + (String.valueOf(System.getProperty("crushftp.prefs")) + "tls_challenge.jks").toUpperCase(), p);
                 Vector server_list = ServerStatus.VG("server_list");
                 int x = 0;
                 while (x < server_list.size()) {
                     Properties server_item = (Properties)server_list.elementAt(x);
-                    if (server_item.getProperty("serverType", "").equalsIgnoreCase("HTTPS") && server_item.getProperty("port", "").equals(request.getProperty("tls_alpn_https_port", "443").trim())) {
+                    if ((server_item.getProperty("serverType", "").equalsIgnoreCase("HTTPS") || server_item.getProperty("serverType", "").equalsIgnoreCase("PORTFORWARDS")) && server_item.getProperty("port", "").equals(request.getProperty("tls_alpn_https_port", "443").trim())) {
                         Properties server_item_original;
                         result = server_item_original = (Properties)server_item.clone();
+                        if (server_item.getProperty("serverType", "").equalsIgnoreCase("PORTFORWARDS")) {
+                            server_item.put("serverType", "HTTPS");
+                        }
                         server_item.put("tls_alpn_org_customKeystore", server_item.getProperty("customKeystore", ""));
                         server_item.put("customKeystore", String.valueOf(System.getProperty("crushftp.prefs")) + "tls_challenge.jks");
                         server_item.put("tls_alpn_org_customKeystorePass", server_item.getProperty("customKeystorePass", ""));
-                        server_item.put("customKeystorePass", com.crushftp.client.Common.encryptDecrypt("tls_alpn_challenge", true));
+                        server_item.put("customKeystorePass", Common.encryptDecrypt("tls_alpn_challenge", true));
                         server_item.put("tls_alpn_org_customKeystoreCertPass", server_item.getProperty("customKeystoreCertPass", ""));
-                        server_item.put("customKeystoreCertPass", com.crushftp.client.Common.encryptDecrypt("tls_alpn_challenge", true));
+                        server_item.put("customKeystoreCertPass", Common.encryptDecrypt("tls_alpn_challenge", true));
+                        server_item.put("sni_enabled", "false");
                         ServerStatus.siPUT2("server_list", server_list);
                         ServerStatus.thisObj.save_server_settings(false);
                         ServerStatus.thisObj.stop_this_server(x);
@@ -6261,7 +7323,7 @@ lbl192:
     public static String removeTLSALPNChallengeJKS(Properties request) {
         String result = "Success";
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, "", "RUN:INSTANCE_ACTION", id);
             try {
@@ -6289,8 +7351,8 @@ lbl192:
                     }
                     ++x;
                 }
-                if (com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + (String.valueOf(System.getProperty("crushftp.prefs")) + "tls_challenge.jks").toUpperCase())) {
-                    com.crushftp.client.Common.System2.remove("crushftp.keystores." + (String.valueOf(System.getProperty("crushftp.prefs")) + "tls_challenge.jks").toUpperCase());
+                if (Common.System2.containsKey("crushftp.keystores." + (String.valueOf(System.getProperty("crushftp.prefs")) + "tls_challenge.jks").toUpperCase())) {
+                    Common.System2.remove("crushftp.keystores." + (String.valueOf(System.getProperty("crushftp.prefs")) + "tls_challenge.jks").toUpperCase());
                 }
             }
             catch (Exception e) {
@@ -6301,7 +7363,7 @@ lbl192:
         return result;
     }
 
-    public static String updateJKS(Properties request) {
+    public static String updateJKS(final Properties request) {
         String result = "Success!";
         if (!request.getProperty("instance", "").equals("")) {
             try {
@@ -6312,8 +7374,31 @@ lbl192:
                 result = "Failed! Error :" + e;
             }
         }
-        if (com.crushftp.client.Common.System2.containsKey("crushftp.keystores." + request.getProperty("keystore_path", "").replace('\\', '/'))) {
+        if (Common.System2.containsKey("crushftp.keystores." + request.getProperty("keystore_path", "").replace('\\', '/'))) {
             SSLKeyManager.loadKeyStoreToMemory(request.getProperty("keystore_path", ""));
+        }
+        result = AdminControls.restartAllHttpsPorts(new Properties());
+        try {
+            Worker.startWorker(new Runnable(){
+
+                @Override
+                public void run() {
+                    try {
+                        byte[] jks_bytes = SSLKeyManager.loadKeyStoreBytes(request.getProperty("keystore_path", ""));
+                        Properties p = new Properties();
+                        p.put("keystore_path", request.getProperty("keystore_path", ""));
+                        p.put("jks_bytes", jks_bytes);
+                        p.put("instance", request.getProperty("instance", ""));
+                        SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.jks.update", "info", p);
+                    }
+                    catch (Exception e) {
+                        Log.log("SERVER", 1, e);
+                    }
+                }
+            }, "Let's Encrypt: JKS update on cluster");
+        }
+        catch (IOException e) {
+            Log.log("SERVER", 1, e);
         }
         return result;
     }
@@ -6321,7 +7406,7 @@ lbl192:
     public static String restartAllHttpsPorts(Properties request) {
         String result = "Success!";
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, "", "RUN:INSTANCE_ACTION", id);
             try {
@@ -6337,7 +7422,7 @@ lbl192:
                 int x = 0;
                 while (x < server_list.size()) {
                     Properties server_item = (Properties)server_list.elementAt(x);
-                    if (server_item.getProperty("serverType", "").equalsIgnoreCase("HTTPS")) {
+                    if (server_item.getProperty("serverType", "").equalsIgnoreCase("HTTPS") || server_item.getProperty("serverType", "").equalsIgnoreCase("FTPS") || server_item.getProperty("serverType", "").equalsIgnoreCase("PORTFORWARDS")) {
                         ServerStatus.thisObj.stop_this_server(x);
                         Thread.sleep(1000L);
                         ServerStatus.thisObj.start_this_server(x);
@@ -6356,7 +7441,7 @@ lbl192:
     public static String checkHostPortForChallenge(Properties request) {
         String result = "";
         if (!request.getProperty("instance", "").equals("")) {
-            String id = Common.makeBoundary();
+            String id = crushftp.handlers.Common.makeBoundary();
             String instance = request.remove("instance").toString();
             DMZServerCommon.sendCommand(instance, request, "", "RUN:INSTANCE_ACTION", id);
             try {
@@ -6367,30 +7452,114 @@ lbl192:
                 Log.log("SERVER", 0, e);
             }
         } else {
+            boolean isPortFowards = false;
+            Properties portFoward_item = null;
+            if (!ServerBeat.current_master) {
+                return "ERROR: Non-master cluster node! Let's Encrypt plugin can run only on master node!";
+            }
             try {
+                int x;
+                String protocol;
                 String[] domains = (String[])request.get("domains");
-                String protocol = request.get("challenge_type").equals("http-01") ? "http" : "https";
-                int x = 0;
+                String string = protocol = request.get("challenge_type").equals("http-01") ? "http" : "https";
+                if (protocol.equals("https")) {
+                    Vector server_list = ServerStatus.VG("server_list");
+                    x = 0;
+                    while (x < server_list.size()) {
+                        Properties server_item = (Properties)server_list.elementAt(x);
+                        if (server_item.getProperty("serverType", "").equalsIgnoreCase("PORTFORWARDS") && server_item.getProperty("port", "").equals(request.getProperty("tls_alpn_https_port", "443").trim())) {
+                            byte[] b = null;
+                            b = Common.CLONE1(server_item);
+                            portFoward_item = (Properties)Common.CLONE2(b);
+                            server_item.put("serverType", "HTTPS");
+                            ServerStatus.siPUT2("server_list", server_list);
+                            ServerStatus.thisObj.save_server_settings(false);
+                            isPortFowards = true;
+                            ServerStatus.thisObj.stop_this_server(x);
+                            Thread.sleep(1000L);
+                            ServerStatus.thisObj.start_this_server(x);
+                            break;
+                        }
+                        ++x;
+                    }
+                }
+                String temp_result = "";
+                x = 0;
                 while (x < domains.length) {
                     try {
-                        URLConnection urlc = URLConnection.openConnection(new VRL("https://www.crushftp.com/domain.jsp?host=" + domains[x] + "&protocol=" + protocol), new Properties());
+                        String domain = domains[x];
+                        if (domain.contains(":")) {
+                            temp_result = String.valueOf(temp_result) + "Host : " + domain + " ERROR: Result : Let'sEncrypt validates the domain's default ports (80 or 443) only. You can not specify a port on the domain.";
+                            break;
+                        }
+                        URLConnection urlc = URLConnection.openConnection(new VRL("https://www.crushftp.com/domain.jsp?host=" + domain + "&protocol=" + protocol), new Properties());
                         urlc.setRequestMethod("GET");
                         urlc.setUseCaches(false);
                         urlc.setRequestProperty("Accept", "*/*");
                         urlc.setLength(0L);
+                        urlc.setReadTimeout(5000);
                         String response = URLConnection.consumeResponse(urlc.getInputStream());
-                        result = urlc.getResponseCode() < 200 || urlc.getResponseCode() > 299 ? String.valueOf(result) + "Host : " + domains[x] + " Result : No response." : String.valueOf(result) + "Host : " + domains[x] + " Result : " + response;
+                        if (urlc.getResponseCode() < 200 || urlc.getResponseCode() > 299) {
+                            Log.log("SERVER", 0, "LetsEncrypt: Domains check Error :Host : " + domains[x] + " ERROR: Result : No response.");
+                        } else {
+                            Log.log("SERVER", 0, "LetsEncrypt: " + domain + " Respone :" + response);
+                            if (response.contains("ERROR:java.net.UnknownHostException")) {
+                                response = " ERROR: Not a valid domain! " + response;
+                            }
+                            if (response.contains("ERROR:REFUSED")) {
+                                response = " ERROR: Domain's default " + (protocol.equalsIgnoreCase("http") ? "http port(80)" : "https port(443)") + " is unavailable!";
+                            }
+                            if (response.contains("ERROR:NOT_CRUSHFTP")) {
+                                response = " ERROR: Domain's default " + (protocol.equalsIgnoreCase("http") ? "http port(80)" : "https port(443)") + " does not point to a " + System.getProperty("appname", "CrushFTP") + " " + protocol + " port item!";
+                            }
+                            if (response.contains("ERROR:HTTP_REDIRECT_HTTPS")) {
+                                response = " ERROR: Domain's default http port(80) is redirected to https protocol. Challenge type: http-01 does not work in this case! Either turn redirect off, or use challenge type : tls-alpn-01";
+                            }
+                            temp_result = String.valueOf(temp_result) + "Host : " + domains[x] + " Result : " + response;
+                        }
                     }
                     catch (Exception e) {
-                        result = String.valueOf(result) + "Host : " + domains[x] + " Result : No response.";
+                        Log.log("SERVER", 0, "LetsEncrypt: Domains check Error :" + e);
+                        temp_result = "";
+                        break;
                     }
                     ++x;
                 }
+                result = String.valueOf(result) + temp_result;
             }
             catch (Exception e) {
                 Log.log("SERVER", 0, e);
+                result = String.valueOf(result) + " ERROR: Result : " + e;
+            }
+            if (isPortFowards) {
+                try {
+                    Vector server_list = ServerStatus.VG("server_list");
+                    int x = 0;
+                    while (x < server_list.size()) {
+                        Properties server_item = (Properties)server_list.elementAt(x);
+                        if (server_item.getProperty("serverType", "").equalsIgnoreCase("HTTPS") && server_item.getProperty("port", "").equals(request.getProperty("tls_alpn_https_port", "443").trim())) {
+                            if (portFoward_item != null) {
+                                server_list.setElementAt(portFoward_item, x);
+                            } else {
+                                server_item.put("serverType", "PORTFORWARDS");
+                            }
+                            ServerStatus.siPUT2("server_list", server_list);
+                            ServerStatus.thisObj.save_server_settings(false);
+                            ServerStatus.thisObj.stop_this_server(x);
+                            Thread.sleep(1000L);
+                            ServerStatus.thisObj.start_this_server(x);
+                            break;
+                        }
+                        ++x;
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 0, e);
+                    result = String.valueOf(result) + " ERROR: Result : " + e;
+                }
             }
         }
+        Log.log("SERVER", 0, "LetsEncrypt:Result:" + result);
         return result;
     }
 
@@ -6400,8 +7569,8 @@ lbl192:
         try {
             Properties user = UserTools.ut.getUser(request.getProperty("serverGroup", "MainUsers"), request.getProperty("username", ""), false);
             if (user != null) {
-                String the_dir = Common.url_decode(request.getProperty("path", ""));
-                if ((the_dir = com.crushftp.client.Common.dots(the_dir)).equals("/")) {
+                String the_dir = crushftp.handlers.Common.url_decode(request.getProperty("path", ""));
+                if ((the_dir = Common.dots(the_dir)).equals("/")) {
                     the_dir = user.getProperty("root_dir", "/");
                 }
                 if (the_dir.toUpperCase().startsWith("/") && !the_dir.toUpperCase().startsWith(user.getProperty("root_dir", "/").toUpperCase())) {
@@ -6409,9 +7578,9 @@ lbl192:
                 }
                 VFS vfs = UserTools.ut.getVFS(request.getProperty("serverGroup", "MainUsers"), request.getProperty("username", ""));
                 Properties perms = vfs.getCombinedPermissions();
-                Properties p = vfs.get_item(Common.url_decode(request.getProperty("path", "/")));
+                Properties p = vfs.get_item(crushftp.handlers.Common.url_decode(request.getProperty("path", "/")));
                 if (p == null) {
-                    error = "Error : The given path " + Common.url_decode(request.getProperty("path", "/")) + " does not exists!";
+                    error = "Error : The given path " + crushftp.handlers.Common.url_decode(request.getProperty("path", "/")) + " does not exists!";
                 }
             } else {
                 error = "Error : The given user " + request.getProperty("path", "/") + " does not exists!";
@@ -6427,6 +7596,474 @@ lbl192:
             list_result.put("list_result", error);
         }
         return list_result;
+    }
+
+    public static String runPluginEvent(Properties request) {
+        if (!request.getProperty("run_plugin_identifier", "").equals("")) {
+            try {
+                Log.log("SERVER", 2, "Run CrushTask/job triggered by plugin:" + request.getProperty("plugin_name", ""));
+                Properties event = new Properties();
+                event.put("id", crushftp.handlers.Common.makeBoundary(10));
+                event.put("pluginName", "CrushTask");
+                event.put("event_action_list", "(run_plugin)");
+                event.put("subItem", "");
+                event.put("async", "true");
+                event.put("event_plugin_list", request.getProperty("run_plugin_identifier", ""));
+                event.put("name", request.getProperty("name", ""));
+                Properties info = new Properties();
+                if (request.get("info") != null && request.get("info") instanceof Properties) {
+                    info = (Properties)request.get("info");
+                }
+                if (info.get("user") == null) {
+                    Properties user = new Properties();
+                    if (request.get("user") != null && request.get("user") instanceof Properties) {
+                        user = (Properties)request.get("user");
+                    }
+                    info.put("user", user);
+                }
+                if (info.get("user_info") == null) {
+                    Properties user_info = new Properties();
+                    if (request.get("user_info") != null && request.get("user_info") instanceof Properties) {
+                        user_info = (Properties)request.get("user_info");
+                    }
+                    info.put("user_info", new Properties());
+                }
+                Vector items = new Vector();
+                if (request.get("items") != null && request.get("items") instanceof Vector) {
+                    items = (Vector)request.get("items");
+                }
+                ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
+                return "";
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 2, e);
+                return "Failed! Error :" + e;
+            }
+        }
+        return "Failed! Error : Missing plugin indetifier!";
+    }
+
+    public static String unban(Properties request) {
+        Pattern pattern;
+        String result = "Success!";
+        String ip = request.getProperty("ip", "").trim();
+        String ip_pattern = "^(([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9]|25[0-5])(\\.(?!$)|$)){4}$";
+        if (ip.contains(":")) {
+            ip_pattern = "(?<![:.\\w])(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}(?![:.\\w])";
+        }
+        if ((pattern = Pattern.compile(ip_pattern)).matcher(ip).matches()) {
+            Properties found = null;
+            Properties found_temp = null;
+            Vector ip_list = ServerStatus.VG("ip_restrictions");
+            int x = 0;
+            while (x < ip_list.size()) {
+                Properties p = (Properties)ip_list.elementAt(x);
+                if (!p.getProperty("type", "A").equals("A") && p.getProperty("start_ip").equals(p.getProperty("stop_ip"))) {
+                    if (ip.contains(":")) {
+                        if (p.getProperty("start_ip").contains(":") && crushftp.handlers.Common.ipv6_num(p.getProperty("start_ip")).equals(crushftp.handlers.Common.ipv6_num(ip))) {
+                            found = p;
+                        }
+                    } else if (p.getProperty("start_ip").equals(ip)) {
+                        found = p;
+                    }
+                }
+                ++x;
+            }
+            if (found != null) {
+                ip_list.remove(found);
+            }
+            if (!ServerStatus.BG("save_temp_bans")) {
+                Vector ip_list_temp = ServerStatus.siVG("ip_restrictions_temp");
+                int x2 = 0;
+                while (x2 < ip_list_temp.size()) {
+                    Properties p = (Properties)ip_list_temp.elementAt(x2);
+                    if (!p.getProperty("type", "A").equals("A") && p.getProperty("start_ip").equals(p.getProperty("stop_ip"))) {
+                        if (ip.contains(":")) {
+                            if (p.getProperty("start_ip").contains(":") && crushftp.handlers.Common.ipv6_num(p.getProperty("start_ip")).equals(crushftp.handlers.Common.ipv6_num(ip))) {
+                                found_temp = p;
+                            }
+                        } else if (p.getProperty("start_ip").equals(ip)) {
+                            found_temp = p;
+                        }
+                    }
+                    ++x2;
+                }
+                if (found_temp != null) {
+                    ip_list_temp.remove(found_temp);
+                }
+            }
+            if (found == null && found_temp == null) {
+                result = "There is no ban for the given ip : " + ip;
+            } else if (found != null) {
+                ServerStatus.thisObj.save_server_settings(true);
+            }
+        } else {
+            result = "ERROR: Invalid ip address!";
+        }
+        return result;
+    }
+
+    public static Properties loadKeyStores(Properties request, String site) {
+        Properties p = new Properties();
+        Vector<Properties> v = new Vector<Properties>();
+        if (ServerStatus.BG("v11_beta")) {
+            try {
+                Enumeration<Object> keys = Common.System2.keys();
+                while (keys.hasMoreElements()) {
+                    String key = keys.nextElement().toString();
+                    if (!key.startsWith("crushftp.keystores.")) continue;
+                    Properties p_key = new Properties();
+                    if (((Properties)Common.System2.get(key)).containsKey("type")) {
+                        p_key.put("type", ((Properties)Common.System2.get(key)).getProperty("type", ""));
+                    }
+                    if (((Properties)Common.System2.get(key)).containsKey("name")) {
+                        p_key.put("name", ((Properties)Common.System2.get(key)).getProperty("name", ""));
+                    }
+                    if (((Properties)Common.System2.get(key)).containsKey("url")) {
+                        p_key.put("url", ((Properties)Common.System2.get(key)).getProperty("url", ""));
+                    }
+                    if (!p_key.containsKey("url")) {
+                        p_key.put("url", key.substring("crushftp.keystores.".length()));
+                    }
+                    v.add(p_key);
+                }
+                p.put("keys", v);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 1, e);
+            }
+        }
+        return p;
+    }
+
+    public static String saveKeyStores(Properties request, String site) {
+        try {
+            if (ServerStatus.BG("v11_beta")) {
+                Vector v = (Vector)request.get("keys");
+                int x = 0;
+                while (x < v.size()) {
+                    Properties p = (Properties)v.get(x);
+                    if (p.containsKey("delete") && Common.System2.containsKey("crushftp.keystores." + p.getProperty("url", ""))) {
+                        Common.System2.remove("crushftp.keystores." + p.getProperty("url", ""));
+                    }
+                    if ((p.containsKey("modified") && Common.System2.containsKey("crushftp.keystores." + p.getProperty("url", "")) || p.containsKey("new")) && !p.getProperty("name", "").equals("")) {
+                        VRL vrl = new VRL(p.getProperty("url", "").trim());
+                        GenericClient c = crushftp.handlers.Common.getClient(crushftp.handlers.Common.getBaseUrl(vrl.toString()), "Save Key Store", new Vector());
+                        if (vrl.getConfig() != null && vrl.getConfig().size() > 0) {
+                            c.setConfigObj(vrl.getConfig());
+                        }
+                        c.login(vrl.getUsername(), vrl.getPassword(), null);
+                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                        crushftp.handlers.Common.streamCopier(null, null, c.download(vrl.getPath(), 0L, -1L, true), baos, false, true, true);
+                        Properties p2 = new Properties();
+                        p2.put("bytes", baos);
+                        p2.put("name", p.getProperty("name", "").trim());
+                        p2.put("type", p.getProperty("type", "").trim());
+                        Common.System2.put("crushftp.keystores.{" + p2.getProperty("name", "").toUpperCase() + "}", p2);
+                    }
+                    ++x;
+                }
+            }
+        }
+        catch (Exception e) {
+            Log.log("SERVER", 1, e);
+            return "Failed! Error :" + e;
+        }
+        return "Success!";
+    }
+
+    public static String clearCache(Properties request, String site) {
+        if (!request.getProperty("instance", "").equals("")) {
+            try {
+                String id = crushftp.handlers.Common.makeBoundary();
+                String instance = request.remove("instance").toString();
+                DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
+                Properties p = DMZServerCommon.getResponse(id, 20);
+                return p.get("data").toString();
+            }
+            catch (Exception e) {
+                Log.log("HTTP_SERVER", 1, e);
+                return "ERROR: " + e.toString();
+            }
+        }
+        try {
+            Common.refresh_tokens.clear();
+            Common.oauth_access_tokens.clear();
+            Enumeration<Object> keys = Common.System2.keys();
+            while (keys.hasMoreElements()) {
+                String key = keys.nextElement().toString();
+                if (key.startsWith("crushftp.keystores.")) {
+                    Common.System2.remove(key);
+                }
+                if (!key.startsWith("j2ssh.publickeys.")) continue;
+                Common.System2.remove(key);
+            }
+        }
+        catch (Exception e) {
+            Log.log("SERVER", 1, e);
+            return "Failed! Error :" + e;
+        }
+        return "Success!";
+    }
+
+    public static Object testAllVFSOfUser(Properties request, String site) {
+        try {
+            VFS uVFS = UserTools.ut.getVFS(request.getProperty("serverGroup", "MainUsers"), request.getProperty("username", request.getProperty("user_name", "")));
+            Vector<Properties> v = new Vector<Properties>();
+            Properties perms = uVFS.getCombinedPermissions();
+            Enumeration<Object> keys = perms.keys();
+            while (keys.hasMoreElements()) {
+                String key = keys.nextElement().toString();
+                if (key.equals("/")) continue;
+                Properties p = new Properties();
+                p.put("timeTaken", "0");
+                long start = System.currentTimeMillis();
+                try {
+                    block20: {
+                        VRL item_vrl;
+                        Properties root;
+                        p = uVFS.get_item(key);
+                        if (p == null) {
+                            p = new Properties();
+                            throw new Exception("Error: Could not find VFS item!");
+                        }
+                        String root_path = uVFS.getRootVFS(p.getProperty("dir", ""), -1);
+                        if (root_path.equals(p.getProperty("dir", "")) && (root = uVFS.get_item(root_path)) != null) {
+                            p = root;
+                        }
+                        if (!(item_vrl = new VRL(p.getProperty("url", ""))).getProtocol().equalsIgnoreCase("VIRTUAL")) {
+                            GenericClient c = uVFS.getClient(p);
+                            try {
+                                try {
+                                    c.login(item_vrl.getUsername(), item_vrl.getPassword(), null);
+                                    c.list(item_vrl.getPath(), new Vector());
+                                    c.logout();
+                                }
+                                catch (Exception e) {
+                                    if (e.getMessage() != null) {
+                                        p.put("error_message", e.getMessage());
+                                    } else {
+                                        p.put("error_message", "Unknown error.");
+                                    }
+                                    if (c != null) {
+                                        c.close();
+                                    }
+                                    break block20;
+                                }
+                            }
+                            catch (Throwable throwable) {
+                                if (c != null) {
+                                    c.close();
+                                }
+                                throw throwable;
+                            }
+                            if (c != null) {
+                                c.close();
+                            }
+                        }
+                    }
+                    p.put("name", key);
+                    v.addElement(VRL.safe(p));
+                }
+                catch (Exception e) {
+                    if (e.getMessage() != null) {
+                        p.put("error_message", e.getMessage());
+                    } else {
+                        p.put("error_message", "Unknown error.");
+                    }
+                    Log.log("SERVER", 1, e);
+                    p.put("name", key);
+                    v.addElement(VRL.safe(p));
+                }
+                p.put("timeTaken", String.valueOf((System.currentTimeMillis() - start) / 1000L));
+            }
+            return v;
+        }
+        catch (Exception ee) {
+            Log.log("SERVER", 1, ee);
+            return "Failed! Error :" + ee;
+        }
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public static Vector getAgentList(Properties request) throws Exception {
+        Vector<String> agentNames = new Vector<String>();
+        Vector agents = ServerStatus.siVG("registeredAgents");
+        if (agents == null) {
+            agents = new Vector();
+        }
+        ServerStatus.thisObj.server_info.put("registeredAgents", agents);
+        Vector vector = agents;
+        synchronized (vector) {
+            int x = 0;
+            while (x < agents.size()) {
+                Properties agent = (Properties)agents.elementAt(x);
+                if (System.currentTimeMillis() - Long.parseLong(agent.getProperty("active")) < 60000L) {
+                    agentNames.addElement(String.valueOf(agent.getProperty("name")) + ":" + agent.getProperty("active"));
+                }
+                ++x;
+            }
+        }
+        return agentNames;
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public static String registerAgent(Properties request, boolean replicate) {
+        String result = "";
+        try {
+            Vector<Properties> agents = ServerStatus.siVG("registeredAgents");
+            if (agents == null) {
+                agents = new Vector<Properties>();
+            }
+            ServerStatus.thisObj.server_info.put("registeredAgents", agents);
+            boolean found = false;
+            Vector<Properties> vector = agents;
+            synchronized (vector) {
+                int x = 0;
+                while (x < agents.size() && !found) {
+                    Properties agent = (Properties)agents.elementAt(x);
+                    if (agent.getProperty("name").equals(request.getProperty("name"))) {
+                        found = true;
+                        agent.put("active", String.valueOf(System.currentTimeMillis()));
+                    }
+                    ++x;
+                }
+                if (!found) {
+                    Properties agent = new Properties();
+                    agent.put("name", request.getProperty("name"));
+                    agent.put("queue", new Vector());
+                    agent.put("responses", new Properties());
+                    agent.put("active", String.valueOf(System.currentTimeMillis()));
+                    agents.addElement(agent);
+                }
+            }
+            if (replicate) {
+                Properties pp = new Properties();
+                pp.put("request", request);
+                SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.registerAgent", "info", pp);
+            }
+        }
+        catch (Exception e) {
+            Log.log("SERVER", 1, e);
+            result = "ERROR: " + e;
+        }
+        return result;
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public static Properties getActionFromAgentQueue(Properties request, boolean replicate) {
+        Properties result = new Properties();
+        try {
+            boolean found = false;
+            Vector agents = ServerStatus.siVG("registeredAgents");
+            if (agents == null) {
+                agents = new Vector();
+            }
+            ServerStatus.thisObj.server_info.put("registeredAgents", agents);
+            Vector vector = agents;
+            synchronized (vector) {
+                int x = 0;
+                while (x < agents.size()) {
+                    Properties agent = (Properties)agents.elementAt(x);
+                    if (agent.getProperty("name").equals(request.getProperty("name"))) {
+                        agent.put("active", String.valueOf(System.currentTimeMillis()));
+                        Vector queue = (Vector)agent.get("queue");
+                        if (queue.size() > 0) {
+                            result = (Properties)queue.remove(0);
+                            found = true;
+                        }
+                    }
+                    ++x;
+                }
+            }
+            if (!found && replicate) {
+                Properties val;
+                Properties pp = new Properties();
+                pp.put("request", request);
+                pp.put("need_response", "true");
+                SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.getActionFromAgentQueue", "info", pp);
+                long start = System.currentTimeMillis();
+                while (pp.getProperty("response_num", "0").equals("0") && System.currentTimeMillis() - start < 3000L) {
+                    try {
+                        Thread.sleep(100L);
+                    }
+                    catch (Exception queue) {
+                        // empty catch block
+                    }
+                }
+                if (pp.containsKey("val") && pp.get("val") != null && pp.get("val") instanceof Properties && (val = (Properties)pp.get("val")).containsKey(pp.getProperty("key", "result")) && val.get(pp.getProperty("key", "result")) != null && val.get(pp.getProperty("key", "result")) instanceof Properties) {
+                    result = (Properties)val.get(pp.getProperty("key", "result"));
+                }
+            }
+        }
+        catch (Exception e) {
+            Log.log("SERVER", 1, e);
+        }
+        return result;
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public static Properties getAgentResponse(Properties request, boolean replicate) {
+        Properties result = new Properties();
+        try {
+            Vector agents = ServerStatus.siVG("registeredAgents");
+            if (agents == null) {
+                agents = new Vector();
+            }
+            ServerStatus.thisObj.server_info.put("registeredAgents", agents);
+            Vector vector = agents;
+            synchronized (vector) {
+                int x = 0;
+                while (x < agents.size()) {
+                    Properties agent = (Properties)agents.elementAt(x);
+                    if (agent.getProperty("name").equals(request.getProperty("name"))) {
+                        agent.put("active", String.valueOf(System.currentTimeMillis()));
+                        Properties response = (Properties)crushftp.handlers.Common.readXMLObject(new ByteArrayInputStream(Base64.decode(crushftp.handlers.Common.url_decode(request.getProperty("response")))));
+                        Properties responses = (Properties)agent.get("responses");
+                        Properties job_tmp = (Properties)responses.get(request.getProperty("response_id"));
+                        job_tmp.putAll((Map<?, ?>)response);
+                        job_tmp.put("response_received", "true");
+                    }
+                    ++x;
+                }
+            }
+        }
+        catch (Exception e) {
+            Log.log("SERVER", 1, e);
+        }
+        if (replicate) {
+            Properties pp = new Properties();
+            pp.put("request", request);
+            pp.put("need_response", "false");
+            SharedSessionReplicated.send(crushftp.handlers.Common.makeBoundary(), "crushftp.AdminControls.getAgentResponse", "info", pp);
+        }
+        return result;
+    }
+
+    public static String forceGC(Properties request, String site) {
+        if (!request.getProperty("instance", "").equals("")) {
+            try {
+                String id = crushftp.handlers.Common.makeBoundary();
+                String instance = request.remove("instance").toString();
+                DMZServerCommon.sendCommand(instance, request, site, "RUN:INSTANCE_ACTION", id);
+                Properties p = DMZServerCommon.getResponse(id, 20);
+                return p.get("data").toString();
+            }
+            catch (Exception e) {
+                Log.log("HTTP_SERVER", 1, e);
+                return "ERROR: " + e.toString();
+            }
+        }
+        System.gc();
+        return "Success!";
     }
 }
 

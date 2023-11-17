@@ -18,13 +18,13 @@ public class CrushFTP {
             File_S[] files = (File_S[])new File_S("plugins/lib/").listFiles();
             try {
                 if (!new File_S("plugins/lib/").exists()) {
-                    System.out.println("plugins/lib folder not found, CrushFTP may not be able to start...");
+                    System.out.println("plugins/lib folder not found, " + System.getProperty("appname", "CrushFTP") + " may not be able to start...");
                     break block10;
                 }
-                all.addElement(new File_S("CrushFTP.jar").toURI().toURL());
+                all.addElement(new File_S(String.valueOf(System.getProperty("appname", "CrushFTP")) + ".jar").toURI().toURL());
                 int x = 0;
                 while (x < files.length) {
-                    if ((!files[x].isFile() || !files[x].getName().equalsIgnoreCase("CRUSHFTPRESTART.JAR")) && files[x].isFile() && files[x].getName().toUpperCase().endsWith(".JAR")) {
+                    if ((!files[x].isFile() || !files[x].getName().equalsIgnoreCase(String.valueOf(System.getProperty("appname", "CrushFTP").toUpperCase()) + "RESTART.JAR")) && files[x].isFile() && files[x].getName().toUpperCase().endsWith(".JAR")) {
                         all.addElement(files[x].toURI().toURL());
                     }
                     ++x;
@@ -48,7 +48,7 @@ public class CrushFTP {
         try {
             URLClassLoader loader = URLClassLoader.newInstance(urls);
             ServerStatus.clasLoader = loader;
-            Class<?> c = Class.forName("CrushFTPLauncher", true, ServerStatus.clasLoader);
+            Class<?> c = Class.forName(String.valueOf(System.getProperty("appname", "CrushFTP")) + "Launcher", true, ServerStatus.clasLoader);
             Constructor<?> cons = c.getConstructor(Object.class);
             cons.newInstance(new Object[]{args});
         }

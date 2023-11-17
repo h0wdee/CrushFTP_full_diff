@@ -1,5 +1,10 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -57,7 +62,7 @@ extends GenericClient {
         out.close();
         urlc.getResponseCode();
         String response = Common.consumeResponse(urlc.getInputStream());
-        String refresh_token = ((JSONObject)JSONValue.parse(response)).get("refresh_token").toString();
+        String refresh_token = ((JSONObject)JSONValue.parse((String)response)).get((Object)"refresh_token").toString();
         Properties p = new Properties();
         p.put("refresh_token", refresh_token);
         return p;
@@ -78,10 +83,10 @@ extends GenericClient {
         out.close();
         urlc.getResponseCode();
         String response = Common.consumeResponse(urlc.getInputStream());
-        String access_token = ((JSONObject)JSONValue.parse(response)).get("access_token").toString();
+        String access_token = ((JSONObject)JSONValue.parse((String)response)).get((Object)"access_token").toString();
         Properties p = new Properties();
         p.put("access_token", access_token);
-        String expire_in = ((JSONObject)JSONValue.parse(response)).get("expires_in").toString();
+        String expire_in = ((JSONObject)JSONValue.parse((String)response)).get((Object)"expires_in").toString();
         if (expire_in.endsWith(",")) {
             expire_in = expire_in.substring(0, expire_in.length() - 1);
         }
@@ -143,7 +148,7 @@ extends GenericClient {
                 this.log(String.valueOf(response) + "\r\n");
                 throw new Exception("Failure! Missing Access token!");
             }
-            if (!((JSONObject)JSONValue.parse(response)).get("result").toString().equals("foo")) {
+            if (!((JSONObject)JSONValue.parse((String)response)).get((Object)"result").toString().equals("foo")) {
                 throw new Exception("Failure! Missing Access token!");
             }
         }
@@ -184,15 +189,15 @@ extends GenericClient {
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject postData = new JSONObject();
         if (!cursor.equals("")) {
-            postData.put("cursor", cursor);
+            postData.put((Object)"cursor", (Object)cursor);
         } else {
-            postData.put("path", path);
-            postData.put("recursive", new Boolean(false));
-            postData.put("include_deleted", new Boolean(false));
-            postData.put("include_has_explicit_shared_members", new Boolean(false));
-            postData.put("include_mounted_folders", new Boolean(false));
-            postData.put("limit", new Integer(1000));
-            postData.put("include_non_downloadable_files", new Boolean(false));
+            postData.put((Object)"path", (Object)path);
+            postData.put((Object)"recursive", (Object)new Boolean(false));
+            postData.put((Object)"include_deleted", (Object)new Boolean(false));
+            postData.put((Object)"include_has_explicit_shared_members", (Object)new Boolean(false));
+            postData.put((Object)"include_mounted_folders", (Object)new Boolean(false));
+            postData.put((Object)"limit", (Object)new Integer(1000));
+            postData.put((Object)"include_non_downloadable_files", (Object)new Boolean(false));
         }
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toJSONString().getBytes("UTF8"));
@@ -207,8 +212,8 @@ extends GenericClient {
         String response = Common.consumeResponse(urlc.getInputStream());
         this.parseListResponse(path, response, list);
         try {
-            boolean has_more = (Boolean)((JSONObject)JSONValue.parse(response)).get("has_more");
-            cursor = has_more ? (String)((JSONObject)JSONValue.parse(response)).get("cursor") : "";
+            boolean has_more = (Boolean)((JSONObject)JSONValue.parse((String)response)).get((Object)"has_more");
+            cursor = has_more ? (String)((JSONObject)JSONValue.parse((String)response)).get((Object)"cursor") : "";
         }
         catch (Exception e) {
             cursor = "";
@@ -217,7 +222,7 @@ extends GenericClient {
     }
 
     private Vector parseListResponse(String path, String response, Vector list) throws Exception {
-        Object obj = ((JSONObject)JSONValue.parse(response)).get("entries");
+        Object obj = ((JSONObject)JSONValue.parse((String)response)).get((Object)"entries");
         if (obj instanceof JSONArray) {
             JSONArray ja = (JSONArray)obj;
             int xxx = 0;
@@ -248,7 +253,7 @@ extends GenericClient {
         int i = 0;
         while (i < a.length) {
             String key2 = a[i].toString().split("=")[0];
-            item.put(key2.trim(), ("" + jo.get(key2)).trim());
+            item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
             ++i;
         }
         Date d = new Date();
@@ -308,10 +313,10 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.getBearer());
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject postData = new JSONObject();
-        postData.put("path", temp_path);
-        postData.put("include_media_info", new Boolean(false));
-        postData.put("include_deleted", new Boolean(false));
-        postData.put("include_has_explicit_shared_members", new Boolean(false));
+        postData.put((Object)"path", (Object)temp_path);
+        postData.put((Object)"include_media_info", (Object)new Boolean(false));
+        postData.put((Object)"include_deleted", (Object)new Boolean(false));
+        postData.put((Object)"include_has_explicit_shared_members", (Object)new Boolean(false));
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toJSONString().getBytes("UTF8"));
         out.close();
@@ -321,7 +326,7 @@ extends GenericClient {
             this.log(String.valueOf(response) + "\r\n");
             return null;
         }
-        Properties p = this.parseItem(Common.all_but_last(path), (JSONObject)JSONValue.parse(response));
+        Properties p = this.parseItem(Common.all_but_last(path), (JSONObject)JSONValue.parse((String)response));
         return p;
     }
 
@@ -335,7 +340,7 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.getBearer());
         urlc.setRequestProperty("Content-Type", "application/octet-stream");
         JSONObject postData = new JSONObject();
-        postData.put("path", path.toLowerCase());
+        postData.put((Object)"path", (Object)path.toLowerCase());
         urlc.setRequestProperty("Dropbox-API-Arg", postData.toJSONString());
         this.in = urlc.getInputStream();
         return this.in;
@@ -350,7 +355,7 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.getBearer());
         urlc.setRequestProperty("Content-Type", "application/octet-stream");
         JSONObject postData = new JSONObject();
-        postData.put("close", new Boolean(false));
+        postData.put((Object)"close", (Object)new Boolean(false));
         urlc.setRequestProperty("Dropbox-API-Arg", postData.toJSONString());
         int code = urlc.getResponseCode();
         String response = Common.consumeResponse(urlc.getInputStream());
@@ -358,7 +363,7 @@ extends GenericClient {
             this.log(String.valueOf(response) + "\r\n");
             throw new IOException("Path :" + path + " Error : " + response);
         }
-        String upload_session_id = (String)((JSONObject)JSONValue.parse(response)).get("session_id");
+        String upload_session_id = (String)((JSONObject)JSONValue.parse((String)response)).get((Object)"session_id");
         class OutputWrapper
         extends OutputStream {
             boolean closed = false;
@@ -436,16 +441,16 @@ extends GenericClient {
                     urlc.setRequestProperty("Content-Type", "application/octet-stream");
                     JSONObject postData = new JSONObject();
                     JSONObject cursor = new JSONObject();
-                    cursor.put("session_id", this.val$upload_session_id);
-                    cursor.put("offset", new Long(this.final_size));
-                    postData.put("cursor", cursor);
+                    cursor.put((Object)"session_id", (Object)this.val$upload_session_id);
+                    cursor.put((Object)"offset", (Object)new Long(this.final_size));
+                    postData.put((Object)"cursor", (Object)cursor);
                     JSONObject commit = new JSONObject();
-                    commit.put("path", this.val$path);
-                    commit.put("mode", "add");
-                    commit.put("autorename", new Boolean(false));
-                    commit.put("mute", new Boolean(true));
-                    commit.put("strict_conflict", new Boolean(false));
-                    postData.put("commit", commit);
+                    commit.put((Object)"path", (Object)this.val$path);
+                    commit.put((Object)"mode", (Object)"add");
+                    commit.put((Object)"autorename", (Object)new Boolean(false));
+                    commit.put((Object)"mute", (Object)new Boolean(true));
+                    commit.put((Object)"strict_conflict", (Object)new Boolean(false));
+                    postData.put((Object)"commit", (Object)commit);
                     urlc.setRequestProperty("Dropbox-API-Arg", postData.toJSONString());
                     int code = urlc.getResponseCode();
                     urlc.getOutputStream().close();
@@ -504,10 +509,10 @@ extends GenericClient {
                                 urlc.setLength(b_flush.length);
                                 JSONObject postData = new JSONObject();
                                 JSONObject cursor = new JSONObject();
-                                cursor.put("session_id", val$upload_session_id);
-                                cursor.put("offset", new Long(pos_now));
-                                postData.put("cursor", cursor);
-                                postData.put("close", new Boolean(false));
+                                cursor.put((Object)"session_id", (Object)val$upload_session_id);
+                                cursor.put((Object)"offset", (Object)new Long(pos_now));
+                                postData.put((Object)"cursor", (Object)cursor);
+                                postData.put((Object)"close", (Object)new Boolean(false));
                                 urlc.setRequestProperty("Dropbox-API-Arg", postData.toJSONString());
                                 urlc.getOutputStream().write(b_flush);
                                 urlc.getOutputStream().close();
@@ -544,7 +549,7 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.getBearer());
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject postData = new JSONObject();
-        postData.put("path", path);
+        postData.put((Object)"path", (Object)path);
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toJSONString().getBytes("UTF8"));
         out.close();
@@ -570,8 +575,8 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.getBearer());
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject postData = new JSONObject();
-        postData.put("path", temp_path);
-        postData.put("autorename", new Boolean(false));
+        postData.put((Object)"path", (Object)temp_path);
+        postData.put((Object)"autorename", (Object)new Boolean(false));
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toJSONString().getBytes("UTF8"));
         out.close();
@@ -617,11 +622,11 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.getBearer());
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject postData = new JSONObject();
-        postData.put("from_path", temp_rnfr);
-        postData.put("to_path", temp_to);
-        postData.put("autorename", new Boolean(false));
-        postData.put("allow_shared_folder", new Boolean(false));
-        postData.put("allow_ownership_transfer", new Boolean(false));
+        postData.put((Object)"from_path", (Object)temp_rnfr);
+        postData.put((Object)"to_path", (Object)temp_to);
+        postData.put((Object)"autorename", (Object)new Boolean(false));
+        postData.put((Object)"allow_shared_folder", (Object)new Boolean(false));
+        postData.put((Object)"allow_ownership_transfer", (Object)new Boolean(false));
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toJSONString().getBytes("UTF8"));
         out.close();
@@ -688,13 +693,13 @@ extends GenericClient {
                         urlc.setRequestProperty("Authorization", "Bearer " + this.getBearer());
                         urlc.setRequestProperty("Content-Type", "application/octet-stream");
                         JSONObject postData = new JSONObject();
-                        postData.put("format", "jpeg");
-                        postData.put("mode", "strict");
-                        postData.put("size", dimension);
+                        postData.put((Object)"format", (Object)"jpeg");
+                        postData.put((Object)"mode", (Object)"strict");
+                        postData.put((Object)"size", (Object)dimension);
                         JSONObject resource = new JSONObject();
-                        resource.put(".tag", "path");
-                        resource.put("path", new VRL(info.getProperty("url")).getPath());
-                        postData.put("resource", resource);
+                        resource.put((Object)".tag", (Object)"path");
+                        resource.put((Object)"path", (Object)new VRL(info.getProperty("url")).getPath());
+                        postData.put((Object)"resource", (Object)resource);
                         urlc.setRequestProperty("Dropbox-API-Arg", postData.toJSONString());
                         int code = urlc.getResponseCode();
                         if (code < 200 || code > 299) {

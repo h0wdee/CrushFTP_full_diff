@@ -64,6 +64,7 @@ implements Serializable {
         byte_validation.put("jpeg2", new byte[]{-1, -40, -1, -31});
         byte_validation.put("jpeg3", new byte[]{-1, -40, -1, -18});
         byte_validation.put("jpeg4", new byte[]{-1, -40, -1, -30});
+        byte_validation.put("jpeg5", new byte[]{-1, -40, -1, -2});
         byte_validation.put("gif0", new byte[]{71, 73, 70, 56, 55, 97});
         byte_validation.put("gif1", new byte[]{71, 73, 70, 56, 57, 97});
         byte_validation.put("png0", new byte[]{-119, 80, 78, 71, 13, 10, 26, 10});
@@ -101,6 +102,7 @@ implements Serializable {
         byte_validation.put("ai0", new byte[]{37, 33, 80, 83});
         byte_validation.put("ai1", new byte[]{37, 80, 68, 70});
         byte_validation.put("eps0", new byte[]{37, 33, 80, 83});
+        byte_validation.put("eps1", new byte[]{-59, -48, -45, -58});
     }
 
     public static void getDefaults(Properties prefs) {
@@ -842,6 +844,9 @@ lbl81:
                         }
                         String[] date = num.split(":");
                         duration = Float.parseFloat(date[0]) * 3600.0f + Float.parseFloat(date[1]) * 60.0f + Float.parseFloat(date[2]) * 1.0f;
+                        if (duration > 2.0f) {
+                            duration -= 1.0f;
+                        }
                         status.put("duration", String.valueOf(duration));
                     }
                 }
@@ -936,7 +941,7 @@ lbl81:
                 }
                 File_U f2 = new File_U(String.valueOf(real_path) + files[x]);
                 if (!Common.isSymbolicLink_U(f2.getAbsolutePath()) && f2.isDirectory()) {
-                    if (new File_U(String.valueOf(real_path) + files[x] + "/index.txt").exists() && new File_U(String.valueOf(real_path) + files[x] + "/p1").exists()) {
+                    if (new File_U(String.valueOf(real_path) + files[x] + "/index.txt").exists() || new File_U(String.valueOf(real_path) + files[x] + "/p1").exists()) {
                         File_U home = new File_U(String.valueOf(ServerStatus.SG("previews_path")) + "/Preview");
                         boolean ok = true;
                         try {
@@ -947,6 +952,7 @@ lbl81:
                                     if (driveLetter.startsWith("_-_") && driveLetter.endsWith("_-_")) {
                                         driveLetter = String.valueOf(driveLetter.charAt(3));
                                         checkPath = String.valueOf(driveLetter) + ":" + checkPath.substring(checkPath.indexOf("/", 6));
+                                        this.msg("Checking if file exists:" + checkPath);
                                     } else if (driveLetter.startsWith("_UNC_")) {
                                         driveLetter = "//";
                                         checkPath = String.valueOf(driveLetter) + checkPath.substring(6);
@@ -1037,7 +1043,7 @@ lbl81:
                 Enumeration<Object> keys = metaInfo_old.keys();
                 while (keys.hasMoreElements()) {
                     String key = "" + keys.nextElement();
-                    if (!key.startsWith("crushftp_") && !key.equalsIgnoreCase("keywords")) continue;
+                    if (!key.startsWith(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_") && !key.equalsIgnoreCase("keywords")) continue;
                     metaInfo.put(key, metaInfo_old.getProperty(key));
                 }
             }
@@ -1118,7 +1124,7 @@ lbl81:
 
     public Properties setExifInfo(String srcFile, String destFile, String exif_key, String exif_val) {
         Properties metaInfo = null;
-        if (this.get("preview_exif_set_command_line") != null && !this.get("preview_exif_set_command_line").trim().equals("") && !exif_key.startsWith("crushftp_")) {
+        if (this.get("preview_exif_set_command_line") != null && !this.get("preview_exif_set_command_line").trim().equals("") && !exif_key.startsWith(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_")) {
             try {
                 metaInfo = PreviewWorker.getMetaInfo(destFile);
                 if (Common.machine_is_windows()) {

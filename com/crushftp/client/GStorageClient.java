@@ -1,5 +1,10 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -137,9 +142,9 @@ extends GenericClient {
                 throw new Exception(result);
             }
             result = Common.consumeResponse(urlc.getInputStream());
-            JSONObject obj = (JSONObject)JSONValue.parse(result);
-            next = obj.containsKey("nextPageToken") ? obj.get("nextPageToken").toString() : "";
-            Object obj2 = obj.get("items");
+            JSONObject obj = (JSONObject)JSONValue.parse((String)result);
+            next = obj.containsKey((Object)"nextPageToken") ? obj.get((Object)"nextPageToken").toString() : "";
+            Object obj2 = obj.get((Object)"items");
             if (!(obj2 instanceof JSONArray)) continue;
             JSONArray ja = (JSONArray)obj2;
             int xxx = 0;
@@ -152,7 +157,7 @@ extends GenericClient {
                     int i = 0;
                     while (i < a.length) {
                         String key2 = a[i].toString().split("=")[0];
-                        item.put(key2.trim(), ("" + jo.get(key2)).trim());
+                        item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
                         ++i;
                     }
                     if (!item.getProperty("name").equals(path0)) {
@@ -247,7 +252,7 @@ extends GenericClient {
         urlc.setRequestProperty("X-Upload-Content-Type", "application/octet-stream");
         urlc.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
         JSONObject fileMetaInfo = new JSONObject();
-        fileMetaInfo.put("name", Common.url_decode(path0));
+        fileMetaInfo.put((Object)"name", (Object)Common.url_decode(path0));
         OutputStream out = urlc.getOutputStream();
         out.write(fileMetaInfo.toString().getBytes("UTF8"));
         out.close();

@@ -45,9 +45,9 @@ public class UpdateHandler {
         this.updateCurrentLoc = 0L;
         this.updateCurrentStatus = "Building list of files...";
         int minMd5Size = 262144;
-        String fname = "CrushFTP" + Common.V() + (Common.machine_is_x() && Common.OSXApp() ? "_OSX" : "");
+        String fname = String.valueOf(System.getProperty("appname", "CrushFTP")) + Common.V() + (Common.machine_is_x() && Common.OSXApp() ? "_OSX" : "");
         this.updateCurrentStatus = "Building list of files..." + fname;
-        String url = "https://www.crushftp.com/";
+        String url = "https://www." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".com/";
         String username = "early" + Common.V();
         String password = "early" + Common.V();
         String home = System.getProperty("crushftp.home");
@@ -73,11 +73,11 @@ public class UpdateHandler {
             while (x >= 0) {
                 this.updateCurrentStatus = "Building list of files...:" + x;
                 Properties p = (Properties)files.elementAt(x);
-                if (p.getProperty("name").equals("crushftp_init.sh")) {
+                if (p.getProperty("name").equals(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_init.sh")) {
                     files.remove(x);
                 } else if (p.getProperty("name").equals("Info.plist")) {
                     files.remove(x);
-                } else if (p.getProperty("name").equals("CrushFTP.command")) {
+                } else if (p.getProperty("name").equals(String.valueOf(System.getProperty("appname", "CrushFTP")) + ".command")) {
                     files.remove(x);
                 } else if (p.getProperty("name").equals("CrushFTP7_OSX")) {
                     files.remove(x);
@@ -94,6 +94,8 @@ public class UpdateHandler {
                 } else if (p.getProperty("name").equalsIgnoreCase("logo.png")) {
                     files.remove(x);
                 } else if (p.getProperty("name").equalsIgnoreCase("mime_types.txt")) {
+                    files.remove(x);
+                } else if (p.getProperty("name").equalsIgnoreCase("expired.html")) {
                     files.remove(x);
                 } else if (p.getProperty("name").equalsIgnoreCase("AttachmentRedirectorSettings.xml")) {
                     files.remove(x);
@@ -218,15 +220,33 @@ public class UpdateHandler {
             Common.recurseCopy(String.valueOf(home) + fname + "_new.zip", String.valueOf(backup2) + fname + "_new.zip", true);
         } else {
             if (new File_S(String.valueOf(home) + fname + "_PC_new.zip").exists() && !new File_S(String.valueOf(home) + fname + "_new.zip").exists()) {
-                fname = "CrushFTP" + Common.V() + "_PC";
+                fname = String.valueOf(System.getProperty("appname", "CrushFTP")) + Common.V() + "_PC";
             }
             this.updateCurrentStatus = "Using local offline file...: " + fname + "_new.zip";
             Thread.sleep(1000L);
         }
         try {
-            Common.recurseCopy("./CrushFTP.jar", String.valueOf(backup1) + "CrushFTP.jar", true);
-            Common.recurseCopy("./plugins/", String.valueOf(backup1) + "plugins/", true);
-            Common.recurseCopy(String.valueOf(home) + "WebInterface/", String.valueOf(backup1) + "WebInterface/", true);
+            try {
+                Common.recurseCopy("./" + System.getProperty("appname", "CrushFTP") + ".jar", String.valueOf(backup1) + System.getProperty("appname", "CrushFTP") + ".jar", true);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+                e.printStackTrace();
+            }
+            try {
+                Common.recurseCopy("./plugins/", String.valueOf(backup1) + "plugins/", true);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+                e.printStackTrace();
+            }
+            try {
+                Common.recurseCopy(String.valueOf(home) + "WebInterface/", String.valueOf(backup1) + "WebInterface/", true);
+            }
+            catch (Exception e) {
+                Log.log("SERVER", 0, e);
+                e.printStackTrace();
+            }
             Vector list = new Vector();
             Common.appendListing(backup1, list, "", 99, true);
             Vector<Properties> list2 = new Vector<Properties>();
@@ -251,6 +271,7 @@ public class UpdateHandler {
             }
         }
         catch (Exception e) {
+            Log.log("SERVER", 0, e);
             e.printStackTrace();
         }
         finally {
@@ -351,7 +372,7 @@ public class UpdateHandler {
             String batch = "";
             String manualFiles = "";
             if (Common.machine_is_windows()) {
-                batch = String.valueOf(batch) + "net stop \"CrushFTP Server\"\r\nping 127.0.0.1 -n 5\r\n";
+                batch = String.valueOf(batch) + "net stop \"" + System.getProperty("appname", "CrushFTP") + " Server\"\r\nping 127.0.0.1 -n 5\r\n";
             }
             int x = 0;
             while (x < errors.size()) {
@@ -372,7 +393,7 @@ public class UpdateHandler {
             }
             manualFiles = String.valueOf(manualFiles) + "UpdateTemp/nothing_to_do.txt\r\n";
             if (Common.machine_is_windows()) {
-                batch = String.valueOf(batch) + "net start \"CrushFTP Server\"\r\nping 127.0.0.1 -n 10\r\n";
+                batch = String.valueOf(batch) + "net start \"" + System.getProperty("appname", "CrushFTP") + " Server\"\r\nping 127.0.0.1 -n 10\r\n";
             }
             if (batch.length() > 0) {
                 String fname = "update.sh";
@@ -393,7 +414,7 @@ public class UpdateHandler {
     }
 
     public void doHTTPDownloads(String home, String fname, boolean earlyAccess, String paths) throws Exception {
-        String url = "https://www.crushftp.com/";
+        String url = "https://www." + System.getProperty("appname", "CrushFTP").toLowerCase() + ".com/";
         String username = "update" + Common.V();
         String password = "update" + Common.V();
         if (earlyAccess) {
@@ -439,11 +460,11 @@ public class UpdateHandler {
                     out = null;
                 }
                 boolean skip_update = false;
-                if (path2.endsWith("crushftp_init.sh")) {
+                if (path2.endsWith(String.valueOf(System.getProperty("appname", "CrushFTP").toLowerCase()) + "_init.sh")) {
                     skip_update = true;
                 } else if (path2.endsWith("Info.plist")) {
                     skip_update = true;
-                } else if (path2.endsWith("CrushFTP.command")) {
+                } else if (path2.endsWith(String.valueOf(System.getProperty("appname", "CrushFTP")) + ".command")) {
                     skip_update = true;
                 } else if (path2.endsWith("CrushFTP7_OSX")) {
                     skip_update = true;

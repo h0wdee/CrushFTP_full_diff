@@ -7,6 +7,7 @@ import com.crushftp.client.Common;
 import com.crushftp.client.File_S;
 import com.crushftp.client.File_U;
 import com.crushftp.client.VRL;
+import com.crushftp.client.WRunnable;
 import com.crushftp.client.Worker;
 import crushftp.gui.LOC;
 import crushftp.handlers.Log;
@@ -29,7 +30,7 @@ import java.util.zip.DeflaterOutputStream;
 import javax.net.ssl.SSLSocket;
 
 public class LIST_handler
-implements Runnable {
+extends WRunnable {
     public static Properties md5Hash = new Properties();
     public boolean die_now = false;
     public boolean active = false;
@@ -56,6 +57,7 @@ implements Runnable {
     boolean was_star = false;
 
     public void init_vars(String the_dir, boolean names_only, SessionCrush thisSession, String search_file, boolean showListing, boolean mlstFormat) {
+        this.put("session", thisSession);
         this.the_dir = the_dir;
         this.names_only = names_only;
         this.thisSession = thisSession;
@@ -84,14 +86,14 @@ implements Runnable {
      */
     @Override
     public void run() {
-        block115: {
+        block116: {
             this.thisThread = Thread.currentThread();
             try {
                 try {
-                    block116: {
-                        block113: {
-                            block112: {
-                                if (this.thisSession == null) break block116;
+                    block117: {
+                        block114: {
+                            block113: {
+                                if (this.thisSession == null) break block117;
                                 this.active = true;
                                 this.stop_message = "";
                                 try {
@@ -127,16 +129,16 @@ implements Runnable {
                                 int loop_times = 0;
                                 while (true) {
                                     if (this.justStreamListData || this.thisSession.data_socks.size() != 0 || loop_times++ >= 200) {
-                                        if (this.justStreamListData || this.thisSession.data_socks.size() != 0) break block112;
+                                        if (this.justStreamListData || this.thisSession.data_socks.size() != 0) break block113;
                                         if (!ServerStatus.BG("disconnect_ftp_on_socket_error")) break;
                                         this.thisSession.do_kill();
-                                        break block113;
+                                        break block114;
                                     }
                                     Thread.sleep(100L);
                                 }
                                 this.thisSession.not_done = this.thisSession.uiBG("pasv_connect") ? this.thisSession.ftp_write_command("550", LOC.G("No connection received on PASV ip:port that was specified in 20 seconds.")) : this.thisSession.ftp_write_command("550", "%PORT-fail_question%" + this.CRLF + "%PORT-no_data_connection%");
                                 this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
-                                break block113;
+                                break block114;
                             }
                             this.data_sock = (Socket)this.thisSession.data_socks.remove(0);
                             this.data_sock.setSoTimeout((this.thisSession.IG("max_idle_time") <= 0 ? 5 : this.thisSession.IG("max_idle_time")) * 1000 * 60);
@@ -236,18 +238,18 @@ implements Runnable {
                                     }
                                 }
                                 block25: while (status.getProperty("done", "false").equalsIgnoreCase("false") || listing.size() > 0) {
-                                    block117: {
-                                        block126: {
-                                            block123: {
+                                    block118: {
+                                        block127: {
+                                            block124: {
                                                 String prefix;
-                                                block125: {
+                                                block126: {
                                                     String dir;
-                                                    block124: {
-                                                        block122: {
-                                                            block118: {
-                                                                block119: {
-                                                                    block121: {
-                                                                        block120: {
+                                                    block125: {
+                                                        block123: {
+                                                            block119: {
+                                                                block120: {
+                                                                    block122: {
+                                                                        block121: {
                                                                             while (true) {
                                                                                 if (!status.getProperty("done", "false").equalsIgnoreCase("false") || listing.size() != 0) {
                                                                                     if (listing.size() != 0) break;
@@ -264,16 +266,16 @@ implements Runnable {
                                                                             if (this.fullPaths) {
                                                                                 this.thisSession.uiPUT("list_filetree_status", String.valueOf(totalListingItems) + ":" + listing.size() + ":" + item.getProperty("root_dir") + item.getProperty("name"));
                                                                             }
-                                                                            if (!this.fullPaths && name_hash.get(String.valueOf(item.getProperty("root_dir")) + item.getProperty("name")) != null) break block117;
+                                                                            if (!this.fullPaths && name_hash.get(String.valueOf(item.getProperty("root_dir")) + item.getProperty("name")) != null) break block118;
                                                                             if (!this.fullPaths) {
                                                                                 name_hash.put(String.valueOf(item.getProperty("root_dir")) + item.getProperty("name"), "DONE");
                                                                             }
-                                                                            if (!LIST_handler.checkName(item, this.thisSession, this.fullPaths, false)) break block117;
-                                                                            if (!this.search_file.equals("") && !this.search_file.equals("*") && !this.search_file.endsWith("/")) break block118;
-                                                                            if (!this.names_only) break block119;
+                                                                            if (!LIST_handler.checkName(item, this.thisSession, this.fullPaths, false)) break block118;
+                                                                            if (!this.search_file.equals("") && !this.search_file.equals("*") && !this.search_file.endsWith("/")) break block119;
+                                                                            if (!this.names_only) break block120;
                                                                             prefix = "";
-                                                                            if (ServerStatus.BG("include_ftp_nlst_path")) break block120;
-                                                                            if (!ServerStatus.BG("include_ftp_nlst_path_for_all_pattern")) break block121;
+                                                                            if (ServerStatus.BG("include_ftp_nlst_path")) break block121;
+                                                                            if (!ServerStatus.BG("include_ftp_nlst_path_for_all_pattern")) break block122;
                                                                         }
                                                                         boolean enable = this.search_file.endsWith("/") || this.was_star;
                                                                         if (ServerStatus.BG("include_ftp_nlst_path_for_all_pattern")) {
@@ -322,7 +324,7 @@ implements Runnable {
                                                                     }
                                                                     ++totalListingItems;
                                                                     c.append(String.valueOf(prefix) + item.getProperty("name") + (item.getProperty("type", "").equals("DIR") && !ServerStatus.BG("disable_dir_filter") ? "/" : "") + this.CRLF);
-                                                                    break block117;
+                                                                    break block118;
                                                                 }
                                                                 if (this.thisSession.uiBG("list_zip_app") && item.getProperty("type", "").equals("DIR") && item.getProperty("name", "").toUpperCase().endsWith(".APP") && !this.the_dir.equals("/")) {
                                                                     item.put("permissions", "-rwxrwxrwx");
@@ -346,22 +348,22 @@ implements Runnable {
                                                                 }
                                                                 ++totalListingItems;
                                                                 c.append(item_str.toString());
-                                                                break block117;
+                                                                break block118;
                                                             }
-                                                            if ((!this.search_file.equals(item.getProperty("name", "")) || !ServerStatus.BG("case_sensitive_list_search")) && (!this.search_file.equalsIgnoreCase(item.getProperty("name", "")) || ServerStatus.BG("case_sensitive_list_search"))) break block122;
+                                                            if ((!this.search_file.equals(item.getProperty("name", "")) || !ServerStatus.BG("case_sensitive_list_search")) && (!this.search_file.equalsIgnoreCase(item.getProperty("name", "")) || ServerStatus.BG("case_sensitive_list_search"))) break block123;
                                                             if (this.names_only) {
                                                                 c.append(String.valueOf(item.getProperty("name")) + (item.getProperty("type", "").equals("DIR") && !ServerStatus.BG("disable_dir_filter") ? "/" : "") + this.CRLF);
                                                             } else {
                                                                 c.append(item_str.toString());
                                                             }
                                                             ++totalListingItems;
-                                                            break block117;
+                                                            break block118;
                                                         }
-                                                        if (this.search_file.indexOf("*") < 0 && this.search_file.indexOf("?") < 0 && this.search_file.indexOf("$") < 0 || !Common.doFilter(pattern, item.getProperty("name", ""))) break block117;
-                                                        if (!this.names_only) break block123;
+                                                        if (this.search_file.indexOf("*") < 0 && this.search_file.indexOf("?") < 0 && this.search_file.indexOf("$") < 0 || !Common.doFilter(pattern, item.getProperty("name", ""))) break block118;
+                                                        if (!this.names_only) break block124;
                                                         prefix = "";
-                                                        if (ServerStatus.BG("include_ftp_nlst_path")) break block124;
-                                                        if (!ServerStatus.BG("include_ftp_nlst_path_for_all_pattern")) break block125;
+                                                        if (ServerStatus.BG("include_ftp_nlst_path")) break block125;
+                                                        if (!ServerStatus.BG("include_ftp_nlst_path_for_all_pattern")) break block126;
                                                     }
                                                     if ((dir = item.getProperty("root_dir")).startsWith(this.thisSession.SG("root_dir"))) {
                                                         dir = dir.substring(this.thisSession.SG("root_dir").length() - 1);
@@ -388,7 +390,7 @@ implements Runnable {
                                                     }
                                                 }
                                                 c.append(String.valueOf(prefix) + item.getProperty("name") + (item.getProperty("type", "").equals("DIR") && !ServerStatus.BG("disable_dir_filter") ? "/" : "") + this.CRLF);
-                                                break block126;
+                                                break block127;
                                             }
                                             c.append(item_str.toString());
                                         }
@@ -523,6 +525,9 @@ implements Runnable {
                                 }
                                 this.stop_message = String.valueOf(this.stop_message) + LOC.G("Transfer failed") + "!";
                                 responseCode226 = "550";
+                                if (this.stop_message.contains("No such item:")) {
+                                    this.stop_message = "No such item: " + this.the_dir;
+                                }
                                 this.thisSession.not_done = this.thisSession.ftp_write_command(responseCode226, this.stop_message);
                             }
                         }
@@ -553,7 +558,7 @@ implements Runnable {
                 catch (Exception e) {
                     Log.log("LIST", 1, e);
                     this.thisThread = null;
-                    break block115;
+                    break block116;
                 }
             }
             catch (Throwable throwable) {

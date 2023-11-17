@@ -1,12 +1,5 @@
-Summary for ../CrushFTP9/CrushFTP.jar
+Summary for ../CrushFTP10/CrushFTP.jar
 Decompiled with CFR 0.152
-
-
-org.jose4j.zip.DeflateRFC1951CompressionAlgorithm
-----------------------------
-
-compress(byte[] )
-  Loose catch block
 
 
 crushftp.server.STOR_handler
@@ -37,7 +30,7 @@ run()
 kick(java.util.Properties boolean )
   Unable to fully structure code
 ban_ipv4(java.lang.String int boolean java.lang.String boolean )
-  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [5[TRYBLOCK], 4[TRYBLOCK]], but top level block is 36[WHILELOOP]
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [7[TRYBLOCK]], but top level block is 42[WHILELOOP]
 ban_ipv6(java.lang.String int boolean java.lang.String boolean )
   Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [3[TRYBLOCK], 2[TRYBLOCK]], but top level block is 30[WHILELOOP]
 
@@ -59,6 +52,13 @@ getPayloadsAndMic(java.util.Properties java.lang.Object java.lang.String java.la
   Could not resolve type clashes
 doPost(java.net.Socket crushftp.server.VFS java.lang.String java.lang.String boolean java.lang.Object java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String boolean java.lang.String java.lang.String java.lang.String boolean java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String java.util.Properties java.lang.String )
   Unable to fully structure code
+
+
+crushftp.server.QuickConnect
+----------------------------
+
+run()
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Started 4 blocks at once
 
 
 crushftp.server.ServerSessionDAV
@@ -112,7 +112,11 @@ crushftp.server.ServerSessionAJAX
 
 processItems(java.util.Properties java.util.Vector java.lang.String )
   Unable to fully structure code
+processHTML5Download(crushftp.handlers.WebTransfer crushftp.handlers.SessionCrush )
+  Unable to fully structure code
 downloadItem(com.crushftp.client.VRL java.util.Properties java.lang.String java.util.Vector boolean java.lang.String )
+  Unable to fully structure code
+createShare(java.util.Vector java.util.Properties java.util.Vector java.lang.String java.lang.String java.util.Properties java.text.SimpleDateFormat crushftp.handlers.SessionCrush boolean )
   Unable to fully structure code
 search(java.util.Properties crushftp.handlers.SessionCrush )
   Unable to fully structure code
@@ -121,7 +125,7 @@ search(java.util.Properties crushftp.handlers.SessionCrush )
 crushftp.server.VFS
 ----------------------------
 
-getListing(java.util.Vector java.lang.String boolean )
+getListing(java.util.Vector java.lang.String boolean boolean )
   Unable to fully structure code
 
 
@@ -132,12 +136,10 @@ buildVFSXML(java.lang.String )
   Unable to fully structure code
 
 
-crushftp.handlers.BCrypt
+crushftp.handlers.QuotaWorker
 ----------------------------
 
-encode_base64(byte[] int )
-  Unable to fully structure code
-decode_base64(java.lang.String int )
+run()
   Unable to fully structure code
 
 
@@ -145,6 +147,8 @@ crushftp.handlers.JobScheduler
 ----------------------------
 
 runSchedules(java.util.Properties )
+  Unable to fully structure code
+run()
   Unable to fully structure code
 
 
@@ -162,7 +166,14 @@ do_MDTM()
 crushftp.handlers.SyncTools
 ----------------------------
 
-getSyncTableData(java.lang.String long java.lang.String java.lang.String java.lang.String crushftp.server.VFS )
+getSyncTableData(java.lang.String long java.lang.String java.lang.String java.lang.String crushftp.server.VFS java.lang.String )
+  Unable to fully structure code
+
+
+crushftp.handlers.AlertTools
+----------------------------
+
+runAlerts(java.lang.String java.util.Properties java.util.Properties java.util.Properties crushftp.handlers.SessionCrush java.util.Properties boolean )
   Unable to fully structure code
 
 
@@ -187,6 +198,13 @@ url_encode(java.lang.String java.lang.String )
   Unable to fully structure code
 
 
+crushftp.handlers.ShutdownHandler
+----------------------------
+
+run()
+  Unable to fully structure code
+
+
 crushftp.handlers.log.LoggingProviderDisk
 ----------------------------
 
@@ -194,17 +212,17 @@ checkForLogRoll()
   Unable to fully structure code
 
 
-javax.mail.internet.InternetAddress
+crushftp.handlers.log.LoggingProviderSQL
 ----------------------------
 
-parse(java.lang.String boolean boolean )
+logDB(java.lang.String java.lang.String )
   Unable to fully structure code
 
 
-javax.mail.internet.MimeMultipart
+crushftp.handlers.SharedSession
 ----------------------------
 
-parse()
+findBadObjects2(java.lang.Object java.lang.String int )
   Unable to fully structure code
 
 
@@ -215,74 +233,11 @@ run()
   Unable to fully structure code
 
 
-com.visuality.nq.resolve.ProbeThread
+CrushFTPWinService
 ----------------------------
 
-run()
-  Loose catch block
-
-
-com.visuality.nq.client.Mount
-----------------------------
-
-doMount(boolean com.visuality.nq.client.MountParams com.visuality.nq.client.Server )
+serviceMain(java.lang.String[] )
   Unable to fully structure code
-
-
-com.visuality.nq.client.File
-----------------------------
-
-write(com.visuality.nq.common.Buffer long )
-  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [8[DOLOOP]], but top level block is 19[SIMPLE_IF_TAKEN]
-
-
-com.visuality.nq.client.Share
-----------------------------
-
-connect(com.visuality.nq.client.User java.lang.String com.visuality.nq.client.Mount com.visuality.nq.auth.Credentials boolean com.visuality.nq.client.MountParams )
-  Unable to fully structure code
-
-
-com.sun.mail.imap.IdleManager
-----------------------------
-
-select()
-  Loose catch block
-
-
-com.sun.mail.imap.IMAPBodyPart
-----------------------------
-
-getHeaderStream()
-  Loose catch block
-
-
-com.sun.mail.util.logging.MailHandler
-----------------------------
-
-verifySettings0(javax.mail.Session java.lang.String )
-  Loose catch block
-
-
-com.sun.mail.iap.ResponseInputStream
-----------------------------
-
-readResponse(com.sun.mail.iap.ByteArray )
-  Unable to fully structure code
-
-
-com.sun.mail.pop3.Protocol
-----------------------------
-
-setCapabilities(java.io.InputStream )
-  Loose catch block
-
-
-com.sun.mail.pop3.POP3Folder
-----------------------------
-
-getSizes()
-  Loose catch block
 
 
 com.crushftp.crypt.BCrypt
@@ -462,7 +417,7 @@ com.crushftp.client.GenericClientMulti
 ----------------------------
 
 playJournal()
-  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [3[TRYBLOCK], 1[TRYBLOCK]], but top level block is 52[WHILELOOP]
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [1[TRYBLOCK], 3[TRYBLOCK]], but top level block is 52[WHILELOOP]
 
 
 com.crushftp.client.AzureClient
@@ -492,8 +447,132 @@ run()
   Unable to fully structure code
 
 
-com.maverick.logging.IOUtils
+com.maverick.ssh2.ConnectionProtocol
 ----------------------------
 
-sha1Digest(java.io.InputStream )
+processChannelOpenRequest(java.lang.String int int int byte[] )
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Tried to end blocks [1[TRYBLOCK], 10[CATCHBLOCK]], but top level block is 5[TRYBLOCK]
+
+
+com.maverick.ssh2.KBIAuthentication
+----------------------------
+
+authenticate(com.maverick.ssh2.AuthenticationProtocol java.lang.String )
+  Unable to fully structure code
+
+
+com.didisoft.pgp.PGPKeyPair
+----------------------------
+
+<init>(java.lang.String java.lang.String )
+  Loose catch block
+
+
+com.didisoft.pgp.bc.elgamal.util.BigInteger
+----------------------------
+
+smallPrime(int int java.util.Random )
+  Unable to fully structure code
+
+
+com.didisoft.pgp.PGPLib
+----------------------------
+
+detachedSignFile(java.lang.String java.lang.String java.lang.String java.lang.String boolean )
+  Loose catch block
+detachedSignFile(java.lang.String com.didisoft.pgp.KeyStore long java.lang.String java.lang.String boolean )
+  Loose catch block
+detachedSignFile(java.lang.String com.didisoft.pgp.KeyStore java.lang.String java.lang.String java.lang.String boolean )
+  Loose catch block
+clearSignFile(java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String )
+  Loose catch block
+clearSignFileVersion3(java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String )
+  Loose catch block
+signFile(com.didisoft.pgp.KeyStore java.lang.String long java.lang.String java.lang.String )
+  Loose catch block
+signFile(java.lang.String com.didisoft.pgp.KeyStore java.lang.String java.lang.String java.lang.String boolean )
+  Loose catch block
+signFile(java.lang.String com.didisoft.pgp.KeyStore long java.lang.String java.lang.String boolean )
+  Loose catch block
+signFile(java.lang.String java.lang.String java.lang.String java.lang.String boolean )
+  Loose catch block
+signFileVersion3(java.lang.String java.lang.String java.lang.String java.lang.String boolean )
+  Loose catch block
+signAndEncryptFile(java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String boolean boolean )
+  Loose catch block
+signAndEncryptFile(java.lang.String java.lang.String java.lang.String java.lang.String[] java.lang.String boolean boolean )
+  Loose catch block
+signAndEncryptFile(java.lang.String com.didisoft.pgp.KeyStore java.lang.String java.lang.String java.lang.String java.lang.String boolean boolean )
+  Loose catch block
+signAndEncryptFile(java.lang.String com.didisoft.pgp.KeyStore java.lang.String java.lang.String java.lang.String[] java.lang.String boolean boolean )
+  Loose catch block
+signAndEncryptFile(java.lang.String com.didisoft.pgp.KeyStore long java.lang.String long[] java.lang.String boolean boolean )
+  Loose catch block
+signAndEncryptFile(java.lang.String com.didisoft.pgp.KeyStore long java.lang.String long java.lang.String boolean boolean )
+  Loose catch block
+signAndEncryptFileVersion3(java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String boolean )
+  Loose catch block
+signAndEncryptFileVersion3(java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String boolean boolean )
+  Loose catch block
+decryptFile(java.lang.String com.didisoft.pgp.KeyStore java.lang.String java.lang.String )
+  Loose catch block
+decryptFilePBE(java.lang.String java.lang.String java.lang.String )
+  Loose catch block
+decryptFile(java.lang.String java.io.InputStream java.lang.String java.lang.String )
+  Loose catch block
+encryptFilePBE(java.lang.String java.lang.String java.lang.String java.lang.String boolean boolean )
+  Loose catch block
+encryptFilePBE(java.lang.String java.lang.String java.lang.String boolean boolean )
+  Loose catch block
+encryptFile(java.lang.String java.lang.String[] java.lang.String boolean boolean )
+  Loose catch block
+encryptFile(java.lang.String com.didisoft.pgp.KeyStore java.lang.String[] java.lang.String boolean boolean )
+  Loose catch block
+encryptFile(java.lang.String com.didisoft.pgp.KeyStore long[] java.lang.String boolean boolean )
+  Loose catch block
+encryptFiles(java.lang.String[] java.lang.String[] java.lang.String boolean boolean )
+  Loose catch block
+encryptFiles(java.lang.String[] com.didisoft.pgp.KeyStore java.lang.String[] java.lang.String boolean boolean )
+  Loose catch block
+encryptFiles(java.lang.String[] com.didisoft.pgp.KeyStore long[] java.lang.String boolean boolean )
+  Loose catch block
+encryptFile(java.lang.String java.io.InputStream java.lang.String boolean boolean )
+  Loose catch block
+encryptFile(java.lang.String com.didisoft.pgp.KeyStore java.lang.String java.lang.String boolean boolean )
+  Loose catch block
+encryptFile(java.lang.String com.didisoft.pgp.KeyStore long java.lang.String boolean boolean )
+  Loose catch block
+verifyFile(java.lang.String java.lang.String java.lang.String )
+  Loose catch block
+verifyFile(java.lang.String com.didisoft.pgp.KeyStore java.lang.String )
+  Loose catch block
+verifyAndExtract(java.lang.String java.lang.String java.lang.String )
+  Loose catch block
+verifyAndExtract(java.lang.String com.didisoft.pgp.KeyStore java.lang.String )
+  Loose catch block
+decryptAndVerifyFile(java.lang.String com.didisoft.pgp.KeyStore java.lang.String java.lang.String )
+  Loose catch block
+decryptAndVerify(java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String )
+  Loose catch block
+decryptAndVerify(java.lang.String com.didisoft.pgp.KeyStore java.lang.String java.lang.String )
+  Loose catch block
+decryptAndVerifyStream(java.io.InputStream com.didisoft.pgp.KeyStore java.lang.String java.io.OutputStream )
+  Loose catch block
+decryptAndVerifyFile(java.lang.String java.lang.String java.lang.String java.lang.String java.lang.String )
+  Loose catch block
+
+
+com.sshtools.publickey.OpenSSHPrivateKeyFile
+----------------------------
+
+getOpenSSHKeyPair(byte[] java.lang.String )
+  Exception : org.benf.cfr.reader.util.ConfusedCFRException: Started 3 blocks at once
+
+
+com.sshtools.sftp.SftpClient
+----------------------------
+
+<init>(com.maverick.ssh.SshClient int int com.maverick.ssh.ChannelEventListener )
+  Unable to fully structure code
+get(java.lang.String java.io.OutputStream com.maverick.sftp.FileTransferProgress long )
   Loose catch block

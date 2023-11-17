@@ -2,9 +2,22 @@
  * Decompiled with CFR 0.152.
  * 
  * Could not load the following classes:
+ *  com.sun.mail.dsn.DispositionNotification
  *  javax.activation.DataHandler
  *  javax.activation.DataSource
  *  javax.activation.FileDataSource
+ *  javax.mail.BodyPart
+ *  javax.mail.Header
+ *  javax.mail.MessagingException
+ *  javax.mail.Multipart
+ *  javax.mail.Part
+ *  javax.mail.Session
+ *  javax.mail.internet.InternetHeaders
+ *  javax.mail.internet.MimeBodyPart
+ *  javax.mail.internet.MimeMessage
+ *  javax.mail.internet.MimeMultipart
+ *  javax.mail.internet.MimeUtility
+ *  javax.mail.util.ByteArrayDataSource
  *  org.bouncycastle.asn1.ASN1Encodable
  *  org.bouncycastle.asn1.ASN1EncodableVector
  *  org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers
@@ -49,6 +62,7 @@ import com.crushftp.client.File_S;
 import com.crushftp.client.File_U;
 import com.crushftp.client.GenericClient;
 import com.crushftp.client.VRL;
+import com.crushftp.client.Worker;
 import com.sun.mail.dsn.DispositionNotification;
 import crushftp.handlers.Log;
 import crushftp.handlers.SessionCrush;
@@ -233,7 +247,7 @@ public class As2Msg {
         }
         if (digestOID != null) {
             ByteArrayOutputStream bOut = new ByteArrayOutputStream();
-            bodyPart.writeTo(bOut);
+            bodyPart.writeTo((OutputStream)bOut);
             bOut.close();
             String mic = this.calculateMIC(new ByteArrayInputStream(bOut.toByteArray()), digestOID);
             String signtype = A_SHA1;
@@ -245,15 +259,15 @@ public class As2Msg {
             }
             info.put("mic", String.valueOf(mic) + ", " + signtype);
         }
-        MimeMessage messagePart = new MimeMessage(Session.getInstance(System.getProperties(), null));
+        MimeMessage messagePart = new MimeMessage(Session.getInstance((Properties)System.getProperties(), null));
         if (as2SignType != 1) {
             MimeMultipart signedPart = this.signMessage(as2SignKeystoreFormat, as2SignKeystorePath, as2SignKeystorePassword, as2SignKeyPassword, as2SignKeyAlias, bodyPart, as2SignType);
-            messagePart.setContent(signedPart);
+            messagePart.setContent((Multipart)signedPart);
             messagePart.saveChanges();
         } else {
             MimeMultipart unsignedPart = new MimeMultipart();
-            unsignedPart.addBodyPart(bodyPart);
-            messagePart.setContent(unsignedPart);
+            unsignedPart.addBodyPart((BodyPart)bodyPart);
+            messagePart.setContent((Multipart)unsignedPart);
             messagePart.saveChanges();
         }
         ByteArrayOutputStream signedOut = new ByteArrayOutputStream();
@@ -262,10 +276,10 @@ public class As2Msg {
             if (as2EncryptType != 1) {
                 Enumeration hdrLines = messagePart.getMatchingHeaderLines(new String[]{"Content-Type"});
                 while (hdrLines.hasMoreElements()) {
-                    signedOut.write((String.valueOf(MimeUtility.unfold((String)hdrLines.nextElement())) + "\r\n").getBytes());
+                    signedOut.write((String.valueOf(MimeUtility.unfold((String)((String)hdrLines.nextElement()))) + "\r\n").getBytes());
                 }
             }
-            messagePart.writeTo(signedOut, new String[]{"Message-ID", "Mime-Version", "Content-Type"});
+            messagePart.writeTo((OutputStream)signedOut, new String[]{"Message-ID", "Mime-Version", "Content-Type"});
         }
         catch (Exception e) {
             Log.log("AS2_SERVER", 1, e);
@@ -484,7 +498,7 @@ public class As2Msg {
 
     public String calculateMIC(Part part, String digestAlgOID) throws GeneralSecurityException, MessagingException, IOException {
         ByteArrayOutputStream bOut = new ByteArrayOutputStream();
-        part.writeTo(bOut);
+        part.writeTo((OutputStream)bOut);
         bOut.close();
         return this.calculateMIC(new ByteArrayInputStream(bOut.toByteArray()), digestAlgOID);
     }
@@ -566,7 +580,7 @@ public class As2Msg {
             block50: {
                 attachments = new Vector<Object>();
                 multipart = null;
-                multipart = inData instanceof File_U != false ? new MimeMultipart((DataSource)new FileDataSource((File)((File_U)inData))) : new MimeMultipart(new ByteArrayDataSource((byte[])inData, "application/binary"));
+                multipart = inData instanceof File_U != false ? new MimeMultipart((DataSource)new FileDataSource((File)((File_U)inData))) : new MimeMultipart((DataSource)new ByteArrayDataSource((byte[])inData, "application/binary"));
                 contentType = info.getProperty("contentType", "");
                 try {
                     if (info.getProperty("signType", "").equals("1")) {
@@ -577,10 +591,10 @@ public class As2Msg {
                     }
                     catch (Exception e) {
                         baos = new ByteArrayOutputStream();
-                        compressed = new SMIMECompressed(new MimeBodyPart(new ByteArrayInputStream((byte[])inData)));
+                        compressed = new SMIMECompressed(new MimeBodyPart((InputStream)new ByteArrayInputStream((byte[])inData)));
                         baos.write(compressed.getContent((InputExpanderProvider)new ZlibExpanderProvider()));
                         inData = baos.toByteArray();
-                        multipart = new MimeMultipart(new ByteArrayDataSource((byte[])inData, "application/binary"));
+                        multipart = new MimeMultipart((DataSource)new ByteArrayDataSource((byte[])inData, "application/binary"));
                         multipart.getCount();
                     }
                     break block49;
@@ -591,7 +605,7 @@ public class As2Msg {
                     mb = null;
                     try {
                         in /* !! */  = inData instanceof File_U != false ? new FileInputStream((File_U)inData) : new ByteArrayInputStream((byte[])inData);
-                        mb = new MimeBodyPart(in /* !! */ );
+                        mb = new MimeBodyPart((InputStream)in /* !! */ );
                     }
                     catch (Exception ee) {
                         Log.log("AS2_SERVER", 2, ee);
@@ -717,9 +731,9 @@ lbl68:
                     if (inData instanceof File_U) {
                         decompressedPayload = new File_U(String.valueOf(((File_U)inData).getPath()) + ".decompressed");
                         Common.copyStreams(new ByteArrayInputStream(compressed.getContent((InputExpanderProvider)new ZlibExpanderProvider())), new FileOutputStream(decompressedPayload), true, true);
-                        bp = new MimeBodyPart(new FileInputStream(decompressedPayload));
+                        bp = new MimeBodyPart((InputStream)new FileInputStream(decompressedPayload));
                     } else {
-                        bp = new MimeBodyPart(new ByteArrayInputStream(compressed.getContent((InputExpanderProvider)new ZlibExpanderProvider())));
+                        bp = new MimeBodyPart((InputStream)new ByteArrayInputStream(compressed.getContent((InputExpanderProvider)new ZlibExpanderProvider())));
                     }
                 }
                 if (inData instanceof File_U) {
@@ -729,15 +743,15 @@ lbl68:
                     if (decompressedPayload != null) {
                         decompressedPayload.delete();
                     }
-                    info.put("mic", this.calculateContentMIC((File_U)inData, Integer.parseInt(info.getProperty("encryptType", "0")), Integer.parseInt(info.getProperty("signType", "0")), bpOriginal, contentType));
+                    info.put("mic", this.calculateContentMIC((File_U)inData, Integer.parseInt(info.getProperty("encryptType", "0")), Integer.parseInt(info.getProperty("signType", "0")), (Part)bpOriginal, contentType));
                     loops = 0;
                     while (!((File_U)inData).delete() && loops++ < 100) {
                         Thread.sleep(10L);
                     }
                 } else {
                     baos2 = new ByteArrayOutputStream();
-                    multipart.writeTo(baos2);
-                    info.put("mic", this.calculateContentMIC(baos2.toByteArray(), Integer.parseInt(info.getProperty("encryptType", "0")), Integer.parseInt(info.getProperty("signType", "0")), bpOriginal, contentType));
+                    multipart.writeTo((OutputStream)baos2);
+                    info.put("mic", this.calculateContentMIC(baos2.toByteArray(), Integer.parseInt(info.getProperty("encryptType", "0")), Integer.parseInt(info.getProperty("signType", "0")), (Part)bpOriginal, contentType));
                     baos2.close();
                     baos2 = null;
                     baos = new ByteArrayOutputStream();
@@ -798,7 +812,7 @@ lbl68:
                 String string = String.valueOf(this.calculateMIC(in, this.getAlgNameToId(A_SHA1))) + ", sha1";
                 return string;
             }
-            String daoid = this.getDigestAlgOIDFromSignature(signedPart);
+            String daoid = this.getDigestAlgOIDFromSignature((Part)signedPart);
             String string = String.valueOf(this.calculateMIC(partWithHeader, daoid)) + ", " + this.getAlgIdToName(daoid);
             return string;
         }
@@ -825,7 +839,7 @@ lbl68:
         body.setText(additionalText);
         body.setHeader("Content-Type", "text/plain");
         body.setHeader("Content-Transfer-Encoding", "7bit");
-        multiPart.addBodyPart(body);
+        multiPart.addBodyPart((BodyPart)body);
         MimeBodyPart bodyDisposition = new MimeBodyPart();
         StringBuffer buffer = new StringBuffer();
         buffer.append("Reporting-UA: test\r\n");
@@ -839,10 +853,10 @@ lbl68:
         bodyDisposition.setText(buffer.toString());
         bodyDisposition.setHeader("Content-Type", "message/disposition-notification");
         bodyDisposition.setHeader("Content-Transfer-Encoding", "7bit");
-        multiPart.addBodyPart(bodyDisposition);
+        multiPart.addBodyPart((BodyPart)bodyDisposition);
         multiPart.setSubType("report; report-type=disposition-notification");
-        MimeMessage messagePart = new MimeMessage(Session.getInstance(System.getProperties(), null));
-        messagePart.setContent(multiPart, MimeUtility.unfold(multiPart.getContentType()));
+        MimeMessage messagePart = new MimeMessage(Session.getInstance((Properties)System.getProperties(), null));
+        messagePart.setContent((Object)multiPart, MimeUtility.unfold((String)multiPart.getContentType()));
         messagePart.saveChanges();
         if (signMDN || System.getProperty("crushftp.as2.alwayssign", "true").equals("true")) {
             if (!signMDN) {
@@ -850,7 +864,7 @@ lbl68:
             }
             MimeMessage signedMessage = this.signMDN(mic_alg, messagePart, keystoreType, keystorePath, keystorePassword, keyPassword, alias);
             ByteArrayOutputStream memOutSigned = new ByteArrayOutputStream();
-            signedMessage.writeTo(memOutSigned, new String[]{"Message-ID", "Mime-Version", "Content-Type"});
+            signedMessage.writeTo((OutputStream)memOutSigned, new String[]{"Message-ID", "Mime-Version", "Content-Type"});
             memOutSigned.flush();
             memOutSigned.close();
             String s = new String(memOutSigned.toByteArray());
@@ -860,7 +874,7 @@ lbl68:
             return s;
         }
         ByteArrayOutputStream memOut = new ByteArrayOutputStream();
-        messagePart.writeTo(memOut, new String[]{"Message-ID", "Mime-Version", "Content-Type"});
+        messagePart.writeTo((OutputStream)memOut, new String[]{"Message-ID", "Mime-Version", "Content-Type"});
         memOut.flush();
         memOut.close();
         String s = new String(memOut.toByteArray());
@@ -889,8 +903,8 @@ lbl68:
         PrivateKey senderKey = (PrivateKey)keystore.getKey(alias, keyPassword.toCharArray());
         Certificate[] chain = keystore.getCertificateChain(alias);
         MimeMultipart signedPart = this.sign(mimeMessage, chain, senderKey, mic_alg.toUpperCase());
-        MimeMessage signedMessage = new MimeMessage(Session.getInstance(System.getProperties(), null));
-        signedMessage.setContent(signedPart, MimeUtility.unfold(signedPart.getContentType()));
+        MimeMessage signedMessage = new MimeMessage(Session.getInstance((Properties)System.getProperties(), null));
+        signedMessage.setContent((Object)signedPart, MimeUtility.unfold((String)signedPart.getContentType()));
         signedMessage.saveChanges();
         return signedMessage;
     }
@@ -1092,13 +1106,13 @@ lbl68:
     /*
      * Unable to fully structure code
      */
-    public Properties doPost(Socket sock, VFS uVFS, String username, String password, boolean expect100, Object inData, String fromPartner, String toPartner, String subject, String from, String recipientUrl, String responseUrl, boolean asyncMDN, String keystore_path, String keystore_pass, String cert_pass, boolean acceptAnyCert, String truststore_path, String truststore_pass, String trust_pass, String keystoreType, String keystorePath, String keystorePassword, String keyPassword, String alias, Properties otherParams, String use_dmz) throws Exception {
-        block46: {
+    public Properties doPost(Socket sock, VFS uVFS, String username, String password, boolean expect100, Object inData, String fromPartner, String toPartner, String subject, String from, final String recipientUrl, String responseUrl, boolean asyncMDN, String keystore_path, final String keystore_pass, String cert_pass, boolean acceptAnyCert, final String truststore_path, final String truststore_pass, String trust_pass, String keystoreType, String keystorePath, String keystorePassword, String keyPassword, String alias, Properties otherParams, String use_dmz) throws Exception {
+        block51: {
             sdf_rfc1123 = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.US);
             try {
-                block48: {
-                    block50: {
-                        block49: {
+                block53: {
+                    block55: {
+                        block54: {
                             ASX = "AS2";
                             if (!recipientUrl.toUpperCase().startsWith("HTTP")) {
                                 ASX = "AS3";
@@ -1117,26 +1131,28 @@ lbl68:
                             sb.append("Accept: image/gif, */*\r\n");
                             sb.append("User-Agent: CrushClient/6.0 (Generic OS 6.0) Java\r\n");
                             sb.append("EDIINT-Features: multiple-attachments\r\n");
-                            if (recipientUrl.toUpperCase().startsWith("HTTP")) {
-                                sb.append("Recipient-Address: \r\n");
-                            } else {
+                            if (!recipientUrl.toUpperCase().startsWith("HTTP")) {
                                 sb.append("Recipient-Address: " + recipientUrl + "\r\n");
                             }
                             oid = "<" + ASX + "-" + new Date().getTime() + "-" + crushftp.handlers.Common.makeBoundary(3) + "@" + fromPartner + "_" + toPartner + ">";
                             sb.append("Message-ID: " + oid + "\r\n");
                             Thread.sleep(1L);
-                            if (fromPartner.trim().indexOf(" ") >= 0) {
-                                sb.append(String.valueOf(ASX) + "-From: \"" + fromPartner.trim() + "\"\r\n");
-                            } else {
-                                sb.append(String.valueOf(ASX) + "-From: " + fromPartner.trim() + "\r\n");
-                            }
                             if (toPartner.trim().indexOf(" ") >= 0) {
                                 sb.append(String.valueOf(ASX) + "-To: \"" + toPartner.trim() + "\"\r\n");
                             } else {
                                 sb.append(String.valueOf(ASX) + "-To: " + toPartner.trim() + "\r\n");
                             }
-                            sb.append("Subject: " + subject + "\r\n");
-                            sb.append("From: " + from + "\r\n");
+                            if (fromPartner.trim().indexOf(" ") >= 0) {
+                                sb.append(String.valueOf(ASX) + "-From: \"" + fromPartner.trim() + "\"\r\n");
+                            } else {
+                                sb.append(String.valueOf(ASX) + "-From: " + fromPartner.trim() + "\r\n");
+                            }
+                            if (!subject.trim().equals("")) {
+                                sb.append("Subject: " + subject + "\r\n");
+                            }
+                            if (!from.trim().equals("")) {
+                                sb.append("From: " + from + "\r\n");
+                            }
                             sb.append("Connection: close\r\n");
                             sb.append("Date: " + sdf_rfc1123.format(new Date()) + "\r\n");
                             sb.append("Content-Type: application/pkcs7-mime; smime-type=enveloped-data; name=smime.p7m\r\n");
@@ -1166,15 +1182,46 @@ lbl68:
                                 sb.append(key).append(": ").append(otherParams.getProperty(key)).append("\r\n");
                             }
                             sb.append("\r\n");
-                            if (!ASX.equals("AS2")) break block48;
+                            if (!ASX.equals("AS2")) break block53;
                             if (sock == null) {
                                 sock = Common.getSocket("HTTP", new VRL(recipientUrl), use_dmz, "", 30000);
                             }
                             if (new VRL(recipientUrl).getProtocol().equalsIgnoreCase("HTTPS")) {
-                                ss = Common.getSSLSocket(truststore_path, keystore_pass, truststore_pass, true, sock, new VRL(recipientUrl).getHost(), new VRL(recipientUrl).getPort());
-                                ss.setUseClientMode(true);
-                                ss.startHandshake();
-                                sock = ss;
+                                shared_sock = new Properties();
+                                shared_sock.put("sock1", sock);
+                                Worker.startWorker(new Runnable(){
+
+                                    @Override
+                                    public void run() {
+                                        Socket sock = (Socket)shared_sock.remove("sock1");
+                                        if (new VRL(recipientUrl).getProtocol().equalsIgnoreCase("HTTPS")) {
+                                            try {
+                                                SSLSocket ss = Common.getSSLSocket(truststore_path, keystore_pass, truststore_pass, true, sock, new VRL(recipientUrl).getHost(), new VRL(recipientUrl).getPort());
+                                                ss.setUseClientMode(true);
+                                                ss.startHandshake();
+                                                shared_sock.put("sock2", ss);
+                                            }
+                                            catch (Exception e) {
+                                                shared_sock.put("error", e);
+                                            }
+                                        }
+                                    }
+                                }, "AS2 multithreaded https conenctor for " + recipientUrl);
+                                while (shared_sock.containsKey("sock1")) {
+                                    Thread.sleep(100L);
+                                }
+                                loops = 0;
+                                while (loops++ < 300) {
+                                    if (shared_sock.containsKey("sock2")) break;
+                                    if (shared_sock.containsKey("error")) {
+                                        throw (Exception)shared_sock.remove("error");
+                                    }
+                                    Thread.sleep(100L);
+                                }
+                                if (loops >= 300) {
+                                    throw new Exception("AS2 timeout while attempting HTTPS connection to URL:" + recipientUrl);
+                                }
+                                sock = (Socket)shared_sock.remove("sock2");
                             }
                             os = sock.getOutputStream();
                             bis = new BufferedInputStream(sock.getInputStream());
@@ -1216,12 +1263,12 @@ lbl68:
                                 if (data.equals("")) break;
                             }
                             baos = new ByteArrayOutputStream();
-                            if (!chunked) break block49;
+                            if (!chunked) break block54;
                             try {
                                 b = new byte[32768];
                                 bytes_read = 0;
                                 content_length = crushftp.handlers.Common.getChunkSize(bis);
-                                ** GOTO lbl157
+                                ** GOTO lbl170
                                 {
                                     if (content_length < (long)b.length) {
                                         b = new byte[(int)content_length];
@@ -1231,10 +1278,10 @@ lbl68:
                                         baos.write(b, 0, bytes_read);
                                     }
                                     do {
-                                        if (content_length > 0L && bytes_read >= 0) continue block10;
+                                        if (content_length > 0L && bytes_read >= 0) continue block12;
                                         crushftp.handlers.Common.getChunkSize(bis);
                                         content_length = crushftp.handlers.Common.getChunkSize(bis);
-lbl157:
+lbl170:
                                         // 2 sources
 
                                     } while (content_length > 0L);
@@ -1244,7 +1291,7 @@ lbl157:
                             catch (Exception e) {
                                 Log.log("AS2_SERVER", 1, e);
                             }
-                            break block50;
+                            break block55;
                         }
                         bytesRead = 0;
                         in = bis;
@@ -1281,7 +1328,7 @@ lbl157:
                     mdnInfo.put("async", "false");
                     return mdnInfo;
                 }
-                if (!ASX.equals("AS3")) break block46;
+                if (!ASX.equals("AS3")) break block51;
                 item = new Properties();
                 item.put("url", recipientUrl);
                 c = uVFS.getClient(item);
@@ -1311,11 +1358,11 @@ lbl157:
     }
 
     public Properties parseMDN(byte[] data, String contentType) throws Exception {
-        MimeMultipart multipart = new MimeMultipart(new ByteArrayDataSource(data, contentType));
-        MimeMessage message = new MimeMessage(Session.getInstance(System.getProperties(), null));
-        message.setContent(multipart, MimeUtility.unfold(multipart.getContentType()));
+        MimeMultipart multipart = new MimeMultipart((DataSource)new ByteArrayDataSource(data, contentType));
+        MimeMessage message = new MimeMessage(Session.getInstance((Properties)System.getProperties(), null));
+        message.setContent((Object)multipart, MimeUtility.unfold((String)multipart.getContentType()));
         message.saveChanges();
-        return this.getMDNInfo(this.parseReports(message));
+        return this.getMDNInfo(this.parseReports((Part)message));
     }
 
     public Part parseReports(Part part) throws Exception {
@@ -1326,7 +1373,7 @@ lbl157:
             Multipart multiPart = (Multipart)part.getContent();
             int x = 0;
             while (x < multiPart.getCount()) {
-                Part foundPart = this.parseReports(multiPart.getBodyPart(x));
+                Part foundPart = this.parseReports((Part)multiPart.getBodyPart(x));
                 if (foundPart != null) {
                     return foundPart;
                 }

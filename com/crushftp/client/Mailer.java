@@ -7,6 +7,18 @@
  *  javax.activation.FileDataSource
  *  javax.activation.FileTypeMap
  *  javax.activation.MimetypesFileTypeMap
+ *  javax.mail.Address
+ *  javax.mail.Authenticator
+ *  javax.mail.BodyPart
+ *  javax.mail.Message
+ *  javax.mail.Multipart
+ *  javax.mail.Session
+ *  javax.mail.internet.InternetAddress
+ *  javax.mail.internet.MimeBodyPart
+ *  javax.mail.internet.MimeMessage
+ *  javax.mail.internet.MimeMessage$RecipientType
+ *  javax.mail.internet.MimeMultipart
+ *  javax.mail.internet.MimeUtility
  */
 package com.crushftp.client;
 
@@ -28,7 +40,10 @@ import javax.activation.FileDataSource;
 import javax.activation.FileTypeMap;
 import javax.activation.MimetypesFileTypeMap;
 import javax.mail.Address;
+import javax.mail.Authenticator;
 import javax.mail.BodyPart;
+import javax.mail.Message;
+import javax.mail.Multipart;
 import javax.mail.Session;
 import javax.mail.internet.InternetAddress;
 import javax.mail.internet.MimeBodyPart;
@@ -217,7 +232,7 @@ public class Mailer {
                                                     props.put("mail.smtp.auth", "true");
                                                     auth = new SMTPAuthenticator(smtp_user, smtp_pass);
                                                     try {
-                                                        session = Session.getInstance(props, auth);
+                                                        session = Session.getInstance((Properties)props, (Authenticator)auth);
                                                         transport = session.getTransport("smtp");
                                                         if (smtp_user.trim().equals("")) {
                                                             transport.connect();
@@ -236,7 +251,7 @@ public class Mailer {
                                                             try {
                                                                 Common.log("SMTP", 1, "Retry: Default SSL parameters.");
                                                                 props.put("mail.smtp.ssl.protocols", SSLContext.getDefault().getSupportedSSLParameters().getProtocols());
-                                                                session = Session.getInstance(props, auth);
+                                                                session = Session.getInstance((Properties)props, (Authenticator)auth);
                                                                 if (smtp_user.trim().equals("")) {
                                                                     transport.connect();
                                                                 } else {
@@ -268,7 +283,7 @@ public class Mailer {
                                                         }
                                                     }
                                                     try {
-                                                        session = Session.getInstance(props, null);
+                                                        session = Session.getInstance((Properties)props, null);
                                                         transport = session.getTransport("smtp");
                                                         if (smtp_user.trim().equals("")) {
                                                             transport.connect();
@@ -288,7 +303,7 @@ public class Mailer {
                                                             try {
                                                                 Common.log("SMTP", 1, "Retry: Default SSL parameters.");
                                                                 props.put("mail.smtp.ssl.protocols", SSLContext.getDefault().getSupportedSSLParameters().getProtocols());
-                                                                session = Session.getInstance(props, null);
+                                                                session = Session.getInstance((Properties)props, null);
                                                                 if (smtp_user.trim().equals("")) {
                                                                     transport.connect();
                                                                 } else {
@@ -373,7 +388,7 @@ lbl252:
                                     messageBodyPart = new MimeBodyPart();
                                     messageBodyPart.setText(body);
                                     multipart = new MimeMultipart();
-                                    multipart.addBodyPart(messageBodyPart);
+                                    multipart.addBodyPart((BodyPart)messageBodyPart);
                                     if (attachments == null) break block122;
                                     x = 0;
                                     if (true) ** GOTO lbl345
@@ -417,14 +432,14 @@ lbl300:
                             }
                             if (moreItems.size() <= 0) break block124;
                             mp2 = new MimeMultipart("mixed");
-                            mp2.addBodyPart(htmlpart);
+                            mp2.addBodyPart((BodyPart)htmlpart);
                             x = 0;
                             if (true) ** GOTO lbl332
                         }
                         mp2 = new MimeMultipart("alternative");
-                        mp2.addBodyPart(textpart);
-                        mp2.addBodyPart(htmlpart);
-                        msg.setContent(mp2);
+                        mp2.addBodyPart((BodyPart)textpart);
+                        mp2.addBodyPart((BodyPart)htmlpart);
+                        msg.setContent((Multipart)mp2);
                         break block123;
                         do {
                             mp2.addBodyPart((BodyPart)moreItems.elementAt(x));
@@ -433,7 +448,7 @@ lbl332:
                             // 2 sources
 
                         } while (x < moreItems.size());
-                        msg.setContent(mp2);
+                        msg.setContent((Multipart)mp2);
                         break block123;
                         do {
                             if (attachments[x] != null && !(attachment = attachments[x]).isDirectory()) {
@@ -444,7 +459,7 @@ lbl332:
                                 }
                                 messageBodyPart.setDataHandler(new DataHandler((DataSource)source));
                                 messageBodyPart.setFileName(attachment.getName());
-                                multipart.addBodyPart(messageBodyPart);
+                                multipart.addBodyPart((BodyPart)messageBodyPart);
                             }
                             ++x;
 lbl345:
@@ -464,29 +479,29 @@ lbl345:
                             }
                             messageBodyPart.setDataHandler(new DataHandler((DataSource)source));
                             messageBodyPart.setFileName(((VRL)p.get("vrl")).getName());
-                            multipart.addBodyPart(messageBodyPart);
+                            multipart.addBodyPart((BodyPart)messageBodyPart);
                         }
                         ++x;
                     }
-                    msg.setContent(multipart);
+                    msg.setContent((Multipart)multipart);
                 }
-                msg.setFrom(from);
+                msg.setFrom((Address)from);
                 if (reply_to != null) {
                     msg.setReplyTo(new Address[]{reply_to});
                 }
                 if (to.length > 0) {
-                    msg.setRecipients(MimeMessage.RecipientType.TO, to);
+                    msg.setRecipients(MimeMessage.RecipientType.TO, (Address[])to);
                 }
                 if (cc.length > 0) {
-                    msg.setRecipients(MimeMessage.RecipientType.CC, cc);
+                    msg.setRecipients(MimeMessage.RecipientType.CC, (Address[])cc);
                 }
                 if (bcc.length > 0) {
-                    msg.setRecipients(MimeMessage.RecipientType.BCC, bcc);
+                    msg.setRecipients(MimeMessage.RecipientType.BCC, (Address[])bcc);
                 }
                 if (System.getProperty("crushftp.smtp_subject_utf8", "false").equals("true")) {
                     msg.setSubject(subject, "UTF-8");
                 } else if (System.getProperty("crushftp.smtp_subject_encoded", "false").equals("true")) {
-                    msg.setSubject(MimeUtility.encodeText(subject, "UTF-8", "B"));
+                    msg.setSubject(MimeUtility.encodeText((String)subject, (String)"UTF-8", (String)"B"));
                 } else {
                     msg.setSubject(subject);
                 }
@@ -496,7 +511,7 @@ lbl345:
                 }
                 msg.setSentDate(new Date());
                 msg.saveChanges();
-                transport.sendMessage(msg, msg.getAllRecipients());
+                transport.sendMessage((Message)msg, msg.getAllRecipients());
                 return "Success!";
                 finally {
                     try {

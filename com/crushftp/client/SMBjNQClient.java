@@ -1,5 +1,23 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  com.visuality.nq.auth.Credentials
+ *  com.visuality.nq.auth.PasswordCredentials
+ *  com.visuality.nq.client.Client
+ *  com.visuality.nq.client.Directory
+ *  com.visuality.nq.client.Directory$Entry
+ *  com.visuality.nq.client.File
+ *  com.visuality.nq.client.File$Info
+ *  com.visuality.nq.client.File$Params
+ *  com.visuality.nq.client.Mount
+ *  com.visuality.nq.client.MountParams
+ *  com.visuality.nq.client.SmbInputStream
+ *  com.visuality.nq.client.SmbOutputStream
+ *  com.visuality.nq.common.Capture
+ *  com.visuality.nq.common.NqException
+ *  com.visuality.nq.common.TraceLog
+ *  com.visuality.nq.config.Config
  */
 package com.crushftp.client;
 
@@ -48,11 +66,11 @@ extends GenericClient {
         VRL vrl;
         if (!System.getProperty("crushftp.smb3_kerberos_kdc", "").equals("")) {
             try {
-                Config.jnq.set("KDC", System.getProperty("crushftp.smb3_kerberos_kdc", ""));
-                Config.jnq.set("REALM", System.getProperty("crushftp.smb3_kerberos_realm", ""));
+                Config.jnq.set("KDC", (Object)System.getProperty("crushftp.smb3_kerberos_kdc", ""));
+                Config.jnq.set("REALM", (Object)System.getProperty("crushftp.smb3_kerberos_realm", ""));
             }
             catch (NqException e) {
-                this.log(e);
+                this.log((Exception)((Object)e));
             }
         }
         this.fields = new String[]{"username", "password", "clientid", "domain", "smb_path", "use_dmz", "timeout", "count_dir_items"};
@@ -79,77 +97,77 @@ extends GenericClient {
             String val = String.valueOf(System.getProperty(key));
             if (key.startsWith("crushftp.jnq.DNS")) {
                 if (val.equals("true")) {
-                    Config.jnq.setNE(key.substring("crushftp.jnq.".length()), true);
+                    Config.jnq.setNE(key.substring("crushftp.jnq.".length()), (Object)true);
                     continue;
                 }
                 if (val.equals("false")) {
-                    Config.jnq.setNE(key.substring("crushftp.jnq.".length()), false);
+                    Config.jnq.setNE(key.substring("crushftp.jnq.".length()), (Object)false);
                     continue;
                 }
                 if (val.matches("\\d+")) {
-                    Config.jnq.setNE(key.substring("crushftp.jnq.".length()), Integer.parseInt(val));
+                    Config.jnq.setNE(key.substring("crushftp.jnq.".length()), (Object)Integer.parseInt(val));
                     continue;
                 }
-                Config.jnq.setNE("DNS", val);
+                Config.jnq.setNE("DNS", (Object)val);
                 continue;
             }
             if (!key.startsWith("crushftp.jnq.")) continue;
             try {
                 if (val.equals("true")) {
-                    Config.jnq.set(key.substring("crushftp.jnq.".length()), true);
+                    Config.jnq.set(key.substring("crushftp.jnq.".length()), (Object)true);
                     continue;
                 }
                 if (val.equals("false")) {
-                    Config.jnq.set(key.substring("crushftp.jnq.".length()), false);
+                    Config.jnq.set(key.substring("crushftp.jnq.".length()), (Object)false);
                     continue;
                 }
                 if (val.matches("\\d+")) {
-                    Config.jnq.set(key.substring("crushftp.jnq.".length()), Integer.parseInt(val));
+                    Config.jnq.set(key.substring("crushftp.jnq.".length()), (Object)Integer.parseInt(val));
                     continue;
                 }
-                Config.jnq.set(key.substring("crushftp.jnq.".length()), val);
+                Config.jnq.set(key.substring("crushftp.jnq.".length()), (Object)val);
             }
             catch (NqException e) {
-                this.log(e);
+                this.log((Exception)((Object)e));
             }
         }
         try {
             if (System.getProperty("crushftp.smb3_kerberos_realm", "").equalsIgnoreCase("OFF")) {
-                Config.jnq.set("MAXSECURITYLEVEL", 3);
+                Config.jnq.set("MAXSECURITYLEVEL", (Object)3);
             }
         }
         catch (NqException e) {
-            this.log(e);
+            this.log((Exception)((Object)e));
         }
         try {
             if (System.getProperty("crushftp.dfs_default_enabled", "true").equals("true")) {
-                Config.jnq.set("DFSENABLE", true);
+                Config.jnq.set("DFSENABLE", (Object)true);
             }
             if (new java.io.File("jnq.debug").exists()) {
                 if (!JNQ_IS_LOGGING) {
                     JNQ_IS_LOGGING = true;
-                    Config.jnq.set("LOGFILE", "jnq.log");
-                    Config.jnq.set("LOGTHRESHOLD", 2000);
-                    Config.jnq.set("LOGMAXRECORDSINFILE", 1000000);
-                    Config.jnq.set("CAPTUREFILE", "jnq.pcap");
-                    Config.jnq.set("CAPTUREMAXRECORDSINFILE", 1000000);
-                    Config.jnq.set("ENABLECAPTUREPACKETS", true);
-                    TraceLog.set(customLogger);
-                    Config.jnq.set("LOGTOCONSOLE", false);
-                    Config.jnq.set("LOGTOFILE", true);
+                    Config.jnq.set("LOGFILE", (Object)"jnq.log");
+                    Config.jnq.set("LOGTHRESHOLD", (Object)2000);
+                    Config.jnq.set("LOGMAXRECORDSINFILE", (Object)1000000);
+                    Config.jnq.set("CAPTUREFILE", (Object)"jnq.pcap");
+                    Config.jnq.set("CAPTUREMAXRECORDSINFILE", (Object)1000000);
+                    Config.jnq.set("ENABLECAPTUREPACKETS", (Object)true);
+                    TraceLog.set((TraceLog)customLogger);
+                    Config.jnq.set("LOGTOCONSOLE", (Object)false);
+                    Config.jnq.set("LOGTOFILE", (Object)true);
                     TraceLog.get().start();
                     Capture.start();
                 }
             } else if (JNQ_IS_LOGGING) {
                 JNQ_IS_LOGGING = false;
-                Config.jnq.set("LOGTOFILE", false);
-                Config.jnq.set("ENABLECAPTUREPACKETS", false);
+                Config.jnq.set("LOGTOFILE", (Object)false);
+                Config.jnq.set("ENABLECAPTUREPACKETS", (Object)false);
                 Capture.stop();
                 TraceLog.get().stop();
             }
         }
         catch (NqException e) {
-            this.log(e);
+            this.log((Exception)((Object)e));
         }
     }
 
@@ -263,7 +281,7 @@ extends GenericClient {
                 this.mount.setRetryCount(5);
                 this.mount.setRetryTimeout(100);
                 this.log("SMB_CLIENT:Authenticating to:" + u.safe() + " params:" + "getRetryCount=" + this.mount.getRetryCount() + " getRetryTimeout=" + this.mount.getRetryTimeout() + " getMaxSmbTimeout=" + Client.getMaxSmbTimeout() + " getSmbTimeout=" + Client.getSmbTimeout() + " getBackupListTimeout=" + Client.getBackupListTimeout());
-                Client.checkCredentials(mount_host, this.credentials);
+                Client.checkCredentials((String)mount_host, (Credentials)this.credentials);
                 ee = null;
                 break;
             }
@@ -331,8 +349,8 @@ extends GenericClient {
         if (!(path = path.replace('\\', '/')).startsWith("/")) {
             path = "/" + path;
         }
-        if (File.isExist(this.mount, share_path = this.getSharePath(vrl = new VRL(String.valueOf(this.url) + path.substring(this.root_path.length())), path), false)) {
-            File.Info info = File.getInfo(this.mount, share_path);
+        if (File.isExist((Mount)this.mount, (String)(share_path = this.getSharePath(vrl = new VRL(String.valueOf(this.url) + path.substring(this.root_path.length())), path)), (boolean)false)) {
+            File.Info info = File.getInfo((Mount)this.mount, (String)share_path);
             return this.stat(path, info);
         }
         if (System.getProperty("crushftp.isTestCall" + Thread.currentThread().getId(), "false").equals("true")) {
@@ -457,7 +475,7 @@ extends GenericClient {
             }
         }
         catch (Exception e) {
-            ((InputStream)fin).close();
+            fin.close();
             throw e;
         }
         class InputWrapper
@@ -518,7 +536,7 @@ extends GenericClient {
                                     this.f.close();
                                 }
                                 catch (NqException efc) {
-                                    SMBjNQClient.this.log("SMB_CLIENT", 1, efc);
+                                    SMBjNQClient.this.log("SMB_CLIENT", 1, (Exception)((Object)efc));
                                 }
                                 this.f = new File(SMBjNQClient.this.mount, this.val$share_path, this.val$fileParams);
                                 this.in3 = new SmbInputStream(this.f);
@@ -533,10 +551,10 @@ extends GenericClient {
                                         this.f.close();
                                     }
                                     catch (NqException e2) {
-                                        SMBjNQClient.this.log("SMB_CLIENT", 1, e2);
+                                        SMBjNQClient.this.log("SMB_CLIENT", 1, (Exception)((Object)e2));
                                     }
                                 }
-                                throw new IOException("" + e1);
+                                throw new IOException("" + (Object)((Object)e1));
                             }
                         }
                         throw new IOException("" + e);
@@ -562,12 +580,12 @@ extends GenericClient {
                     this.f.close();
                 }
                 catch (NqException e) {
-                    SMBjNQClient.this.log("SMB_CLIENT", 1, e);
+                    SMBjNQClient.this.log("SMB_CLIENT", 1, (Exception)((Object)e));
                 }
                 this.closed = true;
             }
         }
-        this.in = new InputWrapper(fin, f, startPos, endPos, share_path, fileParams);
+        this.in = new InputWrapper((InputStream)fin, f, startPos, endPos, share_path, fileParams);
         return this.in;
     }
 
@@ -579,7 +597,7 @@ extends GenericClient {
         VRL vrl = new VRL(String.valueOf(this.url) + path.substring(this.root_path.length()));
         String share_path = this.getSharePath(vrl, path);
         this.log("SMB_CLIENT:mdtm:" + path + ":" + modified);
-        File.getInfo(this.mount, share_path).setLastWriteTime(modified);
+        File.getInfo((Mount)this.mount, (String)share_path).setLastWriteTime(modified);
         return true;
     }
 
@@ -597,7 +615,7 @@ extends GenericClient {
         }
         String share_path2 = this.getSharePath(new VRL(String.valueOf(this.url) + rnto.substring(this.root_path.length())), rnto);
         try {
-            File.rename(this.mount, share_path1, share_path2);
+            File.rename((Mount)this.mount, (String)share_path1, (String)share_path2);
             return true;
         }
         catch (Exception e) {
@@ -663,7 +681,7 @@ extends GenericClient {
                                         this.f.close();
                                     }
                                     catch (NqException efc) {
-                                        SMBjNQClient.this.log("SMB_CLIENT", 1, efc);
+                                        SMBjNQClient.this.log("SMB_CLIENT", 1, (Exception)((Object)efc));
                                     }
                                     File.Params fileParams = new File.Params(13, 7, 3, false);
                                     this.f = new File(SMBjNQClient.this.mount, this.val$share_path, fileParams);
@@ -678,10 +696,10 @@ extends GenericClient {
                                             this.f.close();
                                         }
                                         catch (NqException e2) {
-                                            SMBjNQClient.this.log("SMB_CLIENT", 1, e2);
+                                            SMBjNQClient.this.log("SMB_CLIENT", 1, (Exception)((Object)e2));
                                         }
                                     }
-                                    throw new IOException("" + e1);
+                                    throw new IOException("" + (Object)((Object)e1));
                                 }
                             }
                             throw new IOException(e);
@@ -700,12 +718,12 @@ extends GenericClient {
                         this.f.close();
                     }
                     catch (NqException e) {
-                        SMBjNQClient.this.log("SMB_CLIENT", 1, e);
+                        SMBjNQClient.this.log("SMB_CLIENT", 1, (Exception)((Object)e));
                     }
                     this.closed = true;
                 }
             }
-            this.out = new OutputWrapper(f, new SmbOutputStream(f), share_path);
+            this.out = new OutputWrapper(f, (OutputStream)new SmbOutputStream(f), share_path);
         }
         catch (Exception e) {
             this.log(e);
@@ -713,7 +731,7 @@ extends GenericClient {
                 f.close();
             }
             catch (NqException ee) {
-                this.log("SMB_CLIENT", 1, ee);
+                this.log("SMB_CLIENT", 1, (Exception)((Object)ee));
             }
         }
         return this.out;
@@ -741,7 +759,7 @@ extends GenericClient {
             int x = 0;
             while (x < 2) {
                 try {
-                    File.delete(this.mount, share_path);
+                    File.delete((Mount)this.mount, (String)share_path);
                     break;
                 }
                 catch (NqException e) {
@@ -778,7 +796,7 @@ extends GenericClient {
             file.close();
         }
         catch (NqException e) {
-            this.log(e);
+            this.log((Exception)((Object)e));
             throw e;
         }
         return true;
@@ -801,7 +819,7 @@ extends GenericClient {
             path = "/" + path;
         }
         try {
-            File.mkdirs(this.mount, path.substring(root_path2.length()));
+            File.mkdirs((Mount)this.mount, (String)path.substring(root_path2.length()));
             if (this.stat(path) == null) return false;
             return true;
         }
@@ -863,37 +881,30 @@ extends GenericClient {
         JNQLogger() {
         }
 
-        @Override
         public void message(String text, int level) {
             this.logit("MESSAGE => level=" + level + ", " + text);
         }
 
-        @Override
         public void error(String text, int level, int status) {
             this.logit("ERROR => level=" + level + ", " + text);
         }
 
-        @Override
         public void enter(int level) {
             this.logit("ENTER => level=" + level);
         }
 
-        @Override
         public void exit(int level) {
             this.logit("EXIT => level=" + level);
         }
 
-        @Override
         public void start(int level) {
             this.logit("START => level=" + level);
         }
 
-        @Override
         public void stop(int level) {
             this.logit("STOP => level=" + level);
         }
 
-        @Override
         public void caught(Exception ex, int level) {
             if (!JNQ_IS_LOGGING) {
                 return;
@@ -927,7 +938,6 @@ extends GenericClient {
             }
         }
 
-        @Override
         public boolean canLog(int level) {
             return JNQ_IS_LOGGING;
         }

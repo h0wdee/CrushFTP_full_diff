@@ -8,6 +8,11 @@
  *  org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8DecryptorProviderBuilder
  *  org.bouncycastle.operator.InputDecryptorProvider
  *  org.bouncycastle.pkcs.PKCS8EncryptedPrivateKeyInfo
+ *  org.jose4j.jws.JsonWebSignature
+ *  org.jose4j.jwt.JwtClaims
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -26,6 +31,7 @@ import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.io.Reader;
 import java.io.StringReader;
+import java.security.Key;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.text.SimpleDateFormat;
@@ -118,7 +124,7 @@ extends GenericClient {
                 throw new Exception("ERROR : Bad credentials : Could not find username! Error: " + result2);
             }
             String json = Common.consumeResponse(urlc.getInputStream());
-            Object obj = ((JSONObject)JSONValue.parse(json)).get("entries");
+            Object obj = ((JSONObject)JSONValue.parse((String)json)).get((Object)"entries");
             if (obj instanceof JSONArray) {
                 JSONArray ja = (JSONArray)obj;
                 int xxx = 0;
@@ -128,14 +134,14 @@ extends GenericClient {
                         Properties item = new Properties();
                         JSONObject jo = (JSONObject)obj2;
                         boolean folder = false;
-                        if (jo.get("type").equals("folder")) {
+                        if (jo.get((Object)"type").equals("folder")) {
                             folder = true;
                         }
                         Object[] a = jo.entrySet().toArray();
                         int i = 0;
                         while (i < a.length) {
                             String key2 = a[i].toString().split("=")[0];
-                            item.put(key2.trim(), ("" + jo.get(key2)).trim());
+                            item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
                             ++i;
                         }
                         this.log("Box login : User name to check : " + item.getProperty("login", "").trim());
@@ -213,26 +219,26 @@ extends GenericClient {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             Common.streamCopier(null, null, c.download(vrl_json.getPath(), 0L, -1L, false), baos, false, true, true);
             content = new String(baos.toByteArray(), "UTF8");
-            JSONObject jo = (JSONObject)JSONValue.parse(content);
-            this.enterpriseID = (String)jo.get("enterpriseID");
-            JSONObject boxAppSettings = (JSONObject)jo.get("boxAppSettings");
-            JSONObject appAuth = (JSONObject)boxAppSettings.get("appAuth");
-            this.clientID = (String)boxAppSettings.get("clientID");
-            this.clientSecret = (String)boxAppSettings.get("clientSecret");
-            this.publicKeyId = (String)appAuth.get("publicKeyID");
-            privateKey = (String)appAuth.get("privateKey");
-            passphrase = (String)appAuth.get("passphrase");
+            JSONObject jo = (JSONObject)JSONValue.parse((String)content);
+            this.enterpriseID = (String)jo.get((Object)"enterpriseID");
+            JSONObject boxAppSettings = (JSONObject)jo.get((Object)"boxAppSettings");
+            JSONObject appAuth = (JSONObject)boxAppSettings.get((Object)"appAuth");
+            this.clientID = (String)boxAppSettings.get((Object)"clientID");
+            this.clientSecret = (String)boxAppSettings.get((Object)"clientSecret");
+            this.publicKeyId = (String)appAuth.get((Object)"publicKeyID");
+            privateKey = (String)appAuth.get((Object)"privateKey");
+            passphrase = (String)appAuth.get((Object)"passphrase");
         } else if (this.config.getProperty("box_store_jwt_json", "false").equals("true") && !this.config.getProperty("box_jwt_config_content", "").equals("")) {
             content = Common.encryptDecrypt(this.config.getProperty("box_jwt_config_content", ""), false);
-            JSONObject jo = (JSONObject)JSONValue.parse(content);
-            this.enterpriseID = (String)jo.get("enterpriseID");
-            JSONObject boxAppSettings = (JSONObject)jo.get("boxAppSettings");
-            JSONObject appAuth = (JSONObject)boxAppSettings.get("appAuth");
-            this.clientID = (String)boxAppSettings.get("clientID");
-            this.clientSecret = (String)boxAppSettings.get("clientSecret");
-            this.publicKeyId = (String)appAuth.get("publicKeyID");
-            privateKey = (String)appAuth.get("privateKey");
-            passphrase = (String)appAuth.get("passphrase");
+            JSONObject jo = (JSONObject)JSONValue.parse((String)content);
+            this.enterpriseID = (String)jo.get((Object)"enterpriseID");
+            JSONObject boxAppSettings = (JSONObject)jo.get((Object)"boxAppSettings");
+            JSONObject appAuth = (JSONObject)boxAppSettings.get((Object)"appAuth");
+            this.clientID = (String)boxAppSettings.get((Object)"clientID");
+            this.clientSecret = (String)boxAppSettings.get((Object)"clientSecret");
+            this.publicKeyId = (String)appAuth.get((Object)"publicKeyID");
+            privateKey = (String)appAuth.get((Object)"privateKey");
+            passphrase = (String)appAuth.get((Object)"passphrase");
         } else {
             this.enterpriseID = this.config.getProperty("box_enterprise_id", "");
             this.clientID = this.config.getProperty("box_client_id", "");
@@ -255,12 +261,12 @@ extends GenericClient {
         claims.setIssuer(this.clientID);
         claims.setAudience("https://api.box.com/oauth2/token");
         claims.setSubject(this.enterpriseID);
-        claims.setClaim("box_sub_type", "enterprise");
+        claims.setClaim("box_sub_type", (Object)"enterprise");
         claims.setGeneratedJwtId(64);
         claims.setExpirationTimeMinutesInTheFuture(0.75f);
         JsonWebSignature jws = new JsonWebSignature();
         jws.setPayload(claims.toJson());
-        jws.setKey(this.key);
+        jws.setKey((Key)this.key);
         jws.setAlgorithmHeaderValue("RS512");
         jws.setHeader("typ", "JWT");
         jws.setHeader("kid", this.publicKeyId);
@@ -297,7 +303,7 @@ extends GenericClient {
             urlc.setRequestProperty("authorization", "Bearer " + this.getBearer());
             String json = Common.consumeResponse(urlc.getInputStream());
             this.parseListResult(path, list, json);
-            Object obj = ((JSONObject)JSONValue.parse(json)).get("next_marker");
+            Object obj = ((JSONObject)JSONValue.parse((String)json)).get((Object)"next_marker");
             if (obj == null) break;
             marker = (String)obj;
             ++x;
@@ -314,7 +320,7 @@ extends GenericClient {
         if (!path.endsWith("/")) {
             path = String.valueOf(path) + "/";
         }
-        if ((obj = ((JSONObject)JSONValue.parse(json)).get("entries")) instanceof JSONArray) {
+        if ((obj = ((JSONObject)JSONValue.parse((String)json)).get((Object)"entries")) instanceof JSONArray) {
             JSONArray ja = (JSONArray)obj;
             int x = 0;
             while (x < ja.size()) {
@@ -323,29 +329,29 @@ extends GenericClient {
                     Properties item = new Properties();
                     JSONObject jo = (JSONObject)obj2;
                     boolean folder = false;
-                    if (jo.get("type").equals("folder")) {
+                    if (jo.get((Object)"type").equals("folder")) {
                         folder = true;
                     }
-                    if (jo.containsKey("representations")) {
+                    if (jo.containsKey((Object)"representations")) {
                         try {
                             Vector<Properties> representations = new Vector<Properties>();
-                            JSONObject jor = (JSONObject)jo.remove("representations");
-                            if (jor.get("entries") != null) {
-                                JSONArray jar = (JSONArray)jor.get("entries");
+                            JSONObject jor = (JSONObject)jo.remove((Object)"representations");
+                            if (jor.get((Object)"entries") != null) {
+                                JSONArray jar = (JSONArray)jor.get((Object)"entries");
                                 int xx = 0;
                                 while (xx < jar.size()) {
                                     JSONObject jorep = (JSONObject)jar.get(xx);
-                                    if (jorep.get("representation").equals("jpg")) {
+                                    if (jorep.get((Object)"representation").equals("jpg")) {
                                         Properties p = new Properties();
-                                        p.put("type", jorep.get("representation"));
-                                        if (jorep.get("properties") != null) {
-                                            JSONObject jorep_prop = (JSONObject)jorep.get("properties");
-                                            p.put("paged", jorep_prop.get("paged"));
-                                            p.put("thumb", jorep_prop.get("thumb"));
-                                            p.put("dimensions", jorep_prop.get("dimensions"));
+                                        p.put("type", jorep.get((Object)"representation"));
+                                        if (jorep.get((Object)"properties") != null) {
+                                            JSONObject jorep_prop = (JSONObject)jorep.get((Object)"properties");
+                                            p.put("paged", jorep_prop.get((Object)"paged"));
+                                            p.put("thumb", jorep_prop.get((Object)"thumb"));
+                                            p.put("dimensions", jorep_prop.get((Object)"dimensions"));
                                         }
-                                        JSONObject jorep_info = (JSONObject)jorep.get("info");
-                                        p.put("url", jorep_info.get("url"));
+                                        JSONObject jorep_info = (JSONObject)jorep.get((Object)"info");
+                                        p.put("url", jorep_info.get((Object)"url"));
                                         representations.add(p);
                                     }
                                     ++xx;
@@ -363,8 +369,8 @@ extends GenericClient {
                     int i = 0;
                     while (i < a.length) {
                         String key2 = a[i].toString().split("=")[0];
-                        if (jo.get(key2) != null) {
-                            item.put(key2.trim(), ("" + jo.get(key2)).trim());
+                        if (jo.get((Object)key2) != null) {
+                            item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
                         }
                         ++i;
                     }
@@ -374,12 +380,12 @@ extends GenericClient {
                             d = null;
                             if (item.containsKey("metadata")) {
                                 try {
-                                    JSONObject metadata = (JSONObject)((JSONObject)((JSONObject)JSONValue.parse(item.getProperty("metadata", ""))).get("global")).get("properties");
-                                    if (metadata.containsKey("modified_date_time")) {
-                                        d = sdf_meta.parse((String)metadata.get("modified_date_time"));
+                                    JSONObject metadata = (JSONObject)((JSONObject)((JSONObject)JSONValue.parse((String)item.getProperty("metadata", ""))).get((Object)"global")).get((Object)"properties");
+                                    if (metadata.containsKey((Object)"modified_date_time")) {
+                                        d = sdf_meta.parse((String)metadata.get((Object)"modified_date_time"));
                                     }
-                                    if (metadata.containsKey("uploaded_by") && metadata.get("uploaded_by") != null) {
-                                        item.put("uploaded_by", metadata.get("uploaded_by"));
+                                    if (metadata.containsKey((Object)"uploaded_by") && metadata.get((Object)"uploaded_by") != null) {
+                                        item.put("uploaded_by", metadata.get((Object)"uploaded_by"));
                                     }
                                     break block25;
                                 }
@@ -442,10 +448,10 @@ extends GenericClient {
         urlc.setRequestProperty("Content-Type", "application/json");
         urlc.setRequestProperty("authorization", "Bearer " + this.getBearer());
         JSONObject file_info = new JSONObject();
-        file_info.put("name", Common.last(path));
+        file_info.put((Object)"name", (Object)Common.last(path));
         JSONObject parent = new JSONObject();
-        parent.put("id", parent_id);
-        file_info.put("parent", parent);
+        parent.put((Object)"id", (Object)parent_id);
+        file_info.put((Object)"parent", (Object)parent);
         OutputStream cout = urlc.getOutputStream();
         cout.write(file_info.toString().getBytes("UTF8"));
         cout.close();
@@ -664,9 +670,9 @@ extends GenericClient {
                 JSONObject fileMetaInfo = new JSONObject();
                 String parent_id = this.val$folder_id;
                 JSONObject parent = new JSONObject();
-                parent.put("id", parent_id);
-                fileMetaInfo.put("name", Common.last(this.val$path));
-                fileMetaInfo.put("parent", parent);
+                parent.put((Object)"id", (Object)parent_id);
+                fileMetaInfo.put((Object)"name", (Object)Common.last(this.val$path));
+                fileMetaInfo.put((Object)"parent", (Object)parent);
                 text = fileMetaInfo.toString();
                 this.mout.write(text.getBytes("UTF8"));
                 text = "\r\n" + this.boundary;
@@ -704,7 +710,7 @@ extends GenericClient {
                 urlc.setRequestProperty("authorization", "Bearer " + BoxClient.this.getBearer());
                 urlc.setRequestProperty("Content-Type", "application/json");
                 JSONObject session_info = new JSONObject();
-                session_info.put("file_size", new Long(this.size));
+                session_info.put((Object)"file_size", (Object)new Long(this.size));
                 OutputStream commitout = urlc.getOutputStream();
                 commitout.write(session_info.toString().getBytes("UTF8"));
                 commitout.close();
@@ -715,8 +721,8 @@ extends GenericClient {
                     BoxClient.this.log(String.valueOf(session_result) + "\r\n");
                     throw new Exception("Error: " + session_result);
                 }
-                this.session_id = (String)((JSONObject)JSONValue.parse(session_result)).get("id");
-                this.part_size = (Long)((JSONObject)JSONValue.parse(session_result)).get("part_size");
+                this.session_id = (String)((JSONObject)JSONValue.parse((String)session_result)).get((Object)"id");
+                this.part_size = (Long)((JSONObject)JSONValue.parse((String)session_result)).get((Object)"part_size");
                 if (this.session_id.equals("")) {
                     this.deleteUploadSession();
                     throw new Exception("Error: Missing session id!");
@@ -765,8 +771,8 @@ extends GenericClient {
                     BoxClient.this.log(String.valueOf(result) + "\r\n");
                     throw new Exception("Error: " + result);
                 }
-                JSONObject part = (JSONObject)((JSONObject)JSONValue.parse(result)).get("part");
-                this.parts.add(part);
+                JSONObject part = (JSONObject)((JSONObject)JSONValue.parse((String)result)).get((Object)"part");
+                this.parts.add((Object)part);
             }
 
             private void commitUploadSession() throws Exception {
@@ -782,7 +788,7 @@ extends GenericClient {
                 urlc.setRequestProperty("Digest", "sha=" + digestStr);
                 urlc.setRequestProperty("Content-Type", "application/json");
                 JSONObject commit_info = new JSONObject();
-                commit_info.put("parts", this.parts);
+                commit_info.put((Object)"parts", (Object)this.parts);
                 urlc.getOutputStream().write(commit_info.toString().getBytes("UTF8"));
                 urlc.getOutputStream().close();
                 int code = urlc.getResponseCode();
@@ -918,7 +924,7 @@ extends GenericClient {
         urlc.setRequestProperty("Content-Type", "application/json");
         urlc.setRequestProperty("authorization", "Bearer " + this.getBearer());
         JSONObject fileMetaInfo = new JSONObject();
-        fileMetaInfo.put("name", Common.last(rnto));
+        fileMetaInfo.put((Object)"name", (Object)Common.last(rnto));
         OutputStream out = urlc.getOutputStream();
         out.write(fileMetaInfo.toString().getBytes("UTF8"));
         out.close();
@@ -956,7 +962,7 @@ extends GenericClient {
         urlc.setRequestProperty("authorization", "Bearer " + this.getBearer());
         JSONObject fileMetaInfo = new JSONObject();
         String[] folders = path.split("/");
-        fileMetaInfo.put("name", folders[folders.length - 1]);
+        fileMetaInfo.put((Object)"name", (Object)folders[folders.length - 1]);
         String temp_path = path;
         if (path.endsWith("/")) {
             temp_path = path.substring(0, path.length() - 1);
@@ -972,8 +978,8 @@ extends GenericClient {
             }
         }
         JSONObject parentID = new JSONObject();
-        parentID.put("id", parent_id);
-        fileMetaInfo.put("parent", parentID);
+        parentID.put((Object)"id", (Object)parent_id);
+        fileMetaInfo.put((Object)"parent", (Object)parentID);
         OutputStream out = urlc.getOutputStream();
         out.write(fileMetaInfo.toString().getBytes("UTF8"));
         out.close();
@@ -984,8 +990,8 @@ extends GenericClient {
             this.log(String.valueOf(result) + "\r\n");
             return false;
         }
-        JSONObject json_result = (JSONObject)((JSONObject)JSONValue.parse(result)).get("owned_by");
-        resourceIdCache.put(String.valueOf(this.config.getProperty("username", "")) + path, json_result.get("id"));
+        JSONObject json_result = (JSONObject)((JSONObject)JSONValue.parse((String)result)).get((Object)"owned_by");
+        resourceIdCache.put(String.valueOf(this.config.getProperty("username", "")) + path, json_result.get((Object)"id"));
         return true;
     }
 
@@ -1085,10 +1091,10 @@ extends GenericClient {
         if (code < 200 || code > 299) {
             throw new IOException(response);
         }
-        String access_token = (String)((JSONObject)JSONValue.parse(response)).get("access_token");
+        String access_token = (String)((JSONObject)JSONValue.parse((String)response)).get((Object)"access_token");
         Properties p = new Properties();
         p.put("access_token", access_token);
-        String expire_in = ((JSONObject)JSONValue.parse(response)).get("expires_in").toString();
+        String expire_in = ((JSONObject)JSONValue.parse((String)response)).get((Object)"expires_in").toString();
         if (expire_in.endsWith(",")) {
             expire_in = expire_in.substring(0, expire_in.length() - 1);
         }
@@ -1129,15 +1135,15 @@ extends GenericClient {
             }
             urlc.setRequestProperty("authorization", "Bearer " + this.getBearer());
             String result = Common.consumeResponse(urlc.getInputStream());
-            Object obj = ((JSONObject)JSONValue.parse(result)).get("entries");
+            Object obj = ((JSONObject)JSONValue.parse((String)result)).get((Object)"entries");
             if (obj instanceof JSONArray) {
                 JSONArray ja = (JSONArray)obj;
                 int xxx = 0;
                 while (xxx < ja.size()) {
                     JSONObject jo;
                     Object obj2 = ja.get(xxx);
-                    if (obj2 instanceof JSONObject && (jo = (JSONObject)obj2).containsKey("$scope") && ((String)jo.get("$scope")).equals("global") && jo.containsKey("$template") && ((String)jo.get("$template")).equals("properties") && jo.containsKey("uploaded_by")) {
-                        user_name = (String)jo.get("upload_by");
+                    if (obj2 instanceof JSONObject && (jo = (JSONObject)obj2).containsKey((Object)"$scope") && ((String)jo.get((Object)"$scope")).equals("global") && jo.containsKey((Object)"$template") && ((String)jo.get((Object)"$template")).equals("properties") && jo.containsKey((Object)"uploaded_by")) {
+                        user_name = (String)jo.get((Object)"upload_by");
                     }
                     ++xxx;
                 }
@@ -1175,12 +1181,12 @@ extends GenericClient {
         urlc.setRequestProperty("Content-Type", "application/json");
         urlc.setRequestProperty("authorization", "Bearer " + this.getBearer());
         JSONObject meta_info = new JSONObject();
-        meta_info.put("md5", this.config.getProperty("uploaded_md5", ""));
-        meta_info.put("uploaded_by", this.config.getProperty("uploaded_by", ""));
+        meta_info.put((Object)"md5", (Object)this.config.getProperty("uploaded_md5", ""));
+        meta_info.put((Object)"uploaded_by", (Object)this.config.getProperty("uploaded_by", ""));
         if (modified > 0L) {
             SimpleDateFormat sdf = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.US);
             sdf.setTimeZone(TimeZone.getTimeZone("GMT"));
-            meta_info.put("modified_date_time", sdf.format(new Date(modified)));
+            meta_info.put((Object)"modified_date_time", (Object)sdf.format(new Date(modified)));
         }
         OutputStream out = urlc.getOutputStream();
         out.write(meta_info.toString().getBytes("UTF8"));

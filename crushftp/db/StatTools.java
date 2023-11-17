@@ -44,7 +44,6 @@ public class StatTools {
     static Vector freeConnections = new Vector();
     static Vector usedConnections = new Vector();
     public static Object used_lock = new Object();
-    public boolean disabled = false;
     public boolean temp_disabled = false;
     public int failed_login_stat_count = 0;
     public Object failed_login_stat_lock = new Object();
@@ -87,10 +86,10 @@ public class StatTools {
         p.put("stats_insert_meta_info", "INSERT INTO META_INFO (RID, SESSION_RID, TRANSFER_RID, ITEM_KEY, ITEM_VALUE) VALUES (?,?,?,?,?)");
         p.put("stats_update_sessions", "UPDATE SESSIONS set END_TIME = ? where RID = ?");
         p.put("stats_get_transfers_time", "SELECT RID FROM TRANSFERS WHERE START_TIME < ?");
-        p.put("stats_get_sessions_time", "SELECT RID FROM SESSIONS WHERE START_TIME < ?");
+        p.put("stats_get_sessions_time", "SELECT RID FROM SESSIONS WHERE START_TIME < ? and SERVER_GROUP <> 'CHANGE_PASS'");
         p.put("stats_delete_meta_transfers", "DELETE FROM META_INFO WHERE TRANSFER_RID IN (%transfers%)");
         p.put("stats_delete_transfers_time", "DELETE FROM TRANSFERS WHERE START_TIME < ?");
-        p.put("stats_delete_sessions_time", "DELETE FROM SESSIONS WHERE START_TIME < ?");
+        p.put("stats_delete_sessions_time", "DELETE FROM SESSIONS WHERE START_TIME < ? and SERVER_GROUP <> 'CHANGE_PASS'");
         p.put("stats_get_transfers_download", "select count(*) from TRANSFERS where DIRECTION = 'DOWNLOAD' and SESSION_RID in (select RID from SESSIONS where USER_NAME = ?)");
         p.put("stats_get_meta_info", "select * from META_INFO where LOCATE(UPPER(ITEM_VALUE), UPPER(?)) > 0");
         p.put("stats_get_transfers_period", "select sum(TRANSFER_SIZE) from TRANSFERS t, SESSIONS s where DIRECTION = ? and (IGNORE_SIZE = 'N' or IGNORE_SIZE is null) and t.SESSION_RID = s.RID and USER_NAME = ? and t.START_TIME >= ?");
@@ -98,13 +97,12 @@ public class StatTools {
     }
 
     public synchronized void init() {
-        this.disabled = ServerStatus.BG("disable_stats") || Common.dmz_mode;
         System.getProperties().put("derby.stream.error.field", "crushftp.db.StatTools.DEV_NULL");
         this.settings = ServerStatus.server_settings;
         this.mssql = this.settings.getProperty("stats_db_url").toUpperCase().indexOf("SQLSERVER") >= 0;
-        this.mysql = this.settings.getProperty("stats_db_driver").toUpperCase().indexOf("MYSQL") >= 0;
+        this.mysql = this.settings.getProperty("stats_db_driver").toUpperCase().indexOf("MYSQL") >= 0 || this.settings.getProperty("stats_db_driver").toUpperCase().indexOf("MARIA") >= 0;
         boolean bl = this.derby = this.settings.getProperty("stats_db_driver").toUpperCase().indexOf("DERBY") >= 0;
-        if (this.disabled) {
+        if (ServerStatus.BG("disable_stats") || Common.dmz_mode) {
             Log.log("STATISTICS", 0, "Statistics database is disabled.");
             return;
         }
@@ -148,6 +146,7 @@ public class StatTools {
             this.executeSqlQuery("select count(*) from SESSIONS", new Object[0], false, null);
         }
         catch (Exception e) {
+            Log.log("STATISTICS", 1, e);
             try {
                 this.createDerbyDB(script2);
             }
@@ -159,12 +158,19 @@ public class StatTools {
             this.executeSqlQuery("select count(*) from TRANSFERS", new Object[0], false, null);
         }
         catch (Exception e) {
+            Log.log("STATISTICS", 1, e);
             try {
                 this.createDerbyDB(script2);
             }
             catch (Throwable throwable) {
                 // empty catch block
             }
+        }
+        if (this.settings.getProperty("stats_get_sessions_time").equalsIgnoreCase("SELECT RID FROM SESSIONS WHERE START_TIME < ?")) {
+            Properties p2 = new Properties();
+            StatTools.setDefaults(p2);
+            this.settings.put("stats_get_sessions_time", p2.getProperty("stats_get_sessions_time"));
+            this.settings.put("stats_delete_sessions_time", p2.getProperty("stats_delete_sessions_time"));
         }
     }
 
@@ -224,7 +230,7 @@ public class StatTools {
     }
 
     public void findMetas(String sql, String[] values, Vector v) {
-        if ((this.disabled || this.temp_disabled) && this.derby) {
+        if ((ServerStatus.BG("disable_stats") || Common.dmz_mode || this.temp_disabled) && this.derby) {
             return;
         }
         this.msg("Connecting to db, executing sql:" + sql);
@@ -289,7 +295,7 @@ public class StatTools {
     }
 
     public String executeSql(String sql, Object[] values) {
-        if (this.disabled || this.temp_disabled) {
+        if (ServerStatus.BG("disable_stats") || Common.dmz_mode || this.temp_disabled) {
             return "";
         }
         String rid = "";
@@ -362,7 +368,7 @@ public class StatTools {
         Vector<Cloneable> results2;
         DVector results1;
         block48: {
-            if ((this.disabled || this.temp_disabled) && this.derby) {
+            if ((ServerStatus.BG("disable_stats") || Common.dmz_mode || this.temp_disabled) && this.derby) {
                 return new DVector();
             }
             if (this.mysql) {
@@ -546,7 +552,7 @@ public class StatTools {
     }
 
     public void insertMetaInfo(String session_rid2, Properties metaInfo, String transfer_rid2) {
-        if (this.disabled || this.temp_disabled || metaInfo == null) {
+        if (ServerStatus.BG("disable_stats") || Common.dmz_mode || this.temp_disabled || metaInfo == null) {
             return;
         }
         String sql = this.get("stats_insert_meta_info");
@@ -563,7 +569,7 @@ public class StatTools {
     }
 
     public void setIgnore(String user_name, String transfer_type, String duration) {
-        if (this.disabled || this.temp_disabled) {
+        if (ServerStatus.BG("disable_stats") || Common.dmz_mode || this.temp_disabled) {
             return;
         }
         this.msg("Connecting to db:setIgnore");
@@ -650,7 +656,7 @@ public class StatTools {
         }
         Connection conn = null;
         try {
-            if (!this.get("stats_db_driver_file").equals("")) {
+            if (!this.get("stats_db_driver_file").equals("") && System.getProperty("crushftp.security.classloader", "false").equals("true")) {
                 String[] db_drv_files = this.get("stats_db_driver_file").split(";");
                 URL[] urls = new URL[db_drv_files.length];
                 int x = 0;
@@ -697,7 +703,7 @@ public class StatTools {
                     }
                 }
                 Class.forName(this.get("stats_db_driver"));
-                conn = DriverManager.getConnection(this.get("stats_db_url"), this.get("stats_db_user"), this.get("stats_db_pass"));
+                conn = DriverManager.getConnection(this.get("stats_db_url"), this.get("stats_db_user"), ServerStatus.thisObj.common_code.decode_pass(this.get("stats_db_pass")));
                 usedConnections.addElement(conn);
             }
             conn.setAutoCommit(true);
@@ -720,7 +726,7 @@ public class StatTools {
     }
 
     public int getUserDownloadCount(String username) {
-        if (this.disabled) {
+        if (ServerStatus.BG("disable_stats") || Common.dmz_mode) {
             return 0;
         }
         String sql = ServerStatus.SG("stats_get_transfers_download");
@@ -744,7 +750,7 @@ public class StatTools {
 
     public long getTransferAmountToday(String user_ip, String user_name, Properties userStat, String transfer_type, SessionCrush thisSession) {
         String totalStr;
-        if (this.disabled) {
+        if (ServerStatus.BG("disable_stats") || Common.dmz_mode) {
             return 0L;
         }
         long total = 0L;
@@ -763,7 +769,7 @@ public class StatTools {
 
     public long getTransferCountToday(String user_ip, String user_name, Properties userStat, String transfer_type, SessionCrush thisSession) {
         String totalStr;
-        if (this.disabled) {
+        if (ServerStatus.BG("disable_stats") || Common.dmz_mode) {
             return 0L;
         }
         long total = 0L;
@@ -782,7 +788,7 @@ public class StatTools {
 
     public long getTransferAmountThisMonth(String user_ip, String user_name, Properties userStat, String transfer_type, SessionCrush thisSession) {
         String totalStr;
-        if (this.disabled) {
+        if (ServerStatus.BG("disable_stats") || Common.dmz_mode) {
             return 0L;
         }
         long total = 0L;
@@ -802,7 +808,7 @@ public class StatTools {
 
     public long getTransferCountThisMonth(String user_ip, String user_name, Properties userStat, String transfer_type, SessionCrush thisSession) {
         String totalStr;
-        if (this.disabled) {
+        if (ServerStatus.BG("disable_stats") || Common.dmz_mode) {
             return 0L;
         }
         long total = 0L;
@@ -910,14 +916,17 @@ public class StatTools {
         if (user_name.equals("")) {
             return p;
         }
+        if (ServerStatus.BG("stats_ignore_unauthenticated_users") && (user_name.equals("anonymous") || !success)) {
+            return p;
+        }
         int x = 0;
-        while (x < 10 && !this.temp_disabled && !this.disabled) {
+        while (!(x >= 10 || this.temp_disabled || ServerStatus.BG("disable_stats") || Common.dmz_mode)) {
             try {
                 if (ServerStatus.BG("stat_auto_increment")) {
-                    String rid_value = this.executeSql(ServerStatus.SG("stats_insert_sessions"), new Object[]{session_id, linkedServer, user_name, new Date(), new Date(0L), String.valueOf(success), user_ip});
+                    String rid_value = this.executeSql(ServerStatus.SG("stats_insert_sessions"), new Object[]{session_id, linkedServer, user_name, new Date(), new Date(1000000000000L), String.valueOf(success), user_ip});
                     p.put("rid", rid_value);
                 } else {
-                    this.executeSql(ServerStatus.SG("stats_insert_sessions"), new Object[]{String.valueOf(rid), session_id, linkedServer, user_name, new Date(), new Date(0L), String.valueOf(success), user_ip});
+                    this.executeSql(ServerStatus.SG("stats_insert_sessions"), new Object[]{String.valueOf(rid), session_id, linkedServer, user_name, new Date(), new Date(new Date().getTime() + 86400000L), String.valueOf(success), user_ip});
                 }
                 this.failed_login_stat_count = 0;
                 break;

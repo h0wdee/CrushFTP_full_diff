@@ -2,8 +2,6 @@
  * Decompiled with CFR 0.152.
  * 
  * Could not load the following classes:
- *  com.maverick.events.Event
- *  com.maverick.events.EventListener
  *  com.maverick.nio.Daemon
  *  com.maverick.nio.DaemonContext
  *  com.maverick.nio.ProtocolContext
@@ -94,6 +92,7 @@ extends Daemon {
         });
         sshContext.addEventListener(new EventListener(){
 
+            @Override
             public void processEvent(Event evt) {
                 try {
                     if (evt == null) {

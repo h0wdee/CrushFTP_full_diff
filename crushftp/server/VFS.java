@@ -9,9 +9,11 @@ import com.crushftp.client.FileClient;
 import com.crushftp.client.GenericClient;
 import com.crushftp.client.GenericClientMulti;
 import com.crushftp.client.HTTPClient;
+import com.crushftp.client.S3Client;
 import com.crushftp.client.S3CrushClient;
 import com.crushftp.client.VRL;
 import com.crushftp.client.Worker;
+import crushftp.handlers.AlertTools;
 import crushftp.handlers.CIProperties;
 import crushftp.handlers.Log;
 import crushftp.handlers.SessionCrush;
@@ -96,6 +98,9 @@ implements Serializable {
     }
 
     public GenericClient getClient(Properties item) throws Exception {
+        if (Log.log("VFS", 2, "")) {
+            Log.log("VFS", 2, "Creating client for getClient:" + new VRL(item.getProperty("url")).safe() + " homes.size=" + this.homes.size());
+        }
         if (this.homes.size() > 1 && ((Properties)this.homes.elementAt(0)).size() > 2 && this.user.getProperty("sync_vfs", "true").equals("true")) {
             String root_path = this.getRootVFS(String.valueOf(item.getProperty("root_dir")) + item.getProperty("name"), -1);
             int count = 0;
@@ -156,7 +161,7 @@ implements Serializable {
             if (!vrls[x].trim().equals("")) {
                 VRL vrl = new VRL(vrls[x].trim());
                 Log.log("SERVER", 2, "Original VFS replicated URL:" + new VRL(original_vItem.getProperty("url")).safe() + " versus root_vrl:" + root_vrl.safe());
-                String relative_path = new VRL(original_vItem.getProperty("url")).toString().substring(root_vrl.toString().length());
+                String relative_path = new VRL(original_vItem.getProperty("url")).getPath().substring(root_vrl.getPath().length() - ServerStatus.IG("replicated_vfs_root_url_offset"));
                 vItem.put("url", String.valueOf(vrl.getProtocol()) + "://" + VRL.vrlEncode(ServerStatus.SG("replicated_vfs_user")) + ":" + VRL.vrlEncode(ServerStatus.thisObj.common_code.decode_pass(ServerStatus.SG("replicated_vfs_pass"))) + "@" + vrl.getHost() + ":" + vrl.getPort() + vrl.getPath() + relative_path);
                 vItem.put("type", "DIR");
                 dir_item.putAll((Map<?, ?>)vItem);
@@ -182,9 +187,9 @@ implements Serializable {
         Vector<Object> vItems = new Vector<Object>();
         int x = 0;
         while (this.homes.size() > 1 && x < this.homes.size()) {
-            block11: {
+            block12: {
                 Properties dir_item;
-                block10: {
+                block11: {
                     Properties tempVirtual;
                     Properties p;
                     dir_item = null;
@@ -194,9 +199,9 @@ implements Serializable {
                     catch (Exception e) {
                         Log.log("SERVER", 1, e);
                     }
-                    if (dir_item != null) break block10;
+                    if (dir_item != null) break block11;
                     String path = this.getRootVFS(get_item_path, x);
-                    if (path.equals("/") || !(p = (Properties)(tempVirtual = (Properties)this.homes.elementAt(x)).get(path)).containsKey("vItems")) break block11;
+                    if (path.equals("/") || !(p = (Properties)(tempVirtual = (Properties)this.homes.elementAt(x)).get(path)).containsKey("vItems")) break block12;
                     Log.log("VFS", 3, "get_item:" + path);
                     dir_item = new Properties();
                     Properties vItem = this.vItemPick((Vector)p.get("vItems"));
@@ -210,6 +215,9 @@ implements Serializable {
                     GenericClient c = this.getClientSingle(dir_item, false, true, 3000);
                     clients.addElement(c);
                     vItems.addElement(dir_item.get("vItem"));
+                    if (Log.log("VFS", 2, "")) {
+                        Log.log("VFS", 2, "Creating client (" + x + ") for getClientMulti:" + new VRL(dir_item.getProperty("url")).safe() + " homes.size=" + this.homes.size());
+                    }
                 }
             }
             ++x;
@@ -245,7 +253,7 @@ implements Serializable {
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     public GenericClient getClientSingle(Properties item, boolean override_encrypted_header_check, boolean allow_bad_item, int timeout) throws Exception {
-        String baseURL;
+        String baseURL1;
         boolean needLogin = false;
         GenericClient c = null;
         Vector vU = null;
@@ -254,22 +262,41 @@ implements Serializable {
             this.clientCacheFree = new Properties();
             this.clientCacheUsed = new Properties();
         }
-        if (((baseURL = crushftp.handlers.Common.getBaseUrl(item.getProperty("url"))).toUpperCase().startsWith("S3:") || baseURL.toUpperCase().startsWith("S3CRUSH:")) && item.getProperty("no_bucket_check", "false").equals("true")) {
-            baseURL = item.getProperty("url");
+        if ((baseURL1 = crushftp.handlers.Common.getBaseUrl(item.getProperty("url"))).toUpperCase().startsWith("S3:") && item.getProperty("no_bucket_check", "false").equals("true")) {
+            baseURL1 = item.getProperty("url");
         }
+        String baseURL_common_key = crushftp.handlers.Common.getMD5End(crushftp.handlers.Common.getBaseUrl(item.getProperty("url")));
         Properties properties = this.clientCacheFree;
         synchronized (properties) {
             String key;
             Enumeration<Object> keys;
             Properties vItem;
-            if (!this.clientCacheUsed.containsKey(baseURL)) {
-                this.clientCacheUsed.put(baseURL, new Vector());
+            Properties url_configs;
+            Enumeration<Object> keys2 = this.clientCacheFree.keys();
+            while (keys2.hasMoreElements() && this.clientCacheFree.size() > 20) {
+                String key2 = keys2.nextElement().toString();
+                Vector vF2 = (Vector)this.clientCacheFree.get(key2);
+                while (vF2.size() > 0) {
+                    GenericClient c2 = (GenericClient)vF2.remove(0);
+                    c2.setConfig("uVFS", null);
+                    c2.setConfig("item", null);
+                    try {
+                        c2.logout();
+                    }
+                    catch (Exception e) {
+                        Log.log("VFS", 2, e);
+                    }
+                }
+                this.clientCacheFree.remove(key2);
             }
-            if (!this.clientCacheFree.containsKey(baseURL)) {
-                this.clientCacheFree.put(baseURL, new Vector());
+            if (!this.clientCacheUsed.containsKey(baseURL_common_key)) {
+                this.clientCacheUsed.put(baseURL_common_key, new Vector());
             }
-            vU = (Vector)this.clientCacheUsed.get(baseURL);
-            vF = (Vector)this.clientCacheFree.get(baseURL);
+            if (!this.clientCacheFree.containsKey(baseURL_common_key)) {
+                this.clientCacheFree.put(baseURL_common_key, new Vector());
+            }
+            vU = (Vector)this.clientCacheUsed.get(baseURL_common_key);
+            vF = (Vector)this.clientCacheFree.get(baseURL_common_key);
             int loop = 0;
             while (this.singlePool && vF.size() == 0 && vU.size() > 0) {
                 Thread.sleep(1000L);
@@ -280,22 +307,33 @@ implements Serializable {
             if (vF.size() > 0) {
                 c = (GenericClient)vF.remove(0);
                 if (c instanceof HTTPClient) {
-                    c.setUrl(baseURL);
+                    c.setUrl(baseURL1);
+                }
+                if (c instanceof S3Client || c instanceof S3CrushClient) {
+                    c.setUrl(baseURL1);
                 }
             } else {
                 needLogin = true;
-                Log.log("VFS", 2, "Create new GenericClient to url:" + new VRL(baseURL).safe());
+                Log.log("VFS", 2, "Create new GenericClient to url:" + new VRL(baseURL1).safe() + " vU.size=" + vU.size() + " vF.size=" + vF.size() + " uVFS=" + this + " baseURL_common_key=" + baseURL_common_key + " clientCacheUsed=" + Integer.toHexString(this.clientCacheUsed.hashCode()) + " clientCacheFree=" + Integer.toHexString(this.clientCacheFree.hashCode()) + " vU=" + Integer.toHexString(vU.hashCode()) + "vF=" + Integer.toHexString(vF.hashCode()));
                 String logHeader = "PROXY:";
                 if (this.thisSession != null) {
                     logHeader = "[" + this.thisSession.server_item.getProperty("serverType", "ftp") + ":" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] " + "PROXY" + " : ";
                 }
-                if ((c = crushftp.handlers.Common.getClient(baseURL, logHeader, Common.log)) == null) {
-                    Log.log("SERVER", 0, "Error creating client for:" + item);
+                if ((c = crushftp.handlers.Common.getClient(baseURL1, logHeader, Common.log)) == null) {
+                    Log.log("SERVER", 0, "Error creating client for:" + VRL.safe(item));
+                    throw new Exception(String.valueOf(new VRL(item.getProperty("url")).safe()) + " format not understood!");
                 }
+            }
+            vU.addElement(c);
+            if (Log.log("VFS", 2, "")) {
+                Log.log("VFS", 2, "Creating client for getClientSingle1:" + c + ":" + new VRL(item.getProperty("url")).safe() + " homes.size=" + this.homes.size() + " vU.size=" + vU.size() + " vF.size=" + vF.size() + " uVFS=" + this + " baseURL_common_key=" + baseURL_common_key + " clientCacheUsed=" + Integer.toHexString(this.clientCacheUsed.hashCode()) + " clientCacheFree=" + Integer.toHexString(this.clientCacheFree.hashCode()) + " vU=" + Integer.toHexString(vU.hashCode()) + " vF=" + Integer.toHexString(vF.hashCode()));
+            }
+            if ((url_configs = new VRL(baseURL1).getConfig()) != null && url_configs.size() > 0) {
+                c.setConfigObj(url_configs);
             }
             c.setConfig("timeout", String.valueOf(timeout));
             c.setConfig("clientid", this.thisSession == null ? null : this.thisSession.uiSG("clientid"));
-            if (baseURL.startsWith("s3")) {
+            if (baseURL1.startsWith("s3")) {
                 VRL v_tmp = new VRL(item.getProperty("url"));
                 String tmp_path = v_tmp.getPath();
                 if (tmp_path.length() > 1) {
@@ -304,13 +342,23 @@ implements Serializable {
                 c.setConfig("clientid", tmp_path);
             }
             c.setConfig("item", item);
-            c.setConfig("s3_buffer", String.valueOf(ServerStatus.IG("s3_buffer")));
-            c.setConfig("s3_buffer_download", String.valueOf(ServerStatus.IG("s3_buffer_download")));
+            if (c.getConfig("s3_buffer", "").equals("")) {
+                c.setConfig("s3_buffer", String.valueOf(ServerStatus.IG("s3_buffer")));
+            }
+            if (c.getConfig("s3_buffer_download", "").equals("")) {
+                c.setConfig("s3_buffer_download", String.valueOf(ServerStatus.IG("s3_buffer_download")));
+            }
             c.setConfig("dmz_stat_caching", String.valueOf(ServerStatus.BG("dmz_stat_caching")));
-            c.setConfig("s3_max_buffer_download", String.valueOf(ServerStatus.IG("s3_max_buffer_download")));
-            c.setConfig("s3_threads_upload", String.valueOf(ServerStatus.IG("s3_threads_upload")));
-            c.setConfig("s3_threads_download", String.valueOf(ServerStatus.IG("s3_threads_download")));
-            c.setConfig("baseURL", baseURL);
+            if (c.getConfig("s3_max_buffer_download", "").equals("")) {
+                c.setConfig("s3_max_buffer_download", String.valueOf(ServerStatus.IG("s3_max_buffer_download")));
+            }
+            if (c.getConfig("s3_threads_upload", "").equals("")) {
+                c.setConfig("s3_threads_upload", String.valueOf(ServerStatus.IG("s3_threads_upload")));
+            }
+            if (c.getConfig("s3_threads_download", "").equals("")) {
+                c.setConfig("s3_threads_download", String.valueOf(ServerStatus.IG("s3_threads_download")));
+            }
+            c.setConfig("baseURL", baseURL1);
             c.setConfig("vfs_user", this.username);
             c.setConfig("disabled_ciphers", ServerStatus.SG("disabled_ciphers"));
             if (c instanceof S3CrushClient) {
@@ -379,7 +427,10 @@ implements Serializable {
             c.setConfig("pgpPublicKeyDownloadPath", null);
             c.setConfig("syncName", null);
             c.setConfig("syncRevisionsPath", null);
-            c.setConfig("syncUploadOnly", null);
+            c.setConfig("icap_scanning", ServerStatus.SG("icap_scanning"));
+            c.setConfig("icap_server_host_port", ServerStatus.SG("icap_server_host_port"));
+            c.setConfig("icap_service", ServerStatus.SG("icap_service"));
+            c.setConfig("icap_max_bytes", ServerStatus.SG("icap_max_bytes"));
             String privs = item.getProperty("privs", "");
             if (!override_encrypted_header_check && (privs.indexOf("(pgpDecryptDownload=true)") >= 0 || this.thisSession != null && !this.thisSession.user.getProperty("filePublicEncryptionKey", "").equals("") || ServerStatus.BG("fileEncryption"))) {
                 c.setConfig("checkEncryptedHeader", "true");
@@ -390,7 +441,10 @@ implements Serializable {
             while (x < privs.split("\\(").length) {
                 String priv = privs.split("\\(")[x];
                 if (!priv.equals("") && (priv = priv.substring(0, priv.length() - 1).trim()).indexOf("=") >= 0) {
-                    c.setConfig(priv.split("=")[0], priv.substring(priv.indexOf("=") + 1));
+                    String priv_value = priv.substring(priv.indexOf("=") + 1);
+                    priv_value = crushftp.handlers.Common.replace_str(priv_value, "{parenthesis_left}", "(");
+                    priv_value = crushftp.handlers.Common.replace_str(priv_value, "{parenthesis_right}", ")");
+                    c.setConfig(priv.split("=")[0], priv_value);
                 }
                 ++x;
             }
@@ -403,7 +457,7 @@ implements Serializable {
             int x = 0;
             while (x < vU.size() && needLoginAuth) {
                 GenericClient c2 = (GenericClient)vU.elementAt(x);
-                if (c2 instanceof HTTPClient && c2.getConfig("baseURL", "").equals(baseURL) && !c2.getConfig("crushAuth", "").equals("")) {
+                if (c2 instanceof HTTPClient && c2.getConfig("baseURL", "").equals(baseURL1) && !c2.getConfig("crushAuth", "").equals("")) {
                     c.setConfig("crushAuth", c2.getConfig("crushAuth", ""));
                     c.setConfig("clientid", c2.getConfig("clientid"));
                     c.setConfig("username", c2.getConfig("username"));
@@ -429,14 +483,28 @@ implements Serializable {
                 }
             }
             catch (Exception e) {
+                if (c != null) {
+                    this.releaseClient(c);
+                }
                 Log.log("SERVER", 1, e);
                 if (!allow_bad_item || System.getProperty("crushftp.isTestCall" + Thread.currentThread().getId(), "false").equals("true")) {
+                    if (c != null) {
+                        this.releaseClient(c);
+                    }
                     throw e;
                 }
                 c.setConfig("bad_login", "true");
             }
         }
-        vU.addElement(c);
+        if (Log.log("VFS", 2, "")) {
+            Log.log("VFS", 2, "Creating client for getClientSingle2:" + c + ":" + new VRL(item.getProperty("url")).safe() + " homes.size=" + this.homes.size() + " vU.size=" + vU.size() + " vF.size=" + vF.size() + " uVFS=" + this + " baseURL_common_key=" + baseURL_common_key + " clientCacheUsed=" + Integer.toHexString(this.clientCacheUsed.hashCode()) + " clientCacheFree=" + Integer.toHexString(this.clientCacheFree.hashCode()) + " vU=" + Integer.toHexString(vU.hashCode()) + " vF=" + Integer.toHexString(vF.hashCode()));
+        }
+        if (vU.size() > 200) {
+            Log.log("SERVER", 0, "Too many connections being created and not being cleared out...");
+            Log.log("SERVER", 0, new Exception("Too many conenctions being created and not being cleared out..."));
+            this.disconnect();
+            throw new Exception("Memory issue with clientCacheUsed...blocking new connections.");
+        }
         return c;
     }
 
@@ -459,24 +527,38 @@ implements Serializable {
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     public GenericClient releaseClientItem(GenericClient c) throws Exception {
+        if (Log.log("VFS", 2, "")) {
+            Log.log("VFS", 2, "Releasing client for getClientSingle1:" + c);
+        }
         Properties properties = this.clientCacheFree;
         synchronized (properties) {
-            block9: {
-                if (c != null) break block9;
+            block17: {
+                block16: {
+                    if (c != null) break block16;
+                    return null;
+                }
+                if (c.getConfig("item") instanceof Properties) break block17;
                 return null;
             }
             Properties item = (Properties)c.getConfig("item");
             c.setConfig("uVFS", null);
             if (item != null) {
-                String baseURL = crushftp.handlers.Common.getBaseUrl(item.getProperty("url"));
-                if (!this.clientCacheUsed.containsKey(baseURL)) {
-                    this.clientCacheUsed.put(baseURL, new Vector());
+                String baseURL_common_key;
+                String baseURL1 = crushftp.handlers.Common.getBaseUrl(item.getProperty("url"));
+                if (baseURL1.toUpperCase().startsWith("S3:") && item.getProperty("no_bucket_check", "false").equals("true")) {
+                    baseURL1 = item.getProperty("url");
                 }
-                if (!this.clientCacheFree.containsKey(baseURL)) {
-                    this.clientCacheFree.put(baseURL, new Vector());
+                if (!this.clientCacheUsed.containsKey(baseURL_common_key = crushftp.handlers.Common.getMD5End(crushftp.handlers.Common.getBaseUrl(item.getProperty("url"))))) {
+                    this.clientCacheUsed.put(baseURL_common_key, new Vector());
                 }
-                Vector vU = (Vector)this.clientCacheUsed.get(baseURL);
-                Vector vF = (Vector)this.clientCacheFree.get(baseURL);
+                if (!this.clientCacheFree.containsKey(baseURL_common_key)) {
+                    this.clientCacheFree.put(baseURL_common_key, new Vector());
+                }
+                Vector vU = (Vector)this.clientCacheUsed.get(baseURL_common_key);
+                Vector vF = (Vector)this.clientCacheFree.get(baseURL_common_key);
+                if (Log.log("VFS", 2, "")) {
+                    Log.log("VFS", 2, "Releasing client for getClientSingle2:" + c + ":" + new VRL(item.getProperty("url")).safe() + " homes.size=" + this.homes.size() + " vU.size=" + vU.size() + " vF.size=" + vF.size() + " uVFS=" + this + " baseURL_common_key=" + baseURL_common_key + " clientCacheUsed=" + Integer.toHexString(this.clientCacheUsed.hashCode()) + " clientCacheFree=" + Integer.toHexString(this.clientCacheFree.hashCode()) + " vU=" + Integer.toHexString(vU.hashCode()) + " vF=" + Integer.toHexString(vF.hashCode()));
+                }
                 c.setConfig("item", null);
                 if (c instanceof FileClient) {
                     ((FileClient)c).freeCache();
@@ -484,6 +566,13 @@ implements Serializable {
                 vU.remove(c);
                 if (c.getConfig("error", "").equals("")) {
                     vF.addElement(c);
+                } else {
+                    try {
+                        c.logout();
+                    }
+                    catch (Exception e) {
+                        Log.log("VFS", 2, e);
+                    }
                 }
             }
         }
@@ -571,6 +660,9 @@ implements Serializable {
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     public void disconnect() {
+        GenericClient c;
+        String key;
+        Enumeration<Object> keys;
         Properties properties;
         boolean ok = false;
         if (this.thisSession != null) {
@@ -588,31 +680,48 @@ implements Serializable {
         if (!ok && this.thisSession != null) {
             return;
         }
-        if (this.clientCacheFree == null) {
-            return;
-        }
-        properties = this.clientCacheFree;
-        synchronized (properties) {
-            Enumeration<Object> keys = this.clientCacheFree.keys();
-            while (keys.hasMoreElements()) {
-                String key = keys.nextElement().toString();
-                Vector v = (Vector)this.clientCacheFree.get(key);
-                Vector vTmp = (Vector)this.clientCacheUsed.get(key);
-                v.addAll(vTmp);
-                vTmp.clear();
-                while (v.size() > 0) {
-                    GenericClient c = (GenericClient)v.remove(0);
-                    c.setConfig("uVFS", null);
-                    c.setConfig("item", null);
-                    try {
-                        c.logout();
+        if (this.clientCacheFree != null) {
+            properties = this.clientCacheFree;
+            synchronized (properties) {
+                keys = this.clientCacheFree.keys();
+                while (keys.hasMoreElements()) {
+                    key = keys.nextElement().toString();
+                    Vector vF = (Vector)this.clientCacheFree.get(key);
+                    while (vF.size() > 0) {
+                        c = (GenericClient)vF.remove(0);
+                        c.setConfig("uVFS", null);
+                        c.setConfig("item", null);
+                        try {
+                            c.logout();
+                        }
+                        catch (Exception e) {
+                            Log.log("VFS", 2, e);
+                        }
                     }
-                    catch (Exception e) {
-                        Log.log("VFS", 2, e);
-                    }
+                    this.clientCacheFree.remove(key);
                 }
-                this.clientCacheFree.remove(key);
-                this.clientCacheUsed.remove(key);
+            }
+        }
+        if (this.clientCacheUsed != null) {
+            properties = this.clientCacheUsed;
+            synchronized (properties) {
+                keys = this.clientCacheUsed.keys();
+                while (keys.hasMoreElements()) {
+                    key = keys.nextElement().toString();
+                    Vector vU = (Vector)this.clientCacheUsed.get(key);
+                    while (vU.size() > 0) {
+                        c = (GenericClient)vU.remove(0);
+                        c.setConfig("uVFS", null);
+                        c.setConfig("item", null);
+                        try {
+                            c.logout();
+                        }
+                        catch (Exception e) {
+                            Log.log("VFS", 2, e);
+                        }
+                    }
+                    this.clientCacheUsed.remove(key);
+                }
             }
         }
     }
@@ -639,13 +748,13 @@ implements Serializable {
         Properties combined_perms = this.getCombinedPermissions();
         int x = 0;
         while (true) {
-            block33: {
-                block36: {
+            block37: {
+                block40: {
                     Properties p;
-                    block35: {
+                    block39: {
                         GenericClient c;
                         Properties vItem;
-                        block34: {
+                        block38: {
                             if (x >= this.homes.size()) {
                                 return dir_item;
                             }
@@ -656,7 +765,7 @@ implements Serializable {
                             path = this.getRootVFS(pathOriginal, x);
                             p = (Properties)tempVirtual.get(path);
                             Log.log("VFS", 3, "get_item:" + path);
-                            if (p == null || !p.getProperty("type", "DIR").equalsIgnoreCase("FILE")) break block35;
+                            if (p == null || !p.getProperty("type", "DIR").equalsIgnoreCase("FILE")) break block39;
                             vItem = null;
                             try {
                                 vItem = this.vItemPick((Vector)p.get("vItems"));
@@ -685,18 +794,46 @@ implements Serializable {
                                 }
                                 catch (Exception e) {
                                     Log.log("SERVER", 1, e);
+                                    if (!Common.dmz_mode && System.getProperty("crushftp.isTestCall" + Thread.currentThread().getId(), "false").equals("false") && this.thisSession != null && this.thisSession.user != null && vItem != null && !vItem.getProperty("url").equals("") && !this.thisSession.vfs_bad_credentials_email_sent.getProperty(Common.encryptDecrypt(vItem.getProperty("url"), true), "").equals("true") && e != null && e.getMessage().contains("ERROR : Bad credentials")) {
+                                        try {
+                                            this.thisSession.vfs_bad_credentials_email_sent.put(Common.encryptDecrypt(vItem.getProperty("url"), true), "true");
+                                            final Properties info = new Properties();
+                                            VRL vrl = new VRL(vItem.getProperty("url"));
+                                            info.put("url", vrl.safe());
+                                            info.put("url_path", vrl.getPath());
+                                            info.put("vfs_path", path.endsWith("/") ? path : String.valueOf(path) + "/");
+                                            info.put("protocol", this.protocol);
+                                            info.put("port", (Object)this.port);
+                                            info.put("error_message", "" + e);
+                                            Worker.startWorker(new Runnable(){
+
+                                                @Override
+                                                public void run() {
+                                                    try {
+                                                        AlertTools.runAlerts("vfs_bad_credentials", info, VFS.this.thisSession.user_info, VFS.this.thisSession.user, VFS.this.thisSession, null, false);
+                                                    }
+                                                    catch (Exception e) {
+                                                        Log.log("SERVER", 1, e);
+                                                    }
+                                                }
+                                            }, "Run Bad VFS Credentials alert");
+                                        }
+                                        catch (Exception ee) {
+                                            Log.log("SERVER", 1, ee);
+                                        }
+                                    }
                                     if (x > 0) {
                                         if (homeItem >= 0) throw e;
                                     }
                                     if (System.getProperty("crushftp.isTestCall" + Thread.currentThread().getId(), "false").equals("true")) {
                                         throw e;
                                     }
-                                    if (Common.dmz_mode && path.equals("/internal")) {
+                                    if (Common.dmz_mode && path.equalsIgnoreCase("/internal")) {
                                         throw e;
                                     }
                                     if (x > 0) {
                                         c = this.releaseClient(c);
-                                        break block33;
+                                        break block37;
                                     }
                                 }
                             }
@@ -734,7 +871,7 @@ implements Serializable {
                                     dir_item.put("month", this.month.format(d));
                                     dir_item.put("day", this.day.format(d));
                                     dir_item.put("time_or_year", this.year.format(d));
-                                    break block34;
+                                    break block38;
                                 }
                                 if (tempPath.startsWith("/") && vItem.getProperty("url").endsWith("/")) {
                                     tempPath = tempPath.substring(1);
@@ -745,7 +882,7 @@ implements Serializable {
                                 if (c.getConfig("bad_login") == null || c.getConfig("bad_login").equals("false")) {
                                     dir_item = c.stat(new VRL(String.valueOf(s) + crushftp.handlers.Common.url_encode(tempPath)).getPath());
                                 }
-                                if (dir_item == null || !tempPath.equals("")) break block34;
+                                if (dir_item == null || !tempPath.equals("")) break block38;
                                 dir_item.put("name", p.getProperty("name"));
                             }
                         }
@@ -753,7 +890,7 @@ implements Serializable {
                         if (dir_item != null) {
                             dir_item.put("vItem", vItem);
                         }
-                        break block36;
+                        break block40;
                     }
                     if (p != null && p.getProperty("type", "DIR").equalsIgnoreCase("DIR") && path.equals(pathOriginal)) {
                         dir_item = new Properties();
@@ -784,6 +921,9 @@ implements Serializable {
                     dir_item.put("root_dir", parentPath.equals("") ? "/" : parentPath);
                     this.setPermissions(dir_item);
                     dir_item.put("protocol", new VRL(dir_item.getProperty("url")).getProtocol());
+                    if (dir_item.containsKey("vItem") && dir_item.get("vItem") != null && dir_item.get("vItem") instanceof Properties) {
+                        ((Properties)dir_item.get("vItem")).put("vfs_home_index", String.valueOf(x));
+                    }
                 }
                 if (dir_item != null) {
                     return dir_item;
@@ -800,10 +940,14 @@ implements Serializable {
         this.getListing(list, path2, true);
     }
 
+    public void getListing(Vector list, String path2, boolean verify_endpoints) throws Exception {
+        this.getListing(list, path2, verify_endpoints, false);
+    }
+
     /*
      * Unable to fully structure code
      */
-    public void getListing(Vector list, String path2, boolean verify_endpoints) throws Exception {
+    public void getListing(Vector list, String path2, boolean verify_endpoints, final boolean ignore_list_errors) throws Exception {
         original_name = Thread.currentThread().getName();
         try {
             if (path2.equals("")) {
@@ -832,24 +976,24 @@ implements Serializable {
                     if (new VRL(dir_item.getProperty("url")).getProtocol().equalsIgnoreCase("VIRTUAL")) {
                         keys = tempVirtual.keys();
                         while (keys.hasMoreElements()) {
-                            block56: {
-                                key = keys.nextElement().toString();
-                                if (key.equals("/") || path.equals("") || !key.toUpperCase().startsWith(path.toUpperCase()) || key.substring(path.length()).indexOf("/") >= 0) continue;
-                                p = (Properties)tempVirtual.get(key);
-                                item = new Properties();
-                                item.put("name", p.getProperty("name"));
-                                item.put("type", p.getProperty("type"));
-                                itemDate = new Date();
-                                if (p.getProperty("type").equalsIgnoreCase("DIR")) {
-                                    item.put("permissions", "drwxrwxrwx");
-                                    item.put("size", "1");
-                                    item.put("url", "virtual://" + path + p.getProperty("name") + "/");
-                                } else {
-                                    item.put("permissions", "-rwxrwxrwx");
-                                    item.put("size", "1");
-                                    item.put("url", "virtual://" + path + p.getProperty("name"));
-                                    vItems = (Vector)p.get("vItems");
-                                    if (vItems != null && vItems.size() > 0) {
+                            key = keys.nextElement().toString();
+                            if (key.equals("/") || path.equals("") || !key.toUpperCase().startsWith(path.toUpperCase()) || key.substring(path.length()).indexOf("/") >= 0) continue;
+                            p = (Properties)tempVirtual.get(key);
+                            item = new Properties();
+                            item.put("name", p.getProperty("name"));
+                            item.put("type", p.getProperty("type"));
+                            itemDate = new Date();
+                            if (p.getProperty("type").equalsIgnoreCase("DIR")) {
+                                item.put("permissions", "drwxrwxrwx");
+                                item.put("size", "1");
+                                item.put("url", "virtual://" + path + p.getProperty("name") + "/");
+                            } else {
+                                item.put("permissions", "-rwxrwxrwx");
+                                item.put("size", "1");
+                                item.put("url", "virtual://" + path + p.getProperty("name"));
+                                vItems = (Vector)p.get("vItems");
+                                if (vItems != null && vItems.size() > 0) {
+                                    block64: {
                                         actualItem = (Properties)vItems.elementAt(0);
                                         avrl = new VRL(actualItem.getProperty("url"));
                                         if (avrl.getProtocol().equalsIgnoreCase("FILE")) {
@@ -888,15 +1032,25 @@ implements Serializable {
                                                         }
                                                         Log.log("SERVER", 1, e);
                                                         this.releaseClient(c);
-                                                        break block56;
+                                                        break block64;
                                                     }
                                                 }
-                                                catch (Throwable var23_31) {
+                                                catch (Throwable var24_32) {
                                                     this.releaseClient(c);
-                                                    throw var23_31;
+                                                    throw var24_32;
                                                 }
                                                 this.releaseClient(c);
                                             }
+                                        }
+                                    }
+                                    if (actualItem.getProperty("type", "").equalsIgnoreCase("DIR") && p.getProperty("type", "FILE").equalsIgnoreCase("FILE")) {
+                                        item.put("type", "DIR");
+                                        item.put("permissions", "drwxrwxrwx");
+                                        item.put("size", "1");
+                                    }
+                                    if (ServerStatus.BG("vfs_lazy_load")) {
+                                        if (ServerStatus.BG("reveal_vfs_protocol_end_user") && !Common.dmz_mode) {
+                                            item.put("url", actualItem.getProperty("url"));
                                         }
                                     }
                                 }
@@ -924,11 +1078,12 @@ implements Serializable {
 
                             @Override
                             public void run() {
-                                block8: {
+                                block13: {
                                     try {
-                                        GenericClient c = VFS.this.getClientSingle(dir_item);
+                                        GenericClient c = null;
                                         try {
                                             try {
+                                                c = VFS.this.getClientSingle(dir_item);
                                                 String urlpath = new VRL(dir_item.getProperty("url")).getPath();
                                                 if (urlpath.endsWith("/")) {
                                                     urlpath = urlpath.substring(0, urlpath.length() - 1);
@@ -936,18 +1091,28 @@ implements Serializable {
                                                 c.list(String.valueOf(urlpath) + path.substring(parentPath.length()), list2);
                                             }
                                             catch (Exception e) {
-                                                c.setConfig("error", e.toString());
-                                                status.put("error" + x_loop, e);
+                                                if (c != null) {
+                                                    c.setConfig("error", e.toString());
+                                                }
+                                                if (!ignore_list_errors) {
+                                                    status.put("error" + x_loop, e);
+                                                }
                                                 Log.log("SERVER", 2, e);
-                                                c = VFS.this.releaseClient(c);
-                                                break block8;
+                                                if (c != null) {
+                                                    c = VFS.this.releaseClient(c);
+                                                }
+                                                break block13;
                                             }
                                         }
                                         catch (Throwable throwable) {
-                                            c = VFS.this.releaseClient(c);
+                                            if (c != null) {
+                                                c = VFS.this.releaseClient(c);
+                                            }
                                             throw throwable;
                                         }
-                                        c = VFS.this.releaseClient(c);
+                                        if (c != null) {
+                                            c = VFS.this.releaseClient(c);
+                                        }
                                     }
                                     catch (Exception e) {
                                         crushftp.handlers.Common.debug(1, e);
@@ -976,7 +1141,10 @@ implements Serializable {
                             }
                             try {
                                 if (verify_endpoints) {
-                                    tempItem = this.get_item(String.valueOf(parentPath2) + pp.getProperty("name"), x);
+                                    tempItem = null;
+                                    if (!ServerStatus.BG("vfs_lazy_load")) {
+                                        tempItem = this.get_item(String.valueOf(parentPath2) + pp.getProperty("name"), x);
+                                    }
                                     if (tempItem != null) {
                                         pp.put("type", tempItem.getProperty("type", "DIR").toUpperCase());
                                         pp.put("size", tempItem.getProperty("size"));
@@ -987,12 +1155,10 @@ implements Serializable {
                                             pp.put("permissions", "drwxrwxrwx");
                                         }
                                     }
-                                } else if (pp.getProperty("url", "").startsWith("virtual://")) {
-                                    pp.put("type", "DIR");
                                 }
                             }
                             catch (Exception e) {
-                                if (ServerStatus.BG("stop_listing_on_login_failure") && ("" + e).toLowerCase().indexOf("failure") > 0 && this.user != null && this.user.size() > 0 && !this.username.equals("")) {
+                                if (ServerStatus.BG("stop_listing_on_login_failure") && ("" + e).toLowerCase().indexOf("fail") > 0 && this.user != null && this.user.size() > 0 && !this.username.equals("") && !ignore_list_errors) {
                                     throw e;
                                 }
                                 pp.put("type", "DIR");
@@ -1000,13 +1166,19 @@ implements Serializable {
                                 Log.log("VFS", 2, e);
                             }
                         }
-                        pp.put("root_dir", (parentPath3 = crushftp.handlers.Common.all_but_last(String.valueOf(path) + pp.getProperty("name"))).equals("") != false ? "/" : parentPath3);
+                        parentPath3 = crushftp.handlers.Common.all_but_last(String.valueOf(path) + pp.getProperty("name"));
+                        if (!pp.getProperty("search_filter_match", "false").equals("true")) {
+                            pp.put("root_dir", parentPath3.equals("") != false ? "/" : parentPath3);
+                        }
                         try {
                             this.setPermissions(pp);
                         }
                         catch (Exception ee) {
                             Log.log("VFS", 1, "" + pp);
                             Log.log("VFS", 1, ee);
+                        }
+                        if (dir_item.containsKey("vItem")) {
+                            pp.put("vItem", dir_item.get("vItem"));
                         }
                         list.add(pp);
                     }
@@ -1016,7 +1188,15 @@ implements Serializable {
             if (list.size() == 0) {
                 x = 0;
                 while (x < this.homes.size()) {
-                    if (status.containsKey("error" + x)) {
+                    if (status.containsKey("error" + x) && !ignore_list_errors) {
+                        throw (Exception)status.get("error" + x);
+                    }
+                    ++x;
+                }
+            } else if (list.size() == 2 && ((Properties)list.elementAt(0)).getProperty("name", "").equals(".") && ((Properties)list.elementAt(1)).getProperty("name", "").equals("..")) {
+                x = 0;
+                while (x < this.homes.size()) {
+                    if (status.containsKey("error" + x) && !ignore_list_errors) {
                         throw (Exception)status.get("error" + x);
                     }
                     ++x;
@@ -1024,7 +1204,7 @@ implements Serializable {
             }
             oversize_msg = "";
             if (ServerStatus.LG("max_items_dir") > 0L && (long)list.size() > ServerStatus.LG("max_items_dir")) {
-                oversize_msg = "Directory size too big:" + list.size() + ":" + path2 + ":" + Thread.currentThread().getName();
+                oversize_msg = "Directory size too big:" + list.size() + "  (max=" + ServerStatus.LG("max_items_dir") + "):" + path2 + ":" + Thread.currentThread().getName();
                 crushftp.handlers.Common.do_sort(list, "modified", "modified");
                 while ((long)list.size() > ServerStatus.LG("max_items_dir")) {
                     list.removeElementAt(0);
@@ -1035,7 +1215,7 @@ implements Serializable {
                 info.put("alert_timeout", "0");
                 info.put("alert_max", "0");
                 info.put("alert_msg", oversize_msg);
-                ServerStatus.thisObj.runAlerts("big_dir", info, this.user_info, null);
+                AlertTools.runAlerts("big_dir", info, this.thisSession.user_info, this.thisSession.user, this.thisSession, null, Common.dmz_mode);
                 Log.log("SERVER", 0, oversize_msg);
                 System.gc();
             }
@@ -1054,6 +1234,10 @@ implements Serializable {
     }
 
     public void getListing(Vector list, String path, int depth, int maxSize, boolean includeFolders, Vector filters, RETR_handler retr) throws Exception {
+        this.getListing(list, path, depth, maxSize, includeFolders, filters, retr, false);
+    }
+
+    public void getListing(Vector list, String path, int depth, int maxSize, boolean includeFolders, Vector filters, RETR_handler retr, boolean ignore_list_errors) throws Exception {
         Properties item = null;
         try {
             item = this.get_item(path);
@@ -1064,7 +1248,7 @@ implements Serializable {
         if (item.getProperty("type", "").equalsIgnoreCase("FILE")) {
             list.addElement(item);
         } else {
-            this.appendListing(path, list, "", depth, maxSize, includeFolders, filters, retr, item.get("vItem"), null);
+            this.appendListing(path, list, "", depth, maxSize, includeFolders, filters, retr, item.get("vItem"), null, ignore_list_errors);
         }
     }
 
@@ -1073,6 +1257,10 @@ implements Serializable {
     }
 
     public void appendListing(String path, Vector list, String dir, int depth, int maxSize, boolean includeFolders, Vector filters, RETR_handler retr, Object vItem, Properties cur_item) throws Exception {
+        this.appendListing(path, list, dir, depth, maxSize, includeFolders, filters, retr, vItem, cur_item, false);
+    }
+
+    public void appendListing(String path, Vector list, String dir, int depth, int maxSize, boolean includeFolders, Vector filters, RETR_handler retr, Object vItem, Properties cur_item, boolean ignore_list_error) throws Exception {
         Vector aDir = new Vector();
         if (depth > 0) {
             --depth;
@@ -1080,7 +1268,7 @@ implements Serializable {
                 path = String.valueOf(path) + "/";
             }
             if (crushftp.handlers.Common.filterDir(String.valueOf(path) + dir, filters)) {
-                this.getListing(aDir, String.valueOf(path) + dir);
+                this.getListing(aDir, String.valueOf(path) + dir, true, ignore_list_error);
             }
             int x = 0;
             while (x < aDir.size()) {
@@ -1094,13 +1282,18 @@ implements Serializable {
                     return;
                 }
                 Properties item = (Properties)aDir.elementAt(x);
-                if (vItem != null) {
-                    item.put("vItem", vItem);
+                if (!item.containsKey("vItem")) {
+                    try {
+                        item.put("vItem", this.get_item(String.valueOf(item.getProperty("root_dir")) + item.getProperty("name")).get("vItem"));
+                    }
+                    catch (Exception e) {
+                        item.put("vItem", vItem);
+                    }
                 }
                 if (item.getProperty("type", "").equalsIgnoreCase("FILE")) {
                     list.addElement(item);
                 } else if (item.getProperty("type", "").equalsIgnoreCase("DIR")) {
-                    this.appendListing(path, list, String.valueOf(dir) + item.getProperty("name") + "/", depth, maxSize, includeFolders, filters, retr, vItem, item);
+                    this.appendListing(path, list, String.valueOf(dir) + item.getProperty("name") + "/", depth, maxSize, includeFolders, filters, retr, vItem, item, ignore_list_error);
                 }
                 if (Thread.currentThread().getName().indexOf(":lister:") >= 0) {
                     Thread.currentThread().setName(String.valueOf(Thread.currentThread().getName().substring(0, Thread.currentThread().getName().indexOf(":lister:") + ":lister:".length())) + dir + item.getProperty("name"));
@@ -1144,6 +1337,10 @@ implements Serializable {
         dir_item.put("name", crushftp.handlers.Common.last(path));
         String newPath = path.substring(path.indexOf(parentPath) + parentPath.length());
         Log.log("VFS", 3, "get_item_parent:newPath=" + newPath);
+        if (!dir_item.getProperty("url").endsWith("/")) {
+            Log.log("SERVER", 0, "User " + this.username + " has invalid VFS url: " + new VRL(dir_item.getProperty("url")).safe() + " path :" + parentPath);
+            dir_item.put("url", String.valueOf(dir_item.getProperty("url")) + "/");
+        }
         String temp_url = String.valueOf(dir_item.getProperty("url")) + newPath;
         dir_item.put("url", String.valueOf(dir_item.getProperty("url")) + crushftp.handlers.Common.all_but_last(newPath));
         dir_item.put("root_dir", String.valueOf(parentPath) + crushftp.handlers.Common.all_but_last(newPath));

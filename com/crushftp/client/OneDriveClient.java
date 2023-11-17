@@ -1,5 +1,10 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -106,9 +111,9 @@ extends GenericClient {
             this.log(result);
             throw new IOException(result);
         }
-        this.drive_id = (String)((JSONObject)JSONValue.parse(result)).get("id");
-        if (!this.sharepoint && ((JSONObject)JSONValue.parse(result)).get("driveType") != null) {
-            this.onedrive_type = (String)((JSONObject)JSONValue.parse(result)).get("driveType");
+        this.drive_id = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"id");
+        if (!this.sharepoint && ((JSONObject)JSONValue.parse((String)result)).get((Object)"driveType") != null) {
+            this.onedrive_type = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"driveType");
         }
         if (this.sharepoint) {
             String site_id = this.drive_id;
@@ -128,7 +133,7 @@ extends GenericClient {
             result = result2;
         }
         if (this.config.getProperty("onedrive_my_shares", "false").equals("true") || this.sharepoint) {
-            Object obj = ((JSONObject)JSONValue.parse(result)).get("value");
+            Object obj = ((JSONObject)JSONValue.parse((String)result)).get((Object)"value");
             if (obj instanceof JSONArray) {
                 try {
                     JSONArray ja = (JSONArray)obj;
@@ -142,7 +147,7 @@ extends GenericClient {
                             int i = 0;
                             while (i < a.length) {
                                 String key2 = a[i].toString().split("=")[0];
-                                item.put(key2.trim(), ("" + jo.get(key2)).trim());
+                                item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
                                 ++i;
                             }
                             if (this.sharepoint) {
@@ -153,11 +158,11 @@ extends GenericClient {
                                 break;
                             }
                             if (item.getProperty("name", "").equals(this.config.getProperty("onedrive_share_name", "test")) && item.containsKey("remoteItem")) {
-                                JSONObject jo_ref = (JSONObject)JSONValue.parse(item.getProperty("remoteItem", "{}"));
-                                if (jo_ref.containsKey("id") && jo_ref.containsKey("parentReference")) {
-                                    this.share_item_id = (String)jo_ref.get("id");
+                                JSONObject jo_ref = (JSONObject)JSONValue.parse((String)item.getProperty("remoteItem", "{}"));
+                                if (jo_ref.containsKey((Object)"id") && jo_ref.containsKey((Object)"parentReference")) {
+                                    this.share_item_id = (String)jo_ref.get((Object)"id");
                                 }
-                                this.share_drive_id = (String)((JSONObject)jo_ref.get("parentReference")).get("driveId");
+                                this.share_drive_id = (String)((JSONObject)jo_ref.get((Object)"parentReference")).get((Object)"driveId");
                                 break;
                             }
                         }
@@ -206,7 +211,7 @@ extends GenericClient {
             throw new IOException(result);
         }
         this.parseItems(path, list, result);
-        Object obj_next_link = ((JSONObject)JSONValue.parse(result)).get("@odata.nextLink");
+        Object obj_next_link = ((JSONObject)JSONValue.parse((String)result)).get((Object)"@odata.nextLink");
         if (obj_next_link != null) {
             int x = 0;
             while (x < 1000 && obj_next_link != null) {
@@ -227,7 +232,7 @@ extends GenericClient {
                     throw new IOException(result2);
                 }
                 this.parseItems(path, list, result2);
-                obj_next_link = ((JSONObject)JSONValue.parse(result2)).get("@odata.nextLink");
+                obj_next_link = ((JSONObject)JSONValue.parse((String)result2)).get((Object)"@odata.nextLink");
                 ++x;
             }
         }
@@ -235,7 +240,7 @@ extends GenericClient {
     }
 
     private void parseItems(String path, Vector list, String result) throws Exception {
-        Object obj = ((JSONObject)JSONValue.parse(result)).get("value");
+        Object obj = ((JSONObject)JSONValue.parse((String)result)).get((Object)"value");
         if (obj instanceof JSONArray) {
             JSONArray ja = (JSONArray)obj;
             int x = 0;
@@ -244,9 +249,9 @@ extends GenericClient {
                 if (obj2 instanceof JSONObject) {
                     Properties item = new Properties();
                     JSONObject jo = (JSONObject)obj2;
-                    if (jo.containsKey("thumbnails")) {
+                    if (jo.containsKey((Object)"thumbnails")) {
                         try {
-                            Object thumbs = jo.remove("thumbnails");
+                            Object thumbs = jo.remove((Object)"thumbnails");
                             if (thumbs == null || thumbs instanceof JSONArray) {
                                 // empty if block
                             }
@@ -256,17 +261,17 @@ extends GenericClient {
                             while (xx < thmba.size()) {
                                 Properties p = new Properties();
                                 JSONObject thmb = (JSONObject)thmba.get(xx);
-                                if (thmb.containsKey("small")) {
-                                    JSONObject small = (JSONObject)thmb.get("small");
-                                    p.put("small_thumbnail_url", small.get("url"));
+                                if (thmb.containsKey((Object)"small")) {
+                                    JSONObject small = (JSONObject)thmb.get((Object)"small");
+                                    p.put("small_thumbnail_url", small.get((Object)"url"));
                                 }
-                                if (thmb.containsKey("medium")) {
-                                    JSONObject medium = (JSONObject)thmb.get("medium");
-                                    p.put("medium_thumbnail_url", medium.get("url"));
+                                if (thmb.containsKey((Object)"medium")) {
+                                    JSONObject medium = (JSONObject)thmb.get((Object)"medium");
+                                    p.put("medium_thumbnail_url", medium.get((Object)"url"));
                                 }
-                                if (thmb.containsKey("large")) {
-                                    JSONObject large = (JSONObject)thmb.get("large");
-                                    p.put("large_thumbnail_url", large.get("url"));
+                                if (thmb.containsKey((Object)"large")) {
+                                    JSONObject large = (JSONObject)thmb.get((Object)"large");
+                                    p.put("large_thumbnail_url", large.get((Object)"url"));
                                 }
                                 thumbnails.add(p);
                                 ++xx;
@@ -283,7 +288,7 @@ extends GenericClient {
                     int i = 0;
                     while (i < a.length) {
                         String key2 = a[i].toString().split("=")[0];
-                        item.put(key2.trim(), ("" + jo.get(key2)).trim());
+                        item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
                         ++i;
                     }
                     boolean folder = item.containsKey("folder");
@@ -380,18 +385,18 @@ extends GenericClient {
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject request = new JSONObject();
         JSONObject fileMetaInfo = new JSONObject();
-        fileMetaInfo.put("name", Common.last(path));
+        fileMetaInfo.put((Object)"name", (Object)Common.last(path));
         String conflict_behaviour = this.config.getProperty("one_drive_conflict_behaviour", "replace");
         if (conflict_behaviour.equals("")) {
             conflict_behaviour = "replace";
         }
-        fileMetaInfo.put("@microsoft.graph.conflictBehavior", conflict_behaviour);
-        request.put("item", fileMetaInfo);
+        fileMetaInfo.put((Object)"@microsoft.graph.conflictBehavior", (Object)conflict_behaviour);
+        request.put((Object)"item", (Object)fileMetaInfo);
         boolean deferCommit = true;
         if (!this.sharepoint && this.onedrive_type.equals("personal")) {
             deferCommit = false;
         }
-        request.put("deferCommit", new Boolean(deferCommit));
+        request.put((Object)"deferCommit", (Object)new Boolean(deferCommit));
         OutputStream out = urlc.getOutputStream();
         out.write(request.toString().getBytes("UTF8"));
         out.close();
@@ -401,7 +406,7 @@ extends GenericClient {
             this.log(result);
             throw new IOException(result);
         }
-        String location = (String)((JSONObject)JSONValue.parse(result)).get("uploadUrl");
+        String location = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"uploadUrl");
         String tmep_upload_name = String.valueOf(Common.last(path)) + "_" + Common.makeBoundary(32);
         urlc.disconnect();
         class OutputWrapper
@@ -900,13 +905,13 @@ extends GenericClient {
         urlc.setRequestProperty("Accept", "application/json");
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject postData = new JSONObject();
-        postData.put("folder", new JSONObject());
-        postData.put("name", folder_name);
+        postData.put((Object)"folder", (Object)new JSONObject());
+        postData.put((Object)"name", (Object)folder_name);
         String conflict_behaviour = this.config.getProperty("one_drive_conflict_behaviour", "replace");
         if (conflict_behaviour.equals("")) {
             conflict_behaviour = "replace";
         }
-        postData.put("@microsoft.graph.conflictBehavior", conflict_behaviour);
+        postData.put((Object)"@microsoft.graph.conflictBehavior", (Object)conflict_behaviour);
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toJSONString().getBytes("UTF8"));
         out.close();
@@ -951,7 +956,7 @@ extends GenericClient {
         urlc.setRequestProperty("Accept", "application/json");
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject postData = new JSONObject();
-        postData.put("name", Common.last(rnto));
+        postData.put((Object)"name", (Object)Common.last(rnto));
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toJSONString().getBytes("UTF8"));
         out.close();
@@ -1056,8 +1061,8 @@ extends GenericClient {
         if (code < 200 || code > 299) {
             throw new Exception(result);
         }
-        String access_token = (String)((JSONObject)JSONValue.parse(result)).get("access_token");
-        String expires_in = "" + ((JSONObject)JSONValue.parse(result)).get("expires_in");
+        String access_token = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"access_token");
+        String expires_in = "" + ((JSONObject)JSONValue.parse((String)result)).get((Object)"expires_in");
         Properties p = new Properties();
         p.put("refresh_token", refresh_token);
         p.put("access_token", access_token);

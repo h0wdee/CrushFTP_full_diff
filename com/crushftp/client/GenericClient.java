@@ -2,10 +2,6 @@
  * Decompiled with CFR 0.152.
  * 
  * Could not load the following classes:
- *  com.didisoft.pgp.KeyStore
- *  com.didisoft.pgp.PGPLib
- *  com.didisoft.pgp.SignatureCheckResult
- *  com.didisoft.pgp.inspect.PGPInspectLib
  *  org.jdom.Element
  */
 package com.crushftp.client;
@@ -1119,20 +1115,20 @@ public class GenericClient {
                                     publicKeyLocation = "FILE://" + publicKeyLocation;
                                 }
                                 byte[] publicKey = GenericClient.loadPGPKeyFile(publicKeyLocation);
-                                SignatureCheckResult verified = GenericClient.this.pgp.decryptAndVerify(in3f1, (InputStream)bytesIn2, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), false), (InputStream)new ByteArrayInputStream(publicKey), out4);
+                                SignatureCheckResult verified = GenericClient.this.pgp.decryptAndVerify(in3f1, bytesIn2, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), false), new ByteArrayInputStream(publicKey), out4);
                                 if (!verified.equals((Object)SignatureCheckResult.SignatureVerified)) {
-                                    throw new Exception("Verification failed while decrypting! Result: " + verified);
+                                    throw new Exception("Verification failed while decrypting! Result: " + (Object)((Object)verified));
                                 }
                             } else {
                                 try {
-                                    if (new KeyStore().importPrivateKey((InputStream)bytesIn1)[0].checkPassword(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString())) {
-                                        GenericClient.this.pgp.decryptStream(in3f1, (InputStream)bytesIn2, GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), out4);
+                                    if (new KeyStore().importPrivateKey(bytesIn1)[0].checkPassword(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString())) {
+                                        GenericClient.this.pgp.decryptStream(in3f1, bytesIn2, GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), out4);
                                     } else {
-                                        GenericClient.this.pgp.decryptStream(in3f1, (InputStream)bytesIn2, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), false), out4);
+                                        GenericClient.this.pgp.decryptStream(in3f1, bytesIn2, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), false), out4);
                                     }
                                 }
                                 catch (Exception e) {
-                                    GenericClient.this.pgp.decryptStream(in3f1, (InputStream)bytesIn3, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), false), out4);
+                                    GenericClient.this.pgp.decryptStream(in3f1, bytesIn3, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), false), out4);
                                 }
                             }
                             if (bytesIn1 != null) {
@@ -1243,9 +1239,9 @@ public class GenericClient {
                             if (pbe) {
                                 GenericClient.this.pgp.encryptStreamPBE(in3f1, filename, Common.encryptDecrypt(keyLocation.substring(keyLocation.indexOf(":") + 1), false), out4, GenericClient.this.getConfig("pgpAsciiDownload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
                             } else if (GenericClient.this.getConfig("pgpSignDownload") != null && GenericClient.this.getConfig("pgpSignDownload", "false").equals("true")) {
-                                GenericClient.this.pgp.signAndEncryptStream(in3f1, filename, (InputStream)new ByteArrayInputStream(private_key), Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), false), (InputStream)bytesIn, out4, GenericClient.this.getConfig("pgpAsciiDownload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
+                                GenericClient.this.pgp.signAndEncryptStream(in3f1, filename, (InputStream)new ByteArrayInputStream(private_key), Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyDownloadPassword", "").toString(), false), bytesIn, out4, GenericClient.this.getConfig("pgpAsciiDownload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
                             } else {
-                                GenericClient.this.pgp.encryptStream(in3f1, filename, (InputStream)bytesIn, out4, GenericClient.this.getConfig("pgpAsciiDownload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
+                                GenericClient.this.pgp.encryptStream(in3f1, filename, bytesIn, out4, GenericClient.this.getConfig("pgpAsciiDownload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
                             }
                             if (bytesIn != null) {
                                 bytesIn.close();
@@ -1407,9 +1403,9 @@ public class GenericClient {
                         if (pbe) {
                             GenericClient.this.pgp.encryptStreamPBE(sock1.getInputStream(), filename, Common.encryptDecrypt(keyLocation.substring(keyLocation.indexOf(":") + 1), false), out3f1, GenericClient.this.getConfig("pgpAsciiUpload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
                         } else if (GenericClient.this.getConfig("pgpSignUpload") != null && GenericClient.this.getConfig("pgpSignUpload", "false").equals("true")) {
-                            GenericClient.this.pgp.signAndEncryptStream(sock1.getInputStream(), filename, (InputStream)new ByteArrayInputStream(private_key), Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), false), (InputStream)bytesIn, out3f1, GenericClient.this.getConfig("pgpAsciiUpload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
+                            GenericClient.this.pgp.signAndEncryptStream(sock1.getInputStream(), filename, (InputStream)new ByteArrayInputStream(private_key), Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), false), bytesIn, out3f1, GenericClient.this.getConfig("pgpAsciiUpload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
                         } else {
-                            GenericClient.this.pgp.encryptStream(sock1.getInputStream(), filename, (InputStream)bytesIn, out3f1, GenericClient.this.getConfig("pgpAsciiUpload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
+                            GenericClient.this.pgp.encryptStream(sock1.getInputStream(), filename, bytesIn, out3f1, GenericClient.this.getConfig("pgpAsciiUpload", "false").equals("true"), System.getProperty("crushftp.pgp_integrity_protect", "false").equals("true"));
                         }
                         if (bytesIn != null) {
                             bytesIn.close();
@@ -1491,20 +1487,20 @@ public class GenericClient {
                                 publicKeyLocation = "FILE://" + publicKeyLocation;
                             }
                             byte[] publicKey = GenericClient.loadPGPKeyFile(publicKeyLocation);
-                            SignatureCheckResult verified = GenericClient.this.pgp.decryptAndVerify(sock1.getInputStream(), (InputStream)bytesIn2, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), false), (InputStream)new ByteArrayInputStream(publicKey), out3f2);
+                            SignatureCheckResult verified = GenericClient.this.pgp.decryptAndVerify(sock1.getInputStream(), bytesIn2, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), false), new ByteArrayInputStream(publicKey), out3f2);
                             if (!verified.equals((Object)SignatureCheckResult.SignatureVerified)) {
-                                throw new Exception("Verification failed while decrypting! Result: " + verified);
+                                throw new Exception("Verification failed while decrypting! Result: " + (Object)((Object)verified));
                             }
                         } else {
                             try {
-                                if (new KeyStore().importPrivateKey((InputStream)bytesIn1)[0].checkPassword(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString())) {
-                                    GenericClient.this.pgp.decryptStream(sock1.getInputStream(), (InputStream)bytesIn2, GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), out3f2);
+                                if (new KeyStore().importPrivateKey(bytesIn1)[0].checkPassword(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString())) {
+                                    GenericClient.this.pgp.decryptStream(sock1.getInputStream(), bytesIn2, GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), out3f2);
                                 } else {
-                                    GenericClient.this.pgp.decryptStream(sock1.getInputStream(), (InputStream)bytesIn2, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), false), out3f2);
+                                    GenericClient.this.pgp.decryptStream(sock1.getInputStream(), bytesIn2, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), false), out3f2);
                                 }
                             }
                             catch (Exception e) {
-                                GenericClient.this.pgp.decryptStream(sock1.getInputStream(), (InputStream)bytesIn3, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), false), out3f2);
+                                GenericClient.this.pgp.decryptStream(sock1.getInputStream(), bytesIn3, Common.encryptDecrypt(GenericClient.this.getConfig("pgpPrivateKeyUploadPassword", "").toString(), false), out3f2);
                             }
                         }
                         if (bytesIn1 != null) {

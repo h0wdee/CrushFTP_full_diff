@@ -5,6 +5,7 @@ package crushftp.reports8;
 
 import com.crushftp.client.File_S;
 import crushftp.handlers.Common;
+import crushftp.handlers.JobFilesHandler;
 import crushftp.handlers.JobScheduler;
 import crushftp.handlers.Log;
 import crushftp.server.ServerStatus;
@@ -40,7 +41,7 @@ public class JobSchedules {
             int x = 0;
             while (x < jobs.size()) {
                 File_S job = (File_S)jobs.elementAt(x);
-                Properties p = (Properties)Common.readXMLObject(String.valueOf(job.getPath()) + "/job.XML");
+                Properties p = (Properties)JobFilesHandler.readXMLObject(String.valueOf(job.getPath()) + "/job.XML");
                 if (p != null) {
                     long nextRun = Long.parseLong(p.getProperty("nextRun", "0"));
                     Properties p2 = new Properties();

@@ -70,7 +70,6 @@ public class DMZTunnelServer5 {
                             }
                             msg = new Date() + "|DMZ5:DMZ5Server read/write sock accepted:" + sock;
                             Common.log("DMZ", 0, msg);
-                            sock.getInputStream().read();
                         }
                         catch (SocketTimeoutException e) {
                             continue;
@@ -117,15 +116,23 @@ public class DMZTunnelServer5 {
                 @Override
                 public void run() {
                     try {
+                        sock.setSoTimeout(10000);
+                        sock.getInputStream().read();
+                        sock.setSoTimeout(0);
                         SocketChunked remote = new SocketChunked(sock);
-                        Properties p = remote.readChunk();
+                        Properties p = remote.readChunk(10000);
                         int command = Integer.parseInt(p.getProperty("c"));
                         if (command == 1) {
                             DMZTunnelServer5.this.dmz5.route_socket_data_to_dmz(new Socket(DMZTunnelServer5.this.dest_tunnel_ip, DMZTunnelServer5.this.dest_tunnel_port), Long.parseLong(p.getProperty("id")), remote);
                         }
                     }
-                    catch (Exception exception) {
-                        // empty catch block
+                    catch (Exception e1) {
+                        try {
+                            sock.close();
+                        }
+                        catch (IOException iOException) {
+                            // empty catch block
+                        }
                     }
                 }
             });

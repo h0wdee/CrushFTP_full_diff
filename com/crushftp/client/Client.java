@@ -3,6 +3,9 @@
  * 
  * Could not load the following classes:
  *  CrushTask.Start
+ *  jline.console.ConsoleReader
+ *  org.boris.winrun4j.AbstractService
+ *  org.boris.winrun4j.ServiceException
  */
 package com.crushftp.client;
 
@@ -2298,7 +2301,7 @@ lbl1355:
                                             start_pos1 = this.retry_active;
                                             synchronized (start_pos1) {
                                                 this.retry_active.addElement("active");
-                                                // MONITOREXIT @DISABLED, blocks:[210, 120, 72, 10] lbl1412 : MonitorExitStatement: MONITOREXIT : start_pos1
+                                                // MONITOREXIT @DISABLED, blocks:[210, 72, 120, 10] lbl1412 : MonitorExitStatement: MONITOREXIT : start_pos1
                                                 if (true) ** GOTO lbl1429
                                             }
                                             do {
@@ -2859,7 +2862,7 @@ lbl1429:
                                                     synchronized (e) {
                                                         this.stats.put("upload_count", String.valueOf(Integer.parseInt(this.stats.getProperty("upload_count", "0")) + 1));
                                                         this.stats.put("upload_bytes", String.valueOf(Long.parseLong(this.stats.getProperty("upload_bytes", "0")) + total_bytes - start_pos));
-                                                        // MONITOREXIT @DISABLED, blocks:[10, 123, 91, 221, 78] lbl1978 : MonitorExitStatement: MONITOREXIT : e
+                                                        // MONITOREXIT @DISABLED, blocks:[10, 91, 123, 221, 78] lbl1978 : MonitorExitStatement: MONITOREXIT : e
                                                         if (true) ** GOTO lbl1993
                                                     }
                                                     do {
@@ -4029,7 +4032,6 @@ lbl2590:
         return Client.printStackTrace(e, level, this.messages2);
     }
 
-    @Override
     public int serviceMain(String[] args) throws ServiceException {
         System.setProperty("java.awt.headless", "true");
         final String[] args2 = args;

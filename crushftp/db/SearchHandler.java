@@ -136,7 +136,7 @@ implements Runnable {
                 }
                 Log.log("SEARCH", 0, "Listing results size for search:" + this.listing.size());
             } else if (ServerStatus.SG("search_index_usernames").equals("")) {
-                this.thisSession.uVFS.getListing(this.listing, this.the_dir, this.depth, 1000, true);
+                this.thisSession.uVFS.getListing(this.listing, this.the_dir, this.depth, 1000, true, null, null, true);
             } else {
                 Properties lookupItem = this.thisSession.uVFS.get_item(this.thisSession.uiSG("current_dir"));
                 try {
@@ -219,7 +219,7 @@ implements Runnable {
                     @Override
                     public void run() {
                         try {
-                            uVFS.getListing(listing, pp.getProperty("root_dir"), 20, 50000, true);
+                            uVFS.getListing(listing, pp.getProperty("root_dir"), 20, 50000, true, null, null, true);
                         }
                         catch (Exception e) {
                             listing.addElement(pp);
@@ -404,7 +404,11 @@ implements Runnable {
                     VRL vrl = new VRL(vitem.getProperty("url"));
                     String home_canonical = new File_U(vrl.getPath()).getCanonicalPath().replace('\\', '/');
                     if (pp_canonical.startsWith(home_canonical)) {
-                        Properties ppp = uVFS.get_item(String.valueOf(key) + pp_canonical.substring(home_canonical.length()));
+                        String temp_path = pp_canonical.substring(home_canonical.length());
+                        if (!key.endsWith("/") && !temp_path.startsWith("/")) {
+                            temp_path = "/" + temp_path;
+                        }
+                        Properties ppp = uVFS.get_item(String.valueOf(key) + temp_path);
                         return ppp;
                     }
                     ++xx;

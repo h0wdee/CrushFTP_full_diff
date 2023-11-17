@@ -68,7 +68,9 @@ public class UserFolderSizes {
                         ++xx;
                     }
                     if (user_ok || usernames.size() <= 0) {
+                        long total_quota;
                         VFS uVFS = UserTools.ut.getVFS(server, username);
+                        Properties user_obj = UserTools.ut.getUser(server, username, true);
                         Properties listerStatus = new Properties();
                         listerStatus.put("status", "running");
                         Vector v = new Vector();
@@ -147,7 +149,9 @@ public class UserFolderSizes {
                         if (firstDir == null) {
                             firstDir = "/";
                         }
-                        long total_quota = SessionCrush.get_total_quota(firstDir, uVFS, new Properties());
+                        if ((total_quota = SessionCrush.get_total_quota(firstDir, uVFS, new Properties())) == -12345L && !user_obj.getProperty("quota_mb", "").equals("")) {
+                            total_quota = Long.parseLong(user_obj.getProperty("quota_mb", "")) * 1024L * 1024L;
+                        }
                         user.put("quota", String.valueOf(total_quota));
                         user.put("quotaFormatted", Common.format_bytes_short2(total_quota));
                         if (total_quota == -12345L) {

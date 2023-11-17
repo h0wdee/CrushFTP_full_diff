@@ -1,9 +1,5 @@
 /*
  * Decompiled with CFR 0.152.
- * 
- * Could not load the following classes:
- *  com.didisoft.pgp.KeyPairInformation
- *  com.didisoft.pgp.KeyStore
  */
 package com.crushftp.client;
 

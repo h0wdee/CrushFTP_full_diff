@@ -15,7 +15,7 @@ public class UserProvider {
         return null;
     }
 
-    public Properties loadUser(String serverGroup, String username, Properties inheritanceProp, boolean flattenUser) {
+    public Properties loadUser(String serverGroup, String username, Properties inheritanceProp, boolean flattenUser, boolean allow_update) {
         return null;
     }
 
@@ -34,6 +34,9 @@ public class UserProvider {
     }
 
     public void writeUser(String serverGroup, String username, Properties user, boolean backup) {
+    }
+
+    public void writeUser(String serverGroup, String username, Properties user, boolean backup, boolean clear_only_user_related_xml_from_cache) {
     }
 
     public void updateUser(String serverGroup, String username1, String username2, String password) {

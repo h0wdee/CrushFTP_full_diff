@@ -75,6 +75,8 @@ public class SharesSummary {
                                 metaInfo.put(pp.getProperty("item_key"), pp.getProperty("item_value"));
                                 if (!share.containsKey(pp.getProperty("item_key"))) {
                                     share.put(pp.getProperty("item_key"), pp.getProperty("item_value"));
+                                } else if (pp.getProperty("item_key").equals("username")) {
+                                    share.put("share_user_name", pp.getProperty("item_value"));
                                 }
                             }
                             ++xx;

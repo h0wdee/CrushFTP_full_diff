@@ -24,6 +24,8 @@ import javax.net.ssl.SSLException;
 
 public class DMZServer5
 extends DMZServerCommon {
+    Vector pending_data_socks = new Vector();
+
     public DMZServer5(Properties server_item) {
         super(server_item);
     }
@@ -44,7 +46,7 @@ extends DMZServerCommon {
                 if (this.dmz_tunnel_client_d5 != null) {
                     this.dmz_tunnel_client_d5.close();
                 }
-                String msg = "Creating tunnel flag sock to DMZ, ssl=" + System.getProperty("crushftp.dmz3.ssl", "true") + ", DMZv3=true, " + this.listen_ip + ":" + this.listen_port;
+                String msg = "Creating tunnel flag sock to DMZ, ssl=" + System.getProperty("crushftp.dmz3.ssl", "true") + ", DMZv5=true, " + this.listen_ip + ":" + this.listen_port;
                 System.out.println(new Date() + "|" + msg);
                 Log.log("DMZ", 0, msg);
                 if (System.getProperty("crushftp.dmz.tunnel_start", "false").equals("false")) {
@@ -151,52 +153,64 @@ extends DMZServerCommon {
     public Runnable getSocketConnector() {
         Runnable r1 = new Runnable(){
 
+            /*
+             * Enabled aggressive block sorting
+             * Enabled unnecessary exception pruning
+             * Enabled aggressive exception aggregation
+             */
             @Override
             public void run() {
                 Thread.currentThread().setPriority(1);
                 StringBuffer die_now2 = DMZServer5.this.die_now;
                 try {
                     try {
-                        Vector pending_data_socks = new Vector();
-                        while (die_now2.length() == 0) {
+                        block9: while (true) {
+                            if (die_now2.length() != 0) {
+                                return;
+                            }
                             if (ServerStatus.BG("serverbeat_dmz_master") && !ServerBeat.current_master) {
                                 Thread.sleep(1000L);
                                 continue;
                             }
                             Socket tempSock = null;
-                            while (pending_data_socks.size() >= ServerStatus.IG("dmz_socket_pool_size")) {
+                            while (true) {
+                                if (DMZServer5.this.pending_data_socks.size() < ServerStatus.IG("dmz_socket_pool_size")) {
+                                    DMZServer5.this.dmz_tunnel_client_d5.dmz5_info.put("pending_data_socks", String.valueOf(DMZServer5.this.pending_data_socks.size()));
+                                    try {
+                                        tempSock = new Socket();
+                                        tempSock.setSoTimeout(1000);
+                                        int loops = 0;
+                                        while (loops++ < 30) {
+                                            try {
+                                                tempSock.connect(new InetSocketAddress("127.0.0.1", DMZServer5.this.dmz_tunnel_client_d5.getLocalPort()));
+                                                break;
+                                            }
+                                            catch (SocketTimeoutException e) {
+                                                if (loops >= 29) {
+                                                    throw e;
+                                                }
+                                                Log.log("DMZ", 1, "Timeout #" + loops + " of 1 second when trying to establish connection to DMZ..." + e);
+                                            }
+                                        }
+                                        Common.sockLog(tempSock, "tempSock create.  pending_data_socks size=" + DMZServer5.this.pending_data_socks.size());
+                                        tempSock.setSoTimeout(0);
+                                        tempSock.setTcpNoDelay(true);
+                                        if (DMZServer5.this.checkLoggingSockNeeded(tempSock)) continue block9;
+                                        DMZServer5.this.processDataSocket(tempSock, DMZServer5.this.pending_data_socks);
+                                    }
+                                    catch (IOException e) {
+                                        Common.sockLog(tempSock, "tempSock IOException:" + e);
+                                        Log.log("DMZ", 1, e);
+                                        Thread.sleep(200L);
+                                        Common.sockLog(tempSock, "tempSock closing.  pending_data_socks size=" + DMZServer5.this.pending_data_socks.size());
+                                        if (tempSock == null) continue block9;
+                                        tempSock.close();
+                                    }
+                                    continue block9;
+                                }
                                 Thread.sleep(100L);
                             }
-                            try {
-                                tempSock = new Socket();
-                                tempSock.setSoTimeout(1000);
-                                int loops = 0;
-                                while (loops++ < 30) {
-                                    try {
-                                        tempSock.connect(new InetSocketAddress("127.0.0.1", DMZServer5.this.dmz_tunnel_client_d5.getLocalPort()));
-                                        break;
-                                    }
-                                    catch (SocketTimeoutException e) {
-                                        if (loops >= 29) {
-                                            throw e;
-                                        }
-                                        Log.log("DMZ", 1, "Timeout #" + loops + " of 1 second when trying to establish connection to DMZ..." + e);
-                                    }
-                                }
-                                Common.sockLog(tempSock, "tempSock create.  pending_data_socks size=" + pending_data_socks.size());
-                                tempSock.setSoTimeout(0);
-                                tempSock.setTcpNoDelay(true);
-                                if (DMZServer5.this.checkLoggingSockneeded(tempSock)) continue;
-                                DMZServer5.this.processDataSocket(tempSock, pending_data_socks);
-                            }
-                            catch (IOException e) {
-                                Common.sockLog(tempSock, "tempSock IOException:" + e);
-                                Log.log("DMZ", 1, e);
-                                Thread.sleep(200L);
-                                Common.sockLog(tempSock, "tempSock closing.  pending_data_socks size=" + pending_data_socks.size());
-                                if (tempSock == null) continue;
-                                tempSock.close();
-                            }
+                            break;
                         }
                     }
                     catch (Exception e) {
@@ -204,6 +218,7 @@ extends DMZServerCommon {
                         DMZServer5.this.socket_created = false;
                         die_now2.append(System.currentTimeMillis());
                         Thread.currentThread().setPriority(5);
+                        return;
                     }
                 }
                 finally {

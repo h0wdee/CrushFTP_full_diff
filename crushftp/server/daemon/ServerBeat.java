@@ -73,7 +73,7 @@ extends GenericServer {
                         while (x < server_list.size()) {
                             Properties server_item = (Properties)server_list.elementAt(x);
                             if (server_item.getProperty("serverType", "").equalsIgnoreCase("SERVERBEAT")) {
-                                ServerBeat.disableMaster(server_item.getProperty("vip"), server_item.getProperty("index1", "1"), true, server_item.getProperty("adapter"), server_item.getProperty("netmask", "255.255.255.0"), server_prefs.getProperty("serverbeat_command", "ifconfig"), server_prefs.getProperty("serverbeat_unplumb", "false").equals("true"), server_prefs.getProperty("serverbeat_ifdown_command", "ifdown"));
+                                ServerBeat.disableMaster(server_item.getProperty("vip"), server_item.getProperty("index1", "1"), true, server_item.getProperty("adapter"), server_item.getProperty("netmask", "255.255.255.0"), server_prefs.getProperty("serverbeat_command_disable", "ifconfig"), server_prefs.getProperty("serverbeat_ifdown_command", "ifdown"));
                             }
                             ++x;
                         }
@@ -139,7 +139,7 @@ extends GenericServer {
                         try {
                             if (ServerBeat.this.born_on == ServerBeat.this.born_on_min && !ServerBeat.this.master) {
                                 Log.log("SERVER_BEAT", 0, "We are the oldest, but not master, starting master sequence now.");
-                                ServerBeat.this.master = ServerBeat.disableMaster(ServerBeat.this.vip, ServerBeat.this.index1, ServerBeat.this.master, ServerBeat.this.adapter, ServerBeat.this.netmask, ServerStatus.SG("serverbeat_command"), ServerStatus.BG("serverbeat_unplumb"), ServerStatus.SG("serverbeat_ifdown_command"));
+                                ServerBeat.this.master = ServerBeat.disableMaster(ServerBeat.this.vip, ServerBeat.this.index1, ServerBeat.this.master, ServerBeat.this.adapter, ServerBeat.this.netmask, ServerStatus.SG("serverbeat_command_disable"), ServerStatus.SG("serverbeat_ifdown_command"));
                                 ServerBeat.this.changeStateAlert(true);
                                 sb.becomeMaster(ServerBeat.this.vip, ServerBeat.this.index1);
                                 ServerBeat.this.master_lan_ip = ServerBeat.this.listen_ip;
@@ -148,7 +148,7 @@ extends GenericServer {
                                 Log.log("SERVER_BEAT", 0, "We are not the oldest, but we are master, releasing master status now.");
                                 ServerBeat.this.born_on = System.currentTimeMillis() - start_millis;
                                 ServerBeat.this.changeStateAlert(false);
-                                ServerBeat.this.master = ServerBeat.disableMaster(ServerBeat.this.vip, ServerBeat.this.index1, ServerBeat.this.master, ServerBeat.this.adapter, ServerBeat.this.netmask, ServerStatus.SG("serverbeat_command"), ServerStatus.BG("serverbeat_unplumb"), ServerStatus.SG("serverbeat_ifdown_command"));
+                                ServerBeat.this.master = ServerBeat.disableMaster(ServerBeat.this.vip, ServerBeat.this.index1, ServerBeat.this.master, ServerBeat.this.adapter, ServerBeat.this.netmask, ServerStatus.SG("serverbeat_command_disable"), ServerStatus.SG("serverbeat_ifdown_command"));
                                 ServerBeat.this.need_remaster = true;
                                 ServerBeat.this.updateStatus();
                             }
@@ -235,7 +235,7 @@ extends GenericServer {
             Log.log("SERVER_BEAT", 0, "We are the master, but we are not the highest priority, making us young, and releasing master.");
             this.born_on = System.currentTimeMillis() - start_millis;
             this.changeStateAlert(false);
-            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command"), ServerStatus.BG("serverbeat_unplumb"), ServerStatus.SG("serverbeat_ifdown_command"));
+            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command_disable"), ServerStatus.SG("serverbeat_ifdown_command"));
             this.updateStatus();
             this.need_remaster = true;
         } else if (need_remaster_opposite && this.master && !this.starting) {
@@ -248,7 +248,7 @@ extends GenericServer {
             Log.log("SERVER_BEAT", 0, "We are the oldest, but we are not the highest priority, making us young now.");
             this.born_on = System.currentTimeMillis() - start_millis;
             this.changeStateAlert(false);
-            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command"), ServerStatus.BG("serverbeat_unplumb"), ServerStatus.SG("serverbeat_ifdown_command"));
+            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command_disable"), ServerStatus.SG("serverbeat_ifdown_command"));
             this.updateStatus();
             this.need_remaster = true;
         } else if (!this.master && priority > priority_opposite && !this.starting) {
@@ -270,7 +270,7 @@ extends GenericServer {
             Log.log("SERVER_BEAT", 0, "Opposite says its master, and so do we, and we have the same priority...new election being held now.");
             this.born_on = System.currentTimeMillis() - start_millis;
             this.changeStateAlert(false);
-            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command"), ServerStatus.BG("serverbeat_unplumb"), ServerStatus.SG("serverbeat_ifdown_command"));
+            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command_disable"), ServerStatus.SG("serverbeat_ifdown_command"));
             this.updateStatus();
             this.need_remaster = true;
         } else if (need_remaster_opposite && this.master && !this.starting) {
@@ -283,7 +283,7 @@ extends GenericServer {
             Log.log("SERVER_BEAT", 0, "Opposite has higher priority but we are master...giving up master status now.");
             this.born_on = System.currentTimeMillis() - start_millis;
             this.changeStateAlert(false);
-            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command"), ServerStatus.BG("serverbeat_unplumb"), ServerStatus.SG("serverbeat_ifdown_command"));
+            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command_disable"), ServerStatus.SG("serverbeat_ifdown_command"));
             this.updateStatus();
             this.need_remaster = true;
         }
@@ -297,7 +297,7 @@ extends GenericServer {
         this.adapter = adapter;
         try {
             this.changeStateAlert(false);
-            this.master = ServerBeat.disableMaster(vip, index1, this.master, adapter, netmask, ServerStatus.SG("serverbeat_command"), ServerStatus.BG("serverbeat_unplumb"), ServerStatus.SG("serverbeat_ifdown_command"));
+            this.master = ServerBeat.disableMaster(vip, index1, this.master, adapter, netmask, ServerStatus.SG("serverbeat_command_disable"), ServerStatus.SG("serverbeat_ifdown_command"));
         }
         catch (Exception exception) {
             // empty catch block
@@ -319,7 +319,7 @@ extends GenericServer {
                     Thread.sleep(1000L);
                     Log.log("SERVER_BEAT", 1, "Serverbeat:releasing " + ServerBeat.this.vip + "...");
                     ServerBeat.this.changeStateAlert(false);
-                    ServerBeat.this.master = ServerBeat.disableMaster(ServerBeat.this.vip, ServerBeat.this.index1, ServerBeat.this.master, ServerBeat.this.adapter, ServerBeat.this.netmask, ServerStatus.SG("serverbeat_command"), ServerStatus.BG("serverbeat_unplumb"), ServerStatus.SG("serverbeat_ifdown_command"));
+                    ServerBeat.this.master = ServerBeat.disableMaster(ServerBeat.this.vip, ServerBeat.this.index1, ServerBeat.this.master, ServerBeat.this.adapter, ServerBeat.this.netmask, ServerStatus.SG("serverbeat_command_disable"), ServerStatus.SG("serverbeat_ifdown_command"));
                 }
                 catch (Exception exception) {
                     // empty catch block
@@ -332,7 +332,7 @@ extends GenericServer {
     public void kill() {
         try {
             this.changeStateAlert(false);
-            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command"), ServerStatus.BG("serverbeat_unplumb"), ServerStatus.SG("serverbeat_ifdown_command"));
+            this.master = ServerBeat.disableMaster(this.vip, this.index1, this.master, this.adapter, this.netmask, ServerStatus.SG("serverbeat_command_disable"), ServerStatus.SG("serverbeat_ifdown_command"));
         }
         catch (Exception e) {
             Log.log("SERVER_BEAT", 1, e);
@@ -341,33 +341,67 @@ extends GenericServer {
 
     public void becomeMaster(String ip, String index) throws Exception {
         String ifconfig = ServerStatus.SG("serverbeat_command");
-        if (ifconfig.equals("netsh") && !crushftp.handlers.Common.machine_is_windows()) {
-            ifconfig = "ifconfig";
-        }
-        if (ifconfig.equals("ifconfig") && crushftp.handlers.Common.machine_is_windows()) {
-            ifconfig = "netsh";
-        }
         current_master = this.master = true;
         Thread.sleep(2000L);
         Log.log("SERVER_BEAT", 0, "ServerBeat: becoming Master..." + ip);
         if (crushftp.handlers.Common.machine_is_windows()) {
-            ServerBeat.exec(new String[]{"cmd", "/C", String.valueOf(ifconfig) + " interface ip add address name=\"" + this.adapter + "\" addr=" + ip + " mask=" + this.netmask}, this.vip);
-        } else if (crushftp.handlers.Common.machine_is_solaris() || crushftp.handlers.Common.machine_is_linux()) {
-            ServerBeat.exec((String.valueOf(ServerStatus.SG("serverbeat_ifup_command")) + " " + this.adapter + ":" + index).split(" "), this.vip);
-            if (ServerStatus.BG("serverbeat_plumb")) {
-                ServerBeat.exec((String.valueOf(ifconfig) + " " + this.adapter + ":" + index + " plumb").split(" "), this.vip);
+            if (!ifconfig.equals("netsh")) {
+                ServerBeat.exec(new String[]{"cmd", "/C", ifconfig}, this.vip, this.adapter, this.netmask, index);
+            } else {
+                ServerBeat.exec(new String[]{"cmd", "/C", String.valueOf(ifconfig) + " interface ip add address name=\"{adapter}\" addr={vip} mask={netmask}"}, this.vip, this.adapter, this.netmask, index);
             }
-            ServerBeat.exec((String.valueOf(ifconfig) + " " + this.adapter + ":" + index + " " + ip + " netmask " + this.netmask + " up").split(" "), this.vip);
+        } else if (crushftp.handlers.Common.machine_is_solaris() || crushftp.handlers.Common.machine_is_linux()) {
+            String ifup = ServerStatus.SG("serverbeat_ifup_command");
+            if (!ifup.equals("ifup") && !ifup.equals("/sbin/ifup")) {
+                ServerBeat.exec(ifup.split(" "), this.vip, this.adapter, this.netmask, index);
+            } else {
+                ServerBeat.exec((String.valueOf(ServerStatus.SG("serverbeat_ifup_command")) + " {adapter}:{index}").split(" "), this.vip, this.adapter, this.netmask, index);
+            }
+            if (!ifconfig.equals("ifconfig") && !ifconfig.equals("/sbin/ifconfig")) {
+                ServerBeat.exec(ifconfig.split(" "), this.vip, this.adapter, this.netmask, index);
+            } else {
+                ServerBeat.exec((String.valueOf(ifconfig) + " {adapter}:{index} {vip} netmask {netmask} up").split(" "), this.vip, this.adapter, this.netmask, index);
+            }
         } else {
-            ServerBeat.exec((String.valueOf(ifconfig) + " " + this.adapter + " alias " + ip + " netmask " + this.netmask).split(" "), this.vip);
+            ServerBeat.exec((String.valueOf(ifconfig) + " {adapter} alias {vip} netmask {netmask}").split(" "), this.vip, this.adapter, this.netmask, index);
         }
         current_master = this.master = true;
         String command = ServerStatus.SG("serverbeat_post_command");
         if (!command.equals("")) {
             command = crushftp.handlers.Common.replace_str(command, "{vip}", ip);
             command = crushftp.handlers.Common.replace_str(command, "{adapter}", this.adapter);
-            ServerBeat.exec(command.split(" "), this.vip);
+            ServerBeat.exec(command.split(" "), this.vip, this.adapter, this.netmask, index);
         }
+        if (ServerStatus.BG("serverbeat_start_ports")) {
+            ServerStatus.thisObj.start_all_servers(true);
+        }
+    }
+
+    public static boolean disableMaster(String vip, String index, boolean master, String adapter, String netmask, String ifconfig_down, String ifdown) throws Exception {
+        current_master = master = false;
+        Log.log("SERVER_BEAT", 0, "ServerBeat: disabling Master..." + vip);
+        if (crushftp.handlers.Common.machine_is_windows()) {
+            if (!ifconfig_down.equals("netsh")) {
+                ServerBeat.exec(new String[]{"cmd", "/C", ifconfig_down}, vip, adapter, netmask, index);
+            } else {
+                ServerBeat.exec(new String[]{"cmd", "/C", String.valueOf(ifconfig_down) + " interface ip delete address name=\"{adapter}\" addr={vip}"}, vip, adapter, netmask, index);
+            }
+        } else if (crushftp.handlers.Common.machine_is_solaris() || crushftp.handlers.Common.machine_is_linux()) {
+            if (!ifconfig_down.equals("ifconfig") && !ifconfig_down.equals("/sbin/ifconfig")) {
+                ServerBeat.exec(ifconfig_down.split(" "), vip, adapter, netmask, index);
+            } else {
+                ServerBeat.exec((String.valueOf(ifconfig_down) + " {adapter}:{index} {vip} netmask {netmask} down").split(" "), vip, adapter, netmask, index);
+            }
+            if (!ifdown.equals("ifdown") && !ifdown.equals("/sbin/ifdown")) {
+                ServerBeat.exec(ifdown.split(" "), vip, adapter, netmask, index);
+            } else {
+                ServerBeat.exec((String.valueOf(ifdown) + " {adapter}:{index}").split(" "), vip, adapter, netmask, index);
+            }
+        } else {
+            ServerBeat.exec((String.valueOf(ifconfig_down) + " {adapter} -alias {vip} netmask {netmask}").split(" "), vip, adapter, netmask, index);
+        }
+        current_master = master = false;
+        return master;
     }
 
     public void changeStateAlert(boolean becoming) {
@@ -388,31 +422,7 @@ extends GenericServer {
         this.state_change_time = System.currentTimeMillis();
     }
 
-    public static boolean disableMaster(String vip, String index, boolean master, String adapter, String netmask, String ifconfig, boolean unplumb, String ifdown) throws Exception {
-        if (ifconfig.equals("netsh") && !crushftp.handlers.Common.machine_is_windows()) {
-            ifconfig = "ifconfig";
-        }
-        if (ifconfig.equals("ifconfig") && crushftp.handlers.Common.machine_is_windows()) {
-            ifconfig = "netsh";
-        }
-        current_master = master = false;
-        Log.log("SERVER_BEAT", 0, "ServerBeat: disabling Master..." + vip);
-        if (crushftp.handlers.Common.machine_is_windows()) {
-            ServerBeat.exec(new String[]{"cmd", "/C", String.valueOf(ifconfig) + " interface ip delete address name=\"" + adapter + "\" addr=" + vip}, vip);
-        } else if (crushftp.handlers.Common.machine_is_solaris() || crushftp.handlers.Common.machine_is_linux()) {
-            ServerBeat.exec((String.valueOf(ifconfig) + " " + adapter + ":" + index + " " + vip + " netmask " + netmask + " down").split(" "), vip);
-            if (unplumb) {
-                ServerBeat.exec((String.valueOf(ifconfig) + " " + adapter + ":" + index + " unplumb").split(" "), vip);
-            }
-            ServerBeat.exec((String.valueOf(ifdown) + " " + adapter + ":" + index).split(" "), vip);
-        } else {
-            ServerBeat.exec((String.valueOf(ifconfig) + " " + adapter + " -alias " + vip + " netmask " + netmask).split(" "), vip);
-        }
-        current_master = master = false;
-        return master;
-    }
-
-    public static String exec(String[] c, String vip) throws Exception {
+    public static String exec(String[] c, String vip, String adapter, String netmask, String index) throws Exception {
         if (vip.toUpperCase().indexOf("JOB") >= 0) {
             return "";
         }
@@ -420,6 +430,10 @@ extends GenericServer {
         String s = "";
         int x = 0;
         while (x < c.length) {
+            c[x] = crushftp.handlers.Common.replace_str(c[x], "{vip}", vip);
+            c[x] = crushftp.handlers.Common.replace_str(c[x], "{netmask}", netmask);
+            c[x] = crushftp.handlers.Common.replace_str(c[x], "{index}", index);
+            c[x] = crushftp.handlers.Common.replace_str(c[x], "{adapter}", adapter);
             s = String.valueOf(s) + c[x] + " ";
             ++x;
         }

@@ -1,5 +1,10 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -59,14 +64,14 @@ extends GenericClient {
             this.log(String.valueOf(urlc.getResponseCode()) + result + "\r\n");
             throw new IOException(result);
         }
-        JSONObject obj = (JSONObject)JSONValue.parse(result);
-        this.token = (String)obj.get("authorizationToken");
-        this.account_id = (String)obj.get("accountId");
-        this.api_url = (String)obj.get("apiUrl");
-        this.downloadUrl = (String)obj.get("downloadUrl");
-        if (obj.containsKey("allowed") && obj.get("allowed") != null && (allowed = (JSONObject)obj.get("allowed")).containsKey("bucketName") && allowed.containsKey("bucketId")) {
-            String bucketName = (String)allowed.get("bucketName");
-            String bucketId = (String)allowed.get("bucketId");
+        JSONObject obj = (JSONObject)JSONValue.parse((String)result);
+        this.token = (String)obj.get((Object)"authorizationToken");
+        this.account_id = (String)obj.get((Object)"accountId");
+        this.api_url = (String)obj.get((Object)"apiUrl");
+        this.downloadUrl = (String)obj.get((Object)"downloadUrl");
+        if (obj.containsKey((Object)"allowed") && obj.get((Object)"allowed") != null && (allowed = (JSONObject)obj.get((Object)"allowed")).containsKey((Object)"bucketName") && allowed.containsKey((Object)"bucketId")) {
+            String bucketName = (String)allowed.get((Object)"bucketName");
+            String bucketId = (String)allowed.get((Object)"bucketId");
             if (bucketName != null && bucketId != null && !bucketName.equals("") && !bucketId.equals("")) {
                 bucketIdCache.put(String.valueOf(this.config.getProperty("password")) + bucketName, bucketId);
             }
@@ -91,11 +96,11 @@ extends GenericClient {
         urlc.setUseCaches(false);
         urlc.setRequestProperty("Authorization", this.token);
         JSONObject postData = new JSONObject();
-        postData.put("accountId", this.config.getProperty("username"));
+        postData.put((Object)"accountId", (Object)this.config.getProperty("username"));
         JSONArray bucketTypes = new JSONArray();
-        bucketTypes.add("allPrivate");
-        bucketTypes.add("allPublic");
-        postData.put("bucketTypes", bucketTypes);
+        bucketTypes.add((Object)"allPrivate");
+        bucketTypes.add((Object)"allPublic");
+        postData.put((Object)"bucketTypes", (Object)bucketTypes);
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toString().getBytes("UTF8"));
         out.close();
@@ -108,7 +113,7 @@ extends GenericClient {
         }
         Vector<Properties> list2 = new Vector<Properties>();
         SimpleDateFormat yyyyMMddHHmmss = new SimpleDateFormat("yyyyMMddHHmmss", Locale.US);
-        Object obj = ((JSONObject)JSONValue.parse(result)).get("buckets");
+        Object obj = ((JSONObject)JSONValue.parse((String)result)).get((Object)"buckets");
         if (obj instanceof JSONArray) {
             JSONArray ja = (JSONArray)obj;
             int xxx = 0;
@@ -117,11 +122,11 @@ extends GenericClient {
                 if (obj2 instanceof JSONObject) {
                     JSONObject jo = (JSONObject)obj2;
                     Date d = new Date();
-                    String line = "drwxrwxrwx   1    owner   group   0   " + yyyyMMddHHmmss.format(d) + "   " + this.dd.format(d) + " " + this.yyyy.format(d) + " /" + jo.get("bucketName");
+                    String line = "drwxrwxrwx   1    owner   group   0   " + yyyyMMddHHmmss.format(d) + "   " + this.dd.format(d) + " " + this.yyyy.format(d) + " /" + jo.get((Object)"bucketName");
                     Properties stat = B2Client.parseStat(line);
                     stat.put("url", "b2://" + this.config.getProperty("username") + ":" + VRL.vrlEncode(this.config.getProperty("password")) + "@api.backblaze.com/" + stat.getProperty("name") + "/");
-                    stat.put("bucketId", jo.get("bucketId"));
-                    bucketIdCache.put(String.valueOf(this.config.getProperty("password")) + stat.getProperty("name"), jo.get("bucketId"));
+                    stat.put("bucketId", jo.get((Object)"bucketId"));
+                    bucketIdCache.put(String.valueOf(this.config.getProperty("password")) + stat.getProperty("name"), jo.get((Object)"bucketId"));
                     list2.addElement(stat);
                 }
                 ++xxx;
@@ -153,14 +158,14 @@ extends GenericClient {
                 Vector buckets = new Vector();
                 this.listBuckets(buckets);
             }
-            postData.put("bucketId", bucketIdCache.getProperty(String.valueOf(this.config.getProperty("password")) + bucketName));
-            postData.put("maxFileCount", new Integer(max));
+            postData.put((Object)"bucketId", (Object)bucketIdCache.getProperty(String.valueOf(this.config.getProperty("password")) + bucketName));
+            postData.put((Object)"maxFileCount", (Object)new Integer(max));
             if (!startFileName.equals("")) {
-                postData.put("startFileName", startFileName);
+                postData.put((Object)"startFileName", (Object)startFileName);
             }
-            postData.put("prefix", path);
+            postData.put((Object)"prefix", (Object)path);
             if (ignore_bzEmpty) {
-                postData.put("delimiter", "/");
+                postData.put((Object)"delimiter", (Object)"/");
             }
             OutputStream out = urlc.getOutputStream();
             out.write(postData.toString().getBytes("UTF8"));
@@ -173,8 +178,8 @@ extends GenericClient {
             }
             urlc.disconnect();
             this.parseListItems(list, path, ignore_bzEmpty, bucketName, result);
-            if (max <= 1 || ((JSONObject)JSONValue.parse(result)).get("nextFileName") == null) break;
-            startFileName = (String)((JSONObject)JSONValue.parse(result)).get("nextFileName");
+            if (max <= 1 || ((JSONObject)JSONValue.parse((String)result)).get((Object)"nextFileName") == null) break;
+            startFileName = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"nextFileName");
             ++x;
         }
         return list;
@@ -182,7 +187,7 @@ extends GenericClient {
 
     private void parseListItems(Vector list, String path, boolean ignore_bzEmpty, String bucketName, String result) throws ParseException, Exception {
         SimpleDateFormat yyyyMMddHHmmss = new SimpleDateFormat("yyyyMMddHHmmss", Locale.US);
-        Object obj = ((JSONObject)JSONValue.parse(result)).get("files");
+        Object obj = ((JSONObject)JSONValue.parse((String)result)).get((Object)"files");
         if (obj instanceof JSONArray) {
             JSONArray ja = (JSONArray)obj;
             int xxx = 0;
@@ -191,36 +196,36 @@ extends GenericClient {
                 if (obj2 instanceof JSONObject) {
                     JSONObject jo = (JSONObject)obj2;
                     boolean folder = false;
-                    String name = (String)jo.get("fileName");
+                    String name = (String)jo.get((Object)"fileName");
                     if (!ignore_bzEmpty || !name.endsWith("/.bzEmpty")) {
                         long mdtm = -1L;
-                        JSONObject file_info = (JSONObject)jo.get("fileInfo");
-                        if (((String)jo.get("action")).endsWith("folder")) {
+                        JSONObject file_info = (JSONObject)jo.get((Object)"fileInfo");
+                        if (((String)jo.get((Object)"action")).endsWith("folder")) {
                             folder = true;
                             name = name.substring(path.length(), name.indexOf("/", path.length()));
                         } else {
                             name = name.substring(path.length());
-                            if (file_info.get("modified_date_time") != null) {
+                            if (file_info.get((Object)"modified_date_time") != null) {
                                 SimpleDateFormat sdf = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.US);
                                 sdf.setTimeZone(TimeZone.getTimeZone("GMT"));
-                                mdtm = sdf.parse((String)file_info.get("modified_date_time")).getTime();
-                            } else if (file_info.get("src_last_modified_millis") != null) {
-                                mdtm = Long.parseLong((String)file_info.get("src_last_modified_millis"));
+                                mdtm = sdf.parse((String)file_info.get((Object)"modified_date_time")).getTime();
+                            } else if (file_info.get((Object)"src_last_modified_millis") != null) {
+                                mdtm = Long.parseLong((String)file_info.get((Object)"src_last_modified_millis"));
                             }
                         }
                         Date d = new Date();
                         if (mdtm > 0L) {
                             d.setTime(mdtm);
                         }
-                        String line = String.valueOf(folder ? "d" : "-") + "rwxrwxrwx   1    owner   group   " + jo.get("contentLength") + "   " + yyyyMMddHHmmss.format(d) + "   " + this.dd.format(d) + " " + this.yyyy.format(d) + " /" + name;
+                        String line = String.valueOf(folder ? "d" : "-") + "rwxrwxrwx   1    owner   group   " + jo.get((Object)"contentLength") + "   " + yyyyMMddHHmmss.format(d) + "   " + this.dd.format(d) + " " + this.yyyy.format(d) + " /" + name;
                         Properties stat = B2Client.parseStat(line);
-                        stat.put("b2_file_name", (String)jo.get("fileName"));
-                        if (jo.get("fileId") != null) {
-                            stat.put("fileId", (String)jo.get("fileId"));
+                        stat.put("b2_file_name", (String)jo.get((Object)"fileName"));
+                        if (jo.get((Object)"fileId") != null) {
+                            stat.put("fileId", (String)jo.get((Object)"fileId"));
                         }
                         stat.put("url", "b2://" + this.config.getProperty("username") + ":" + VRL.vrlEncode(this.config.getProperty("password")) + "@api.backblaze.com/" + bucketName + "/" + path + stat.getProperty("name") + (folder ? "/" : ""));
-                        if (file_info.get("uploaded_by") != null) {
-                            stat.put("uploaded_by", (String)file_info.get("uploaded_by"));
+                        if (file_info.get((Object)"uploaded_by") != null) {
+                            stat.put("uploaded_by", (String)file_info.get((Object)"uploaded_by"));
                         }
                         list.addElement(stat);
                     }
@@ -275,14 +280,14 @@ extends GenericClient {
         urlc.setRequestProperty("Content-Type", "application/json");
         urlc.setRequestProperty("Authorization", this.token);
         JSONObject postData = new JSONObject();
-        postData.put("fileName", Common.url_encode(file_name, "/.#@&?!\\=+~"));
-        postData.put("contentType", "application/octet-stream");
+        postData.put((Object)"fileName", (Object)Common.url_encode(file_name, "/.#@&?!\\=+~"));
+        postData.put((Object)"contentType", (Object)"application/octet-stream");
         String bucket_id = bucketIdCache.getProperty(String.valueOf(this.config.getProperty("password")) + Common.first(path.substring(1)), "");
         if (bucket_id.equals("")) {
             this.list("/", new Vector());
             bucket_id = bucketIdCache.getProperty(String.valueOf(this.config.getProperty("password")) + Common.first(path.substring(1)), "");
         }
-        postData.put("bucketId", bucket_id);
+        postData.put((Object)"bucketId", (Object)bucket_id);
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toString().getBytes("UTF8"));
         out.close();
@@ -293,8 +298,8 @@ extends GenericClient {
             throw new IOException(result);
         }
         urlc.disconnect();
-        JSONObject obj = (JSONObject)JSONValue.parse(result);
-        String file_id = (String)obj.get("fileId");
+        JSONObject obj = (JSONObject)JSONValue.parse((String)result);
+        String file_id = (String)obj.get((Object)"fileId");
         URLConnection urlc2 = URLConnection.openConnection(new VRL(String.valueOf(this.api_url) + "/b2api/v2/b2_get_upload_part_url"), this.config);
         urlc2.setRequestMethod("POST");
         urlc2.setDoInput(true);
@@ -303,7 +308,7 @@ extends GenericClient {
         urlc2.setRequestProperty("Authorization", this.token);
         urlc2.setRequestProperty("Content-Type", "application/json");
         JSONObject postData2 = new JSONObject();
-        postData2.put("fileId", file_id);
+        postData2.put((Object)"fileId", (Object)file_id);
         OutputStream out2 = urlc2.getOutputStream();
         out2.write(postData2.toString().getBytes("UTF8"));
         out2.close();
@@ -314,9 +319,9 @@ extends GenericClient {
             throw new IOException(result2);
         }
         urlc2.disconnect();
-        JSONObject obj2 = (JSONObject)JSONValue.parse(result2);
-        String upload_auth_token = (String)obj2.get("authorizationToken");
-        String upload_url = (String)obj2.get("uploadUrl");
+        JSONObject obj2 = (JSONObject)JSONValue.parse((String)result2);
+        String upload_auth_token = (String)obj2.get((Object)"authorizationToken");
+        String upload_url = (String)obj2.get((Object)"uploadUrl");
         String upload_bucket_id = bucket_id;
         class OutputWrapper
         extends OutputStream {
@@ -386,7 +391,7 @@ extends GenericClient {
                         urlc.setRequestProperty("Authorization", B2Client.this.token);
                         urlc.setRequestProperty("Content-Type", "application/json");
                         JSONObject postData2 = new JSONObject();
-                        postData2.put("fileId", this.val$file_id);
+                        postData2.put((Object)"fileId", (Object)this.val$file_id);
                         OutputStream out = urlc.getOutputStream();
                         out.write(postData2.toString().getBytes("UTF8"));
                         out.close();
@@ -415,7 +420,7 @@ extends GenericClient {
                                 urlc3.setRequestProperty("Authorization", B2Client.this.token);
                                 urlc3.setRequestProperty("Content-Type", "application/json");
                                 JSONObject postData3 = new JSONObject();
-                                postData3.put("bucketId", this.val$upload_bucket_id);
+                                postData3.put((Object)"bucketId", (Object)this.val$upload_bucket_id);
                                 OutputStream out3 = urlc3.getOutputStream();
                                 out3.write(postData3.toString().getBytes("UTF8"));
                                 out3.close();
@@ -425,9 +430,9 @@ extends GenericClient {
                                     B2Client.this.log(String.valueOf(urlc3.getResponseCode()) + result3 + "\r\n");
                                 }
                                 urlc3.disconnect();
-                                JSONObject obj3 = (JSONObject)JSONValue.parse(result3);
-                                String small_upload_auth_token = (String)obj3.get("authorizationToken");
-                                String small_upload_url = (String)obj3.get("uploadUrl");
+                                JSONObject obj3 = (JSONObject)JSONValue.parse((String)result3);
+                                String small_upload_auth_token = (String)obj3.get((Object)"authorizationToken");
+                                String small_upload_url = (String)obj3.get((Object)"uploadUrl");
                                 URL url_java = new URL(small_upload_url);
                                 HttpURLConnection urlc2 = (HttpURLConnection)url_java.openConnection();
                                 urlc2.setRequestMethod("POST");
@@ -500,8 +505,8 @@ extends GenericClient {
                     urlc.setRequestProperty("Authorization", B2Client.this.token);
                     urlc.setRequestProperty("Content-Type", "application/json");
                     JSONObject postData = new JSONObject();
-                    postData.put("fileId", this.val$file_id);
-                    postData.put("partSha1Array", this.all_hexSha1);
+                    postData.put((Object)"fileId", (Object)this.val$file_id);
+                    postData.put((Object)"partSha1Array", (Object)this.all_hexSha1);
                     OutputStream out = urlc.getOutputStream();
                     out.write(postData.toString().getBytes("UTF8"));
                     out.close();
@@ -642,8 +647,8 @@ extends GenericClient {
         urlc.setUseCaches(false);
         urlc.setRequestProperty("Authorization", this.token);
         JSONObject postData = new JSONObject();
-        postData.put("fileId", file_id);
-        postData.put("fileName", b2_file_name);
+        postData.put((Object)"fileId", (Object)file_id);
+        postData.put((Object)"fileName", (Object)b2_file_name);
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toString().getBytes("UTF8"));
         out.close();
@@ -675,7 +680,7 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", this.token);
         urlc.setRequestProperty("Content-Type", "application/json");
         JSONObject postData3 = new JSONObject();
-        postData3.put("bucketId", bucket_id);
+        postData3.put((Object)"bucketId", (Object)bucket_id);
         OutputStream out = urlc.getOutputStream();
         out.write(postData3.toString().getBytes("UTF8"));
         out.close();
@@ -687,9 +692,9 @@ extends GenericClient {
             return false;
         }
         urlc.disconnect();
-        JSONObject obj = (JSONObject)JSONValue.parse(result);
-        String folder_upload_auth_token = (String)obj.get("authorizationToken");
-        String folder_upload_url = (String)obj.get("uploadUrl");
+        JSONObject obj = (JSONObject)JSONValue.parse((String)result);
+        String folder_upload_auth_token = (String)obj.get((Object)"authorizationToken");
+        String folder_upload_url = (String)obj.get((Object)"uploadUrl");
         URLConnection urlc2 = URLConnection.openConnection(new VRL(folder_upload_url), this.config);
         urlc2.setRequestMethod("POST");
         urlc2.setDoInput(true);
@@ -747,8 +752,8 @@ extends GenericClient {
         urlc.setUseCaches(false);
         urlc.setRequestProperty("Authorization", this.token);
         JSONObject postData = new JSONObject();
-        postData.put("sourceFileId", p.getProperty("fileId"));
-        postData.put("fileName", b2_rnto_path);
+        postData.put((Object)"sourceFileId", (Object)p.getProperty("fileId"));
+        postData.put((Object)"fileName", (Object)b2_rnto_path);
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toString().getBytes("UTF8"));
         out.close();
@@ -777,20 +782,20 @@ extends GenericClient {
         urlc.setUseCaches(false);
         urlc.setRequestProperty("Authorization", this.token);
         JSONObject postData = new JSONObject();
-        postData.put("sourceFileId", p.getProperty("fileId"));
+        postData.put((Object)"sourceFileId", (Object)p.getProperty("fileId"));
         String file_name = path.substring(("/" + Common.first(path.substring(1)) + "/").length());
-        postData.put("fileName", Common.url_encode(file_name, "/.#@&?!\\=+~"));
-        postData.put("metadataDirective", "REPLACE");
-        postData.put("contentType", "application/octet-stream");
+        postData.put((Object)"fileName", (Object)Common.url_encode(file_name, "/.#@&?!\\=+~"));
+        postData.put((Object)"metadataDirective", (Object)"REPLACE");
+        postData.put((Object)"contentType", (Object)"application/octet-stream");
         JSONObject fileInfo = new JSONObject();
         if (modified > 0L) {
             SimpleDateFormat sdf = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.US);
             sdf.setTimeZone(TimeZone.getTimeZone("GMT"));
-            fileInfo.put("modified_date_time", sdf.format(new Date(modified)));
+            fileInfo.put((Object)"modified_date_time", (Object)sdf.format(new Date(modified)));
         }
-        fileInfo.put("uploaded_by", this.config.getProperty("uploaded_by", ""));
-        fileInfo.put("md5", this.config.getProperty("uploaded_md5", ""));
-        postData.put("fileInfo", fileInfo);
+        fileInfo.put((Object)"uploaded_by", (Object)this.config.getProperty("uploaded_by", ""));
+        fileInfo.put((Object)"md5", (Object)this.config.getProperty("uploaded_md5", ""));
+        postData.put((Object)"fileInfo", (Object)fileInfo);
         OutputStream out = urlc.getOutputStream();
         out.write(postData.toString().getBytes("UTF8"));
         out.close();
@@ -802,8 +807,8 @@ extends GenericClient {
             return false;
         }
         urlc.disconnect();
-        JSONObject jo = (JSONObject)JSONValue.parse(result);
-        final String file_id = (String)jo.get("fileId");
+        JSONObject jo = (JSONObject)JSONValue.parse((String)result);
+        final String file_id = (String)jo.get((Object)"fileId");
         Worker.startWorker(new Runnable(){
 
             @Override
@@ -838,7 +843,7 @@ extends GenericClient {
             Properties p = this.stat(path);
             if (p != null) {
                 JSONObject postData = new JSONObject();
-                postData.put("fileId", p.getProperty("fileId"));
+                postData.put((Object)"fileId", (Object)p.getProperty("fileId"));
                 if (p.containsKey("uploaded_by") && !p.getProperty("uploaded_by").equals("")) {
                     return p.getProperty("uploaded_by", "");
                 }
@@ -859,10 +864,10 @@ extends GenericClient {
                     urlc.disconnect();
                 }
                 urlc.disconnect();
-                JSONObject jo = (JSONObject)JSONValue.parse(result);
-                JSONObject file_info = (JSONObject)jo.get("fileInfo");
-                if (file_info.containsKey("uploaded_by")) {
-                    user_name = (String)file_info.get("uploaded_by");
+                JSONObject jo = (JSONObject)JSONValue.parse((String)result);
+                JSONObject file_info = (JSONObject)jo.get((Object)"fileInfo");
+                if (file_info.containsKey((Object)"uploaded_by")) {
+                    user_name = (String)file_info.get((Object)"uploaded_by");
                 }
             }
         }

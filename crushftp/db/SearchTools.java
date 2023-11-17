@@ -23,7 +23,7 @@ import java.util.Properties;
 import java.util.Vector;
 
 public class SearchTools {
-    static URLClassLoader cl = null;
+    static ClassLoader cl = null;
     static Class drvCls = null;
     static Driver driver = null;
     public boolean mysql = false;
@@ -258,7 +258,7 @@ public class SearchTools {
         }
         Connection conn = null;
         try {
-            if (!this.get("search_db_driver_file").equals("")) {
+            if (!this.get("search_db_driver_file").equals("") && System.getProperty("crushftp.security.classloader", "false").equals("true")) {
                 String[] db_drv_files = this.get("search_db_driver_file").split(";");
                 URL[] urls = new URL[db_drv_files.length];
                 int x = 0;

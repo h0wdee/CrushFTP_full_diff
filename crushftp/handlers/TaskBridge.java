@@ -4,9 +4,12 @@
 package crushftp.handlers;
 
 import com.crushftp.client.File_B;
+import com.crushftp.client.File_S;
+import com.crushftp.client.File_U;
 import com.crushftp.client.VRL;
 import crushftp.db.SearchHandler;
 import crushftp.handlers.Common;
+import crushftp.handlers.JobFilesHandler;
 import crushftp.handlers.Log;
 import crushftp.handlers.SessionCrush;
 import crushftp.handlers.UserTools;
@@ -87,10 +90,10 @@ public class TaskBridge {
         request.put("paths", share_paths);
         request.put("baseUrl", "");
         request.put("direct_link", "false");
-        request.put("emailTo", "");
-        request.put("emailCc", "");
-        request.put("emailBcc", "");
-        request.put("emailFrom", "");
+        request.put("emailTo", info.getProperty("emailTo", ""));
+        request.put("emailCc", info.getProperty("emailCc", ""));
+        request.put("emailBcc", info.getProperty("emailBcc", ""));
+        request.put("emailFrom", info.getProperty("emailFrom", ""));
         request.put("emailSubject", "");
         request.put("emailBody", "{web_link}");
         request.put("sendEmail", "false");
@@ -122,7 +125,9 @@ public class TaskBridge {
         int x2 = 0;
         while (x2 < itemsFound.size()) {
             Properties item = (Properties)itemsFound.elementAt(x2);
-            item.putAll((Map<?, ?>)((Properties)request.clone()));
+            Properties p = (Properties)request.clone();
+            p.putAll((Map<?, ?>)item);
+            item.putAll((Map<?, ?>)p);
             ++x2;
         }
         return body;
@@ -283,6 +288,9 @@ public class TaskBridge {
             if (!was_equal || the_line.indexOf(r1) >= 0) continue;
             info.put("last_scope", "static");
         }
+        if (the_line.indexOf(String.valueOf(r1) + "thread_dump" + r2) >= 0) {
+            the_line = com.crushftp.client.Common.replace_str(the_line, String.valueOf(r1) + "thread_dump" + r2, com.crushftp.client.Common.dumpStack("THREAD_DUMP"));
+        }
         return the_line;
     }
 
@@ -359,6 +367,23 @@ public class TaskBridge {
         }
     }
 
+    public static String getPreviewPath(Properties item) {
+        try {
+            String the_dir = SearchHandler.getPreviewPath(item.getProperty("url").toString(), "1", 1);
+            String index = String.valueOf(ServerStatus.SG("previews_path")) + the_dir.substring(1);
+            String path_org = "";
+            if (new File_U(com.crushftp.client.Common.all_but_last(index)).exists()) {
+                path_org = index.substring(0, index.indexOf("/p1/"));
+                return path_org;
+            }
+            return "Error: The specified preview path does not exists!";
+        }
+        catch (Exception e) {
+            com.crushftp.client.Common.log("SERVER", 1, e);
+            return "Error: " + e;
+        }
+    }
+
     public static String sendEmail(String to, String cc, String bcc, String from, String reply_to, String subject, String body, File_B[] files) {
         return TaskBridge.sendEmail(to, cc, bcc, from, reply_to, subject, body, files, new Vector());
     }
@@ -368,6 +393,28 @@ public class TaskBridge {
     }
 
     public static String sendEmail(String to, String cc, String bcc, String from, String reply_to, String subject, String body, File_B[] files, Vector fileMimeTypes, Vector remoteFiles) {
+        if (com.crushftp.client.Common.dmz_mode) {
+            Vector queue = (Vector)com.crushftp.client.Common.System2.get("crushftp.dmz.queue");
+            Properties action = new Properties();
+            action.put("type", "PUT:SEND_EMAIL");
+            action.put("id", com.crushftp.client.Common.makeBoundary(11));
+            action.put("need_response", "true");
+            action.put("to", to == null ? "" : to);
+            action.put("cc", cc == null ? "" : cc);
+            action.put("bcc", bcc == null ? "" : bcc);
+            action.put("from", from == null ? "" : from);
+            action.put("reply_to", reply_to == null ? "" : reply_to);
+            action.put("subject", subject == null ? "" : subject);
+            action.put("body", body == null ? "" : body);
+            queue.addElement(action);
+            Log.log("SERVER", 2, "PUT:SEND_EMAIL:Sending email over to Internal server..." + action);
+            action = UserTools.waitResponse(action, 60);
+            Log.log("SERVER", 2, "PUT:SEND_EMAIL:Got response.." + action);
+            if (action != null && action.containsKey("email_response")) {
+                return action.getProperty("email_response", "DMZ send through internal failed.");
+            }
+            return "DMZ send through internal failed.";
+        }
         return com.crushftp.client.Common.send_mail(ServerStatus.SG("discovered_ip"), to, cc, bcc, from, reply_to, subject, body, ServerStatus.SG("smtp_server"), ServerStatus.SG("smtp_user"), ServerStatus.SG("smtp_pass"), ServerStatus.BG("smtp_ssl"), ServerStatus.BG("smtp_html"), files, fileMimeTypes, remoteFiles);
     }
 
@@ -402,12 +449,28 @@ public class TaskBridge {
         return Common.get_email_template(template_name);
     }
 
+    public static Object readJobXMLObject(File_S f) {
+        return JobFilesHandler.readXMLObject(f);
+    }
+
+    public static Object readJobXMLObject(Properties p) {
+        return JobFilesHandler.readXMLObject(p, false);
+    }
+
+    public static void writeXMLObject(String path, Object obj, String root) {
+        JobFilesHandler.writeXMLObject(path, obj, root);
+    }
+
     public static Object change_vars_to_values_static(String s, Properties user, Properties user_info) {
         return ServerStatus.change_vars_to_values_static(s, user, user_info, null);
     }
 
     public static Object BG(String s) {
         return String.valueOf(ServerStatus.BG(s));
+    }
+
+    public static String SG(String s) {
+        return ServerStatus.SG(s);
     }
 
     public static Object siVG(String s) {

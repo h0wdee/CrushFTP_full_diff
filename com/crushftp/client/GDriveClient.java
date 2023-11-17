@@ -1,5 +1,10 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -137,8 +142,8 @@ extends GenericClient {
             int code = urlc.getResponseCode();
             String json = Common.consumeResponse(urlc.getInputStream());
             this.log("HTTP_CLIENT", 2, "Path = " + path + " List result = " + json);
-            next_page_token = ((JSONObject)JSONValue.parse(json)).containsKey("nextPageToken") ? ((JSONObject)JSONValue.parse(json)).get("nextPageToken").toString() : "";
-            Object obj = ((JSONObject)JSONValue.parse(json)).get("files");
+            next_page_token = ((JSONObject)JSONValue.parse((String)json)).containsKey((Object)"nextPageToken") ? ((JSONObject)JSONValue.parse((String)json)).get((Object)"nextPageToken").toString() : "";
+            Object obj = ((JSONObject)JSONValue.parse((String)json)).get((Object)"files");
             if (obj instanceof JSONArray) {
                 JSONArray ja = (JSONArray)obj;
                 int xxx = 0;
@@ -148,14 +153,14 @@ extends GenericClient {
                         Properties item = new Properties();
                         JSONObject jo = (JSONObject)obj2;
                         boolean folder = false;
-                        if (jo.get("mimeType").equals("application/vnd.google-apps.folder")) {
+                        if (jo.get((Object)"mimeType").equals("application/vnd.google-apps.folder")) {
                             folder = true;
                         }
                         Object[] a = jo.entrySet().toArray();
                         int i = 0;
                         while (i < a.length) {
                             String key2 = a[i].toString().split("=")[0];
-                            item.put(key2.trim(), ("" + jo.get(key2)).trim());
+                            item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
                             ++i;
                         }
                         if (!item.getProperty("trashed", "").equals("true")) {
@@ -191,13 +196,13 @@ extends GenericClient {
 
     private void getAllDrives(String path, Vector list) throws IOException, Exception, SocketTimeoutException {
         String json2 = this.getTeamDrives(path, list, "");
-        String nextPageToken = (String)((JSONObject)JSONValue.parse(json2)).get("nextPageToken");
+        String nextPageToken = (String)((JSONObject)JSONValue.parse((String)json2)).get((Object)"nextPageToken");
         if (nextPageToken != null) {
             int x = 0;
             while (x < 7) {
                 this.log("List : Team Drives - Next page token : " + nextPageToken + " index = " + x);
                 String json_next = this.getTeamDrives(path, list, nextPageToken);
-                nextPageToken = (String)((JSONObject)JSONValue.parse(json_next)).get("nextPageToken");
+                nextPageToken = (String)((JSONObject)JSONValue.parse((String)json_next)).get((Object)"nextPageToken");
                 if (nextPageToken == null) break;
                 ++x;
             }
@@ -215,7 +220,7 @@ extends GenericClient {
         urlc2.setRequestProperty("Authorization", "Bearer " + this.getBearer());
         urlc2.getResponseCode();
         String json2 = Common.consumeResponse(urlc2.getInputStream());
-        Object obj2 = ((JSONObject)JSONValue.parse(json2)).get("drives");
+        Object obj2 = ((JSONObject)JSONValue.parse((String)json2)).get((Object)"drives");
         if (obj2 instanceof JSONArray) {
             JSONArray ja = (JSONArray)obj2;
             SimpleDateFormat yyyyMMddHHmmss = new SimpleDateFormat("yyyyMMddHHmmss", Locale.US);
@@ -229,7 +234,7 @@ extends GenericClient {
                     int i = 0;
                     while (i < a.length) {
                         String key2 = a[i].toString().split("=")[0];
-                        item.put(key2.trim(), ("" + jo.get(key2)).trim());
+                        item.put(key2.trim(), ("" + jo.get((Object)key2)).trim());
                         ++i;
                     }
                     Date d = new Date();
@@ -344,12 +349,12 @@ extends GenericClient {
         this.doStandardDocsAlterations(urlc, "application/json; charset=UTF-8");
         urlc.setDoOutput(true);
         JSONObject fileMetaInfo = new JSONObject();
-        fileMetaInfo.put("name", Common.last(path));
+        fileMetaInfo.put((Object)"name", (Object)Common.last(path));
         String[] folders = path.split("/");
         if (folders.length > 2) {
             JSONArray parents = new JSONArray();
-            parents.add(resourceIdCache.getProperty(String.valueOf(this.config.getProperty("password")) + Common.all_but_last(path)));
-            fileMetaInfo.put("parents", parents);
+            parents.add((Object)resourceIdCache.getProperty(String.valueOf(this.config.getProperty("password")) + Common.all_but_last(path)));
+            fileMetaInfo.put((Object)"parents", (Object)parents);
         }
         urlc.setRequestProperty("X-Upload-Content-Type", "application/octet-stream");
         OutputStream out = urlc.getOutputStream();
@@ -492,12 +497,12 @@ extends GenericClient {
         this.doStandardDocsAlterations(urlc, "application/json; charset=UTF-8");
         JSONObject fileMetaInfo = new JSONObject();
         String[] folders = path.split("/");
-        fileMetaInfo.put("name", folders[folders.length - 1]);
-        fileMetaInfo.put("mimeType", "application/vnd.google-apps.folder");
+        fileMetaInfo.put((Object)"name", (Object)folders[folders.length - 1]);
+        fileMetaInfo.put((Object)"mimeType", (Object)"application/vnd.google-apps.folder");
         if (folders.length > 2) {
             JSONArray parents = new JSONArray();
-            parents.add(resourceIdCache.getProperty(String.valueOf(this.config.getProperty("password")) + Common.all_but_last(path)));
-            fileMetaInfo.put("parents", parents);
+            parents.add((Object)resourceIdCache.getProperty(String.valueOf(this.config.getProperty("password")) + Common.all_but_last(path)));
+            fileMetaInfo.put((Object)"parents", (Object)parents);
         }
         OutputStream out = urlc.getOutputStream();
         out.write(fileMetaInfo.toString().getBytes("UTF8"));
@@ -617,7 +622,7 @@ extends GenericClient {
         urlc.setRequestProperty("Authorization", "Bearer " + this.getBearer());
         urlc.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
         JSONObject fileMetaInfo = new JSONObject();
-        fileMetaInfo.put("name", Common.last(rnto));
+        fileMetaInfo.put((Object)"name", (Object)Common.last(rnto));
         OutputStream out = urlc.getOutputStream();
         out.write(fileMetaInfo.toString().getBytes("UTF8"));
         out.close();

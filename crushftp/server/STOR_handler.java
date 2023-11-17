@@ -13,9 +13,11 @@ import com.crushftp.client.GenericClient;
 import com.crushftp.client.GenericClientMulti;
 import com.crushftp.client.HTTPClient;
 import com.crushftp.client.LineReader;
+import com.crushftp.client.MD5Calculator;
 import com.crushftp.client.S3Client;
 import com.crushftp.client.S3CrushClient;
 import com.crushftp.client.VRL;
+import com.crushftp.client.WRunnable;
 import com.crushftp.client.Worker;
 import com.crushftp.tunnel.FileArchiveInputStream;
 import crushftp.db.SearchHandler;
@@ -24,6 +26,7 @@ import crushftp.handlers.Common;
 import crushftp.handlers.Log;
 import crushftp.handlers.SessionCrush;
 import crushftp.handlers.TransferSpeedometer;
+import crushftp.handlers.UserTools;
 import crushftp.server.ServerSessionAJAX;
 import crushftp.server.ServerStatus;
 import java.io.BufferedInputStream;
@@ -37,10 +40,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
-import java.math.BigInteger;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -50,7 +51,7 @@ import java.util.zip.InflaterInputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream;
 
 public class STOR_handler
-implements Runnable {
+extends WRunnable {
     public boolean die_now = false;
     public boolean quota_exceeded = false;
     public boolean pause_transfer = false;
@@ -74,7 +75,7 @@ implements Runnable {
     String realAction = "STOR";
     public Properties active2 = new Properties();
     boolean zlibing = false;
-    public MessageDigest md5 = null;
+    public MD5Calculator md5 = null;
     public Properties metaInfo = null;
     public String user_agent = null;
     public long current_loc = 0L;
@@ -97,15 +98,20 @@ implements Runnable {
     boolean wait_for_parent_free = false;
     boolean normal_writes = true;
     boolean block_ftp_fix = false;
-    Vector last_md5s = new Vector();
+    Properties last_md5s = new Properties();
+    String stor_user_name = "";
     long asciiLineCount = 0L;
     SimpleDateFormat proxySDF = new SimpleDateFormat("MMddyyHHmmss");
+    public static Properties global_uploads_by_user_and_path = new Properties();
 
     public STOR_handler() {
         this.active2.put("streamOpenStatus", "PENDING");
     }
 
     public void init_vars(String the_dir, long current_loc, SessionCrush thisSession, Properties item, String realAction, boolean unique, boolean random_access, Properties metaInfo, Socket data_sock) {
+        STOR_handler old;
+        this.put("session", thisSession);
+        this.stor_user_name = thisSession.uiSG("user_name");
         this.data_sock = data_sock;
         this.the_dir = the_dir;
         this.thisSession = thisSession;
@@ -117,7 +123,7 @@ implements Runnable {
         this.inError = false;
         try {
             if (this.md5 == null) {
-                this.md5 = MessageDigest.getInstance(ServerStatus.SG("hash_algorithm"));
+                this.md5 = new MD5Calculator(ServerStatus.BG("md5sum_native_exec"), ServerStatus.SG("hash_algorithm"), System.getProperty("crushftp.stor_md5", "true").equals("true"));
             }
         }
         catch (Exception exception) {
@@ -136,8 +142,12 @@ implements Runnable {
         this.die_now = false;
         this.unique = unique;
         this.fileModifiedDate = System.currentTimeMillis();
-        this.threadName = String.valueOf(Thread.currentThread().getName()) + ":" + thisSession.uiSG("user_name") + ":STOR";
+        this.threadName = String.valueOf(Thread.currentThread().getName()) + ":" + this.stor_user_name + ":STOR";
         this.block_ftp_fix = false;
+        if (ServerStatus.BG("kill_prior_upload_session_if_file_in_use") && (old = (STOR_handler)global_uploads_by_user_and_path.get(String.valueOf(this.stor_user_name) + "_" + the_dir)) != null) {
+            old.kill();
+        }
+        global_uploads_by_user_and_path.put(String.valueOf(this.stor_user_name) + "_" + the_dir, this);
     }
 
     public void setThreadName(String threadName) {
@@ -149,7 +159,7 @@ implements Runnable {
      */
     @Override
     public void run() {
-        block392: {
+        block405: {
             this.thisThread = Thread.currentThread();
             this.thisThread.setName(this.threadName);
             try {
@@ -169,6 +179,12 @@ implements Runnable {
                         this.proxy_remote_out = null;
                         this.priorMd5 = "";
                         md5_str = "";
+                        if (ServerStatus.BG("filepart_silent_ignore") && this.the_dir.endsWith(".filepart")) {
+                            this.the_dir = this.the_dir.substring(0, this.the_dir.lastIndexOf(".filepart"));
+                        }
+                        if (ServerStatus.BG("filepart_silent_ignore") && this.item.getProperty("url").endsWith(".filepart")) {
+                            this.item.put("url", this.item.getProperty("url").substring(0, this.item.getProperty("url").lastIndexOf(".filepart")));
+                        }
                         STOR_handler.updateTransferStats(this.thisSession, -1, this.httpUpload, null, this.md5, current_upload_item);
                         the_file = Common.last(this.the_dir);
                         the_file = Common.normalize2(the_file);
@@ -180,8 +196,6 @@ implements Runnable {
                         this.the_file_path = this.the_dir = String.valueOf(Common.all_but_last(this.the_dir)) + the_file;
                         this.the_file_name = this.the_file_path.substring(this.the_file_path.lastIndexOf("/") + 1, this.the_file_path.length()).trim();
                         this.the_file_path = this.the_file_path.substring(0, this.the_file_path.lastIndexOf("/") + 1);
-                        this.quota = this.thisSession.get_quota(this.the_file_path);
-                        this.quota_exceeded = false;
                         this.the_file_name = Common.replace_str(this.the_file_name, "%2F", "2F");
                         this.the_file_name = Common.replace_str(this.the_file_name, "%2f", "2f");
                         this.the_file_name = Common.url_decode(this.the_file_name);
@@ -193,6 +207,10 @@ implements Runnable {
                         catch (Exception e) {
                             Log.log("STOR", 0, "Invalid path used on upload, attempting to fix..." + this.the_file_path);
                             temp_item = this.thisSession.uVFS.get_item(this.the_file_path);
+                            if (!temp_item.getProperty("type", "file").toLowerCase().equals("dir") || !temp_item.getProperty("url", "").endsWith("/")) {
+                                // empty if block
+                            }
+                            temp_item.put("url", String.valueOf(temp_item.getProperty("url", "")) + "/");
                             this.item.put("url", String.valueOf(temp_item.getProperty("url")) + Common.last(this.item.getProperty("url")));
                             try {
                                 this.c = this.thisSession.uVFS.getClient(this.item);
@@ -203,6 +221,34 @@ implements Runnable {
                                 throw e;
                             }
                         }
+                        if (com.crushftp.client.Common.dmz_mode) {
+                            try {
+                                queue = (Vector)com.crushftp.client.Common.System2.get("crushftp.dmz.queue");
+                                action = new Properties();
+                                action.put("type", "GET:QUOTA");
+                                action.put("id", Common.makeBoundary());
+                                action.put("username", this.thisSession.uiSG("user_name"));
+                                action.put("password", this.thisSession.uiSG("current_password"));
+                                action.put("crushAuth", this.c.getConfig("crushAuth"));
+                                the_dir2 = this.the_dir;
+                                if (the_dir2.startsWith(this.thisSession.SG("root_dir"))) {
+                                    the_dir2 = the_dir2.substring(this.thisSession.SG("root_dir").length() - 1);
+                                }
+                                action.put("the_dir", the_dir2);
+                                action.put("clientid", this.thisSession.uiSG("clientid"));
+                                action.put("need_response", "true");
+                                queue.addElement(action);
+                                action = UserTools.waitResponse(action, 300);
+                                this.quota = Long.parseLong(action.remove("object_response").toString().trim().split(":")[0]);
+                            }
+                            catch (Exception e) {
+                                Log.log("SERVER", 2, e);
+                                this.quota = this.thisSession.get_quota(this.the_dir);
+                            }
+                        } else {
+                            this.quota = this.thisSession.get_quota(this.the_dir);
+                        }
+                        this.quota_exceeded = false;
                         vrl_str = this.item.getProperty("url");
                         the_file = Common.last(vrl_str);
                         the_file = Common.normalize2(the_file);
@@ -220,8 +266,8 @@ implements Runnable {
                         stat = this.c.stat(vrl.getPath());
                         this.priorMd5 = this.getPriorMd5(this.item, stat);
                         if (!vrl.getProtocol().equalsIgnoreCase("file") && ServerStatus.BG("proxyKeepUploads")) {
-                            new File_S(String.valueOf(ServerStatus.SG("proxyUploadRepository")) + this.thisSession.uiSG("user_name") + this.the_file_path).mkdirs();
-                            this.proxy = new RandomAccessFile(new File_S(String.valueOf(ServerStatus.SG("proxyUploadRepository")) + this.thisSession.uiSG("user_name") + this.the_file_path + this.proxySDF.format(new Date()) + "_" + this.the_file_name), "rw");
+                            new File_S(String.valueOf(ServerStatus.SG("proxyUploadRepository")) + this.stor_user_name + this.the_file_path).mkdirs();
+                            this.proxy = new RandomAccessFile(new File_S(String.valueOf(ServerStatus.SG("proxyUploadRepository")) + this.stor_user_name + this.the_file_path + this.proxySDF.format(new Date()) + "_" + this.the_file_name), "rw");
                             if (this.proxy.length() > this.current_loc) {
                                 this.proxy.setLength(this.current_loc);
                             }
@@ -238,16 +284,16 @@ implements Runnable {
                         start_upload_count_day = 0L;
                         start_upload_count_month = 0L;
                         if (this.thisSession.LG("max_upload_amount_day") > 0L) {
-                            start_upload_amount_day = ServerStatus.thisObj.statTools.getTransferAmountToday(this.thisSession.uiSG("user_ip"), this.thisSession.uiSG("user_name"), this.thisSession.uiPG("stat"), "uploads", this.thisSession);
+                            start_upload_amount_day = ServerStatus.thisObj.statTools.getTransferAmountToday(this.thisSession.uiSG("user_ip"), this.stor_user_name, this.thisSession.uiPG("stat"), "uploads", this.thisSession);
                         }
                         if (this.thisSession.LG("max_upload_amount_month") > 0L) {
-                            start_upload_amount_month = ServerStatus.thisObj.statTools.getTransferAmountThisMonth(this.thisSession.uiSG("user_ip"), this.thisSession.uiSG("user_name"), this.thisSession.uiPG("stat"), "uploads", this.thisSession);
+                            start_upload_amount_month = ServerStatus.thisObj.statTools.getTransferAmountThisMonth(this.thisSession.uiSG("user_ip"), this.stor_user_name, this.thisSession.uiPG("stat"), "uploads", this.thisSession);
                         }
                         if (this.thisSession.LG("max_upload_count_day") > 0L) {
-                            start_upload_count_day = ServerStatus.thisObj.statTools.getTransferCountToday(this.thisSession.uiSG("user_ip"), this.thisSession.uiSG("user_name"), this.thisSession.uiPG("stat"), "uploads", this.thisSession);
+                            start_upload_count_day = ServerStatus.thisObj.statTools.getTransferCountToday(this.thisSession.uiSG("user_ip"), this.stor_user_name, this.thisSession.uiPG("stat"), "uploads", this.thisSession);
                         }
                         if (this.thisSession.LG("max_upload_count_month") > 0L) {
-                            start_upload_count_month = ServerStatus.thisObj.statTools.getTransferCountThisMonth(this.thisSession.uiSG("user_ip"), this.thisSession.uiSG("user_name"), this.thisSession.uiPG("stat"), "uploads", this.thisSession);
+                            start_upload_count_month = ServerStatus.thisObj.statTools.getTransferCountThisMonth(this.thisSession.uiSG("user_ip"), this.stor_user_name, this.thisSession.uiPG("stat"), "uploads", this.thisSession);
                         }
                         start_transfer_time = new Date().getTime();
                         if (this.item.getProperty("url").length() > ServerStatus.IG("max_url_length")) {
@@ -270,6 +316,7 @@ implements Runnable {
                         } else if (max_upload_amount > 0L && this.thisSession.uiLG("bytes_received") > max_upload_amount * 1024L) {
                             this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550-" + LOC.G("WARNING!!! Maximum upload amount reached.") + "  " + LOC.G("Received") + ":" + this.thisSession.uiLG("bytes_received") / 1024L + "k.  " + LOC.G("Max") + ":" + max_upload_amount + "k.  " + LOC.G("Available") + ":" + (max_upload_amount - this.thisSession.uiLG("bytes_received") / 1024L) + "k.", "STOR");
                             this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550", "%STOR-max reached%", "STOR");
+                            this.stop_message = String.valueOf(LOC.G("WARNING!!! Maximum upload amount reached.")) + "  " + LOC.G("Max") + ":" + max_upload_amount + "k.";
                             this.inError = true;
                             this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                             this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
@@ -282,6 +329,7 @@ implements Runnable {
                         } else if (max_upload_count > 0L && this.thisSession.uiLG("session_upload_count") > max_upload_count) {
                             this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550-" + LOC.G("WARNING!!! Maximum upload count reached.") + "  " + LOC.G("Received") + ":" + this.thisSession.uiLG("session_upload_count") + ".  " + LOC.G("Max") + ":" + max_upload_count + ".  " + LOC.G("Available") + ":" + (max_upload_count - this.thisSession.uiLG("session_upload_count")) + ".", "STOR");
                             this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550", "%STOR-max reached%", "STOR");
+                            this.stop_message = String.valueOf(LOC.G("WARNING!!! Maximum upload count reached.")) + "  " + LOC.G("Max") + ":" + this.thisSession.uiLG("session_upload_count");
                             this.inError = true;
                             this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                             this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
@@ -294,8 +342,8 @@ implements Runnable {
                         } else if (max_upload_size > 0L && this.current_loc > max_upload_size * 1024L) {
                             this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550-" + LOC.G("WARNING!!! Maximum upload amount file size reached.") + "  " + LOC.G("Max") + ":" + max_upload_size + "k.", "STOR");
                             this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550", "%STOR-max reached%", "STOR");
-                            this.inError = true;
                             this.stop_message = String.valueOf(LOC.G("WARNING!!! Maximum upload amount file size reached.")) + "  " + LOC.G("Max") + ":" + max_upload_size + "k.";
+                            this.inError = true;
                             this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                             this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
                             ServerStatus.thisObj.runAlerts("user_upload_session", this.thisSession);
@@ -346,10 +394,10 @@ implements Runnable {
                             }
                         } else if (this.httpUpload && this.thisSession.uiLG("file_length") > this.thisSession.LG("max_upload_size") * 1024L && this.thisSession.LG("max_upload_size") != 0L) {
                             this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550", "%STOR-max reached%", "STOR");
+                            this.stop_message = String.valueOf(LOC.G("Upload file size is too large.")) + this.thisSession.LG("max_upload_size") + "k max.";
                             this.inError = true;
                             this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                             this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
-                            this.stop_message = String.valueOf(LOC.G("Upload file size is too large.")) + this.thisSession.LG("max_upload_size") + "k max.";
                             if (this.data_sock != null) {
                                 this.data_sock.close();
                             } else if (this.thisSession.data_socks.size() > 0) {
@@ -357,10 +405,10 @@ implements Runnable {
                             }
                         } else if (this.current_loc == 0L && this.item.getProperty("privs").indexOf("(delete)") < 0 && stat != null && Long.parseLong(stat.getProperty("size")) > 0L && this.item.getProperty("privs").indexOf("(view)") >= 0) {
                             this.thisSession.not_done = this.thisSession.ftp_write_command_logged("550", "Cannot overwrite a file.", "STOR");
+                            this.stop_message = LOC.G("Cannot overwrite a file.");
                             this.inError = true;
                             this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                             this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
-                            this.stop_message = LOC.G("Cannot overwrite a file.");
                             if (this.data_sock != null) {
                                 this.data_sock.close();
                             } else if (this.thisSession.data_socks.size() > 0) {
@@ -378,10 +426,10 @@ implements Runnable {
                                 this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
                                 this.thisSession.uiVG("failed_commands").addElement("" + new Date().getTime());
                             } else {
-                                block389: {
-                                    block390: {
+                                block402: {
+                                    block403: {
                                         try {
-                                            block388: {
+                                            block401: {
                                                 if (this.data_sock == null) {
                                                     this.data_sock = (Socket)this.thisSession.data_socks.remove(0);
                                                 }
@@ -471,8 +519,10 @@ implements Runnable {
                                                 }
                                                 this.checkZipstream(this.item);
                                                 if (this.current_loc == 0L && !this.random_access) {
-                                                    block385: {
+                                                    block398: {
                                                         if ((this.item.getProperty("privs").indexOf("(view)") < 0 || this.unique) && stat != null) {
+                                                            this.item.put("unique_rename", "true");
+                                                            this.item.put("org_url", this.item.getProperty("url", ""));
                                                             result = STOR_handler.do_unique_rename(this.item, vrl, this.c, this.unique, this.the_file_name, stat);
                                                             vrl = (VRL)result.get("vrl");
                                                             stat = null;
@@ -485,7 +535,7 @@ implements Runnable {
                                                             }
                                                         }
                                                         catch (Exception e) {
-                                                            if (("" + e).indexOf("Interrupted") < 0) break block385;
+                                                            if (("" + e).indexOf("Interrupted") < 0) break block398;
                                                             throw e;
                                                         }
                                                     }
@@ -499,7 +549,7 @@ implements Runnable {
                                                     } else if ((vrl.getProtocol().equalsIgnoreCase("file") || vrl.getProtocol().equalsIgnoreCase("s3crush")) && stat != null && !this.thisSession.uiSG("proxy_mode").equalsIgnoreCase("socket")) {
                                                         if (!this.the_file_name.endsWith(".zipstream")) {
                                                             info = new Properties();
-                                                            info.put("crushftp_user_name", this.thisSession.uiSG("user_name"));
+                                                            info.put("crushftp_user_name", this.stor_user_name);
                                                             Common.trackSyncRevision(this.c, vrl, String.valueOf(this.the_file_path) + this.the_file_name, this.thisSession.SG("root_dir"), this.item.getProperty("privs"), true, info);
                                                         }
                                                         this.c.delete(vrl.getPath());
@@ -519,17 +569,17 @@ implements Runnable {
                                                     current_upload_item = this.make_current_item(start_transfer_time);
                                                     if (!com.crushftp.client.Common.dmz_mode) {
                                                         if (!this.thisSession.user.getProperty("filePublicEncryptionKey", "").equals("")) {
-                                                            this.out = !this.thisSession.user.getProperty("encryption_cypher", "").equals("") ? Common.getEncryptedStream(this.out, this.thisSession.user.getProperty("filePublicEncryptionKey", ""), this.current_loc, false, this.c, vrl.getPath(), this.thisSession.user.getProperty("encryption_cypher", "")) : Common.getEncryptedStream(this.out, this.thisSession.user.getProperty("filePublicEncryptionKey", ""), this.current_loc, false, this.c, vrl.getPath());
+                                                            this.out = !this.thisSession.user.getProperty("encryption_cypher", "").equals("") ? Common.getEncryptedStream(this.out, this.thisSession.user.getProperty("filePublicEncryptionKey", ""), this.current_loc, this.thisSession.user.getProperty("file_encrypt_ascii", "false").equals("true"), this.c, vrl.getPath(), this.thisSession.user.getProperty("encryption_cypher", ""), this.thisSession.user.getProperty("hint_decrypted_size", "true").equals("true"), this.thisSession.user.getProperty("encryption_sign", "false").equals("true"), this.thisSession.user.getProperty("fileDecryptionKey", ""), this.thisSession.user.getProperty("fileDecryptionKeyPass", "")) : Common.getEncryptedStream(this.out, this.thisSession.user.getProperty("filePublicEncryptionKey", ""), this.current_loc, false, this.c, vrl.getPath());
                                                         } else if (ServerStatus.BG("fileEncryption") && !ServerStatus.SG("filePublicEncryptionKey").equals("")) {
-                                                            this.out = Common.getEncryptedStream(this.out, ServerStatus.SG("filePublicEncryptionKey"), this.current_loc, ServerStatus.BG("file_encrypt_ascii"), this.c, vrl.getPath());
+                                                            this.out = Common.getEncryptedStream(this.out, ServerStatus.SG("filePublicEncryptionKey"), this.current_loc, ServerStatus.BG("file_encrypt_ascii"), this.c, vrl.getPath(), ServerStatus.SG("encryption_cypher"), ServerStatus.BG("hint_decrypted_size"), ServerStatus.BG("encryption_sign"), ServerStatus.SG("fileDecryptionKey"), ServerStatus.SG("fileDecryptionKeyPass"));
                                                         } else if (!this.thisSession.user.getProperty("fileEncryptionKey", "").equals("")) {
-                                                            this.out = !this.thisSession.user.getProperty("encryption_cypher", "").equals("") ? Common.getEncryptedStream(this.out, this.thisSession.user.getProperty("fileEncryptionKey", ""), this.current_loc, false, this.c, vrl.getPath(), this.thisSession.user.getProperty("encryption_cypher", "")) : Common.getEncryptedStream(this.out, this.thisSession.user.getProperty("fileEncryptionKey", ""), this.current_loc, false, this.c, vrl.getPath());
+                                                            this.out = !this.thisSession.user.getProperty("encryption_cypher", "").equals("") ? Common.getEncryptedStream(this.out, this.thisSession.user.getProperty("fileEncryptionKey", ""), this.current_loc, this.thisSession.user.getProperty("file_encrypt_ascii", "false").equals("true"), this.c, vrl.getPath(), this.thisSession.user.getProperty("encryption_cypher", ""), this.thisSession.user.getProperty("hint_decrypted_size", "true").equals("true"), this.thisSession.user.getProperty("encryption_sign", "false").equals("true"), this.thisSession.user.getProperty("fileDecryptionKey", ""), this.thisSession.user.getProperty("fileDecryptionKeyPass", "")) : Common.getEncryptedStream(this.out, this.thisSession.user.getProperty("fileEncryptionKey", ""), this.current_loc, false, this.c, vrl.getPath());
                                                         } else if (ServerStatus.BG("fileEncryption")) {
                                                             this.out = Common.getEncryptedStream(this.out, ServerStatus.SG("fileEncryptionKey"), this.current_loc, false, this.c, vrl.getPath());
                                                         }
                                                     }
                                                 }
-                                                this.thisSession.not_done = this.thisSession.ftp_write_command_logged(responseNumber, "Opening %user_file_transfer_mode% mode data connection.  Ready to write file " + this.thisSession.stripRoot(this.the_file_path) + this.the_file_name + ". S T O R", "STOR");
+                                                this.thisSession.not_done = this.thisSession.ftp_write_command_logged(responseNumber, "Opening %user_file_transfer_mode% data connection.  Ready to write file " + this.thisSession.stripRoot(this.the_file_path) + this.the_file_name + ". S T O R", "STOR");
                                                 this.active2.put("streamOpenStatus", "OPEN");
                                                 if (ServerStatus.BG("posix")) {
                                                     this.setDefaultsPOSIX(this.item, vrl);
@@ -537,7 +587,7 @@ implements Runnable {
                                                 this.thisSession.uiPUT("start_transfer_time", String.valueOf(new Date().getTime()));
                                                 this.thisSession.uiPUT("start_transfer_byte_amount", String.valueOf(this.thisSession.uiLG("bytes_received")));
                                                 speedController = new TransferSpeedometer(this.thisSession, null, this);
-                                                Worker.startWorker(speedController, String.valueOf(this.thisSession.uiSG("user_name")) + ":(" + this.thisSession.uiSG("user_number") + ")-" + this.thisSession.uiSG("user_ip") + " (speedometer stor)");
+                                                Worker.startWorker(speedController, String.valueOf(this.stor_user_name) + ":(" + this.thisSession.uiSG("user_number") + ")-" + this.thisSession.uiSG("user_ip") + " (speedometer stor)");
                                                 if (this.thisSession.uiSG("proxy_mode").equalsIgnoreCase("socket") && this.SG("site").toUpperCase().indexOf("(SITE_PROXY)") >= 0) {
                                                     sock = new Socket(this.thisSession.uiSG("proxy_ip_address"), this.thisSession.uiIG("proxy_remote_port"));
                                                     this.proxy_remote_out = sock.getOutputStream();
@@ -571,7 +621,7 @@ implements Runnable {
                                                                 STOR_handler.this.thisSession.old_data_socks.remove(STOR_handler.this.data_sock);
                                                             }
                                                         }
-                                                    }, String.valueOf(this.thisSession.uiSG("user_name")) + ":(" + this.thisSession.uiSG("user_number") + ")-" + this.thisSession.uiSG("user_ip") + " STOR_handler_proxy_connector");
+                                                    }, String.valueOf(this.stor_user_name) + ":(" + this.thisSession.uiSG("user_number") + ")-" + this.thisSession.uiSG("user_ip") + " STOR_handler_proxy_connector");
                                                 }
                                                 if (!this.thisSession.SG("content_restriction").equals("") && !this.thisSession.SG("content_restriction").equals("content_restriction")) {
                                                     restrictions_ok = false;
@@ -716,12 +766,12 @@ implements Runnable {
                                                                     this.c.setConfig("uploaded_md5", md5_str);
                                                                 }
                                                                 if (this.c instanceof S3Client || this.c instanceof S3CrushClient) {
-                                                                    this.c.setConfig("uploaded_by", "CrushFTP:" + this.thisSession.user.getProperty("username"));
+                                                                    this.c.setConfig("uploaded_by", String.valueOf(System.getProperty("appname", "CrushFTP")) + ":" + this.thisSession.user.getProperty("username"));
                                                                 }
                                                                 this.c.mdtm(vrl.getPath(), entry.getTime());
                                                             } else if (entry != null && entry.getTime() > 0L) {
                                                                 this.c.setConfig("uploaded_md5", md5_str);
-                                                                this.c.setConfig("uploaded_by", "CrushFTP:" + this.thisSession.user.getProperty("username"));
+                                                                this.c.setConfig("uploaded_by", String.valueOf(System.getProperty("appname", "CrushFTP")) + ":" + this.thisSession.user.getProperty("username"));
                                                                 try {
                                                                     this.c.set_MD5_and_upload_id(vrl.getPath());
                                                                 }
@@ -737,10 +787,7 @@ implements Runnable {
                                                         item2 = (Properties)this.item.clone();
                                                         if (entry != null) {
                                                             item2.put("url", String.valueOf(Common.all_but_last(this.item.getProperty("url"))) + entry.getName());
-                                                            md5_str = new BigInteger(1, this.md5.digest()).toString(16).toLowerCase();
-                                                            while (md5_str.length() < 32) {
-                                                                md5_str = "0" + md5_str;
-                                                            }
+                                                            md5_str = this.md5.getHash();
                                                             path2 = entry.getName();
                                                             if (path2.indexOf(":") >= 0) {
                                                                 path2 = path2.substring(0, path2.indexOf(":"));
@@ -758,9 +805,9 @@ implements Runnable {
                                                             }
                                                             Common.trackSync("CHANGE", filePath, null, entry.isDirectory(), Long.parseLong(stat.getProperty("size")), entry.getTime(), this.thisSession.SG("root_dir"), this.item.getProperty("privs"), this.thisSession.uiSG("clientid"), this.priorMd5);
                                                             STOR_handler.finishedUpload(this.c, this.thisSession, item2, String.valueOf(this.the_file_path) + Common.all_but_last(entry.getName()), vrl.getName(), this.stop_message, this.quota_exceeded, this.quota, this.httpUpload, vrl, this.asciiLineCount, binary_mode, start_transfer_time, md5_str, fileItem, 0L, false, this.realAction, this.metaInfo, this.user_agent, this.current_loc);
-                                                            this.last_md5s.addElement(md5_str);
-                                                            while (this.last_md5s.size() > 100) {
-                                                                this.last_md5s.remove(0);
+                                                            this.last_md5s.put(filePath, md5_str);
+                                                            if (this.last_md5s.size() > 100) {
+                                                                this.last_md5s.clear();
                                                             }
                                                             if (ServerStatus.BG("posix")) {
                                                                 this.setDefaultsPOSIX(item2, vrl);
@@ -811,11 +858,11 @@ implements Runnable {
                                                                                 part = parts[x].split("=")[0];
                                                                                 if (part.equalsIgnoreCase("REST")) {
                                                                                     rest = Long.parseLong(parts[x].split("=")[1]);
-                                                                                    this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *REST " + rest + "*", "STOR");
+                                                                                    this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *REST " + rest + "*", "STOR");
                                                                                 } else if (part.equalsIgnoreCase("RANGE")) {
                                                                                     this.random_access = true;
                                                                                     rest = Long.parseLong(parts[x].split("=")[1]);
-                                                                                    this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *REST " + rest + " (randomaccess)*", "STOR");
+                                                                                    this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *REST " + rest + " (randomaccess)*", "STOR");
                                                                                 }
                                                                                 ++x;
                                                                             }
@@ -830,7 +877,7 @@ implements Runnable {
                                                                     }
                                                                     if ((zipItem = this.thisSession.uVFS.get_item_parent(String.valueOf(this.the_file_path) + path2)) == null) {
                                                                         if (!this.thisSession.check_access_privs(this.the_dir, "MKD", this.item)) {
-                                                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP:MKD " + this.thisSession.stripRoot(this.the_file_path) + path2 + " DENIED!  Make dir not allowed.*", "MKD");
+                                                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP:MKD " + this.thisSession.stripRoot(this.the_file_path) + path2 + " DENIED!  Make dir not allowed.*", "MKD");
                                                                             throw new Exception("Not allowed to create folder.");
                                                                         }
                                                                         buildPath = "";
@@ -839,7 +886,7 @@ implements Runnable {
                                                                         while (x < parts.length) {
                                                                             zipItem = this.thisSession.uVFS.get_item(buildPath = String.valueOf(buildPath) + parts[x] + "/");
                                                                             if (zipItem == null) {
-                                                                                this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP:MKD " + this.thisSession.stripRoot(this.the_file_path) + buildPath + "*", "MKD");
+                                                                                this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP:MKD " + this.thisSession.stripRoot(this.the_file_path) + buildPath + "*", "MKD");
                                                                                 zipItem = this.thisSession.uVFS.get_item_parent(buildPath);
                                                                                 if (zipItem.getProperty("url").length() > ServerStatus.IG("max_url_length")) {
                                                                                     throw new IOException("File url length too long:" + zipItem.getProperty("url").length() + " vs. " + ServerStatus.IG("max_url_length"));
@@ -869,7 +916,7 @@ implements Runnable {
                                                                     zipItem.put("url", urlChange);
                                                                     vrl = new VRL(zipItem.getProperty("url"));
                                                                     this.priorMd5 = "";
-                                                                    this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP " + this.thisSession.stripRoot(this.the_file_path) + path2 + "*", "STOR");
+                                                                    this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP " + this.thisSession.stripRoot(this.the_file_path) + path2 + "*", "STOR");
                                                                     if (entry.isDirectory() || entry.getName().equals("")) {
                                                                         if (this.thisSession.check_access_privs(this.the_dir, "MKD", this.item)) {
                                                                             if (vrl.toString().length() > ServerStatus.IG("max_url_length")) {
@@ -879,9 +926,9 @@ implements Runnable {
                                                                             this.c.makedirs(vrl.getPath());
                                                                             this.thisSession.setFolderPrivs(this.c, zipItem);
                                                                             Log.log("UPLOAD", 3, "Creating zip directory:" + vrl.getPath());
-                                                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP:MKD " + this.thisSession.stripRoot(this.the_file_path) + path2 + "*", "MKD");
+                                                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP:MKD " + this.thisSession.stripRoot(this.the_file_path) + path2 + "*", "MKD");
                                                                         } else {
-                                                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP:MKD " + this.thisSession.stripRoot(this.the_file_path) + path2 + " DENIED!  Make dir not allowed.*", "MKD");
+                                                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: *UNZIP:MKD " + this.thisSession.stripRoot(this.the_file_path) + path2 + " DENIED!  Make dir not allowed.*", "MKD");
                                                                             if (!this.thisSession.check_access_privs(this.the_dir, "MKD", this.item)) {
                                                                                 throw new Exception("Not allowed to create folder.");
                                                                             }
@@ -936,17 +983,17 @@ implements Runnable {
                                                                                     stat = stat2;
                                                                                     vrl = vrl2;
                                                                                 }
-                                                                                if (stat.getProperty("size").equals("0")) ** GOTO lbl738
-                                                                                this.c.rename(vrl.getPath(), vrl2.getPath());
+                                                                                if (stat.getProperty("size").equals("0")) ** GOTO lbl783
+                                                                                this.c.rename(vrl.getPath(), vrl2.getPath(), false);
                                                                             }
                                                                             catch (Exception e) {
-                                                                                if (("" + e).indexOf("Interrupted") < 0) ** GOTO lbl738
+                                                                                if (("" + e).indexOf("Interrupted") < 0) ** GOTO lbl783
                                                                                 throw e;
                                                                             }
                                                                         } else if (zipItem.getProperty("privs").indexOf("(delete)") < 0 && stat != null) {
                                                                             entry = null;
                                                                         }
-lbl738:
+lbl783:
                                                                         // 7 sources
 
                                                                         this.priorMd5 = this.getPriorMd5(zipItem, stat);
@@ -967,13 +1014,12 @@ lbl738:
                                                                                 if (!Common.filter_check("U", Common.last(String.valueOf(this.the_file_path) + path2), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) || !file_filter) {
                                                                                     this.thisSession.add_log_formatted("550 STOR error: Upload attempt was rejected because the block matching names! File name :" + Common.last(String.valueOf(this.the_file_path) + path2) + " Filters :" + ServerStatus.SG("filename_filters_str"), "STOR");
                                                                                 }
+                                                                                this.thisSession.doErrorEvent(new Exception("Upload attempt was rejected because the block matching names! File name :" + Common.last(String.valueOf(this.the_file_path) + path2) + " Filters :" + ServerStatus.SG("filename_filters_str") + this.thisSession.SG("file_filter")));
                                                                                 throw new IOException("Access not allowed for:" + this.the_file_path + path2);
                                                                             }
                                                                             if (rest == -1L) {
-                                                                                md5_str = new BigInteger(1, this.md5.digest()).toString(16).toLowerCase();
-                                                                                while (md5_str.length() < 32) {
-                                                                                    md5_str = "0" + md5_str;
-                                                                                }
+                                                                                this.current_loc = 0L;
+                                                                                md5_str = this.md5.getHash();
                                                                                 statSize = 0L;
                                                                                 if (stat != null) {
                                                                                     statSize = Long.parseLong(stat.getProperty("size"));
@@ -984,14 +1030,15 @@ lbl738:
                                                                                         filePath = String.valueOf(this.thisSession.SG("root_dir")) + filePath;
                                                                                     }
                                                                                     info = new Properties();
-                                                                                    info.put("crushftp_user_name", this.thisSession.uiSG("user_name"));
+                                                                                    info.put("crushftp_user_name", this.stor_user_name);
                                                                                     Common.trackSyncRevision(this.c, vrl, filePath, this.thisSession.SG("root_dir"), this.item.getProperty("privs"), true, info);
                                                                                     Common.trackPendingSync(this.pendingSyncs, "CHANGE", filePath, null, entry.isDirectory(), statSize, entry.getTime(), this.thisSession.SG("root_dir"), this.item.getProperty("privs"), this.thisSession.uiSG("clientid"), this.priorMd5);
                                                                                 }
                                                                                 this.c.delete(vrl.getPath());
+                                                                            } else {
+                                                                                this.current_loc = rest;
                                                                             }
                                                                             vrl = this.doTempUploadRename(vrl, stat == null);
-                                                                            this.current_loc = rest;
                                                                             this.start_upload(vrl, binary_mode);
                                                                             if (current_upload_item != null) {
                                                                                 ServerStatus.siVG("incoming_transfers").remove(current_upload_item);
@@ -1126,7 +1173,7 @@ lbl738:
                                                     throw new Exception("ERROR:Upload cancelled!");
                                                 }
                                                 try {
-                                                    this.thisSession.uiPUT("receiving_file", "false");
+                                                    this.thisSession.uiPUT("receiving_file", String.valueOf(this.thisSession.stor_files_pool_used.size() > 0));
                                                 }
                                                 catch (Exception c2) {
                                                     // empty catch block
@@ -1140,7 +1187,7 @@ lbl738:
                                                     this.data_sock.close();
                                                 }
                                                 catch (Exception e) {
-                                                    if (("" + e).indexOf("Interrupted") < 0) break block388;
+                                                    if (("" + e).indexOf("Interrupted") < 0) break block401;
                                                     throw e;
                                                 }
                                             }
@@ -1171,17 +1218,14 @@ lbl738:
                                                 this.stop_message = "";
                                                 this.thisSession.not_done = this.thisSession.ftp_write_command_logged("226", "%STOR-end% " + LOC.G("(\"$0$1\" $2) " + this.realAction, "", "", ""), "STOR");
                                             } else {
-                                                md5_str = new BigInteger(1, this.md5.digest()).toString(16).toLowerCase();
-                                                while (md5_str.length() < 32) {
-                                                    md5_str = "0" + md5_str;
-                                                }
+                                                md5_str = this.md5.getHash();
                                                 disable_mdtm_modifications = ServerStatus.BG("disable_mdtm_modifications");
                                                 if (this.thisSession.user.containsKey("disable_mdtm_modifications")) {
                                                     disable_mdtm_modifications = this.thisSession.BG("disable_mdtm_modifications");
                                                 }
                                                 if (!disable_mdtm_modifications) {
                                                     this.c.setConfig("uploaded_md5", md5_str);
-                                                    this.c.setConfig("uploaded_by", "CrushFTP:" + this.thisSession.user.getProperty("username"));
+                                                    this.c.setConfig("uploaded_by", String.valueOf(System.getProperty("appname", "CrushFTP")) + ":" + this.thisSession.user.getProperty("username"));
                                                     if (this.httpUpload) {
                                                         this.c.mdtm(vrl.getPath(), this.fileModifiedDate);
                                                     } else {
@@ -1194,7 +1238,7 @@ lbl738:
                                                     }
                                                 } else {
                                                     this.c.setConfig("uploaded_md5", md5_str);
-                                                    this.c.setConfig("uploaded_by", "CrushFTP:" + this.thisSession.user.getProperty("username"));
+                                                    this.c.setConfig("uploaded_by", String.valueOf(System.getProperty("appname", "CrushFTP")) + ":" + this.thisSession.user.getProperty("username"));
                                                     try {
                                                         this.c.set_MD5_and_upload_id(vrl.getPath());
                                                     }
@@ -1217,18 +1261,29 @@ lbl738:
                                                 if (!this.the_file_name.endsWith(".zipstream") && stat != null) {
                                                     Common.trackSync("CHANGE", filePath, null, false, Long.parseLong(stat.getProperty("size")), Long.parseLong(stat.getProperty("modified")), this.thisSession.SG("root_dir"), this.item.getProperty("privs"), this.thisSession.uiSG("clientid"), this.priorMd5);
                                                 }
-                                                if (ServerStatus.BG("validate_upload_physical_file_size") && !String.valueOf(this.current_loc).equals(stat.getProperty("size", "-1"))) {
-                                                    error_msg = "Error with file size after upload completion! received bytes:" + this.current_loc + " versus local lookup up size:" + stat.getProperty("size");
-                                                    this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: " + error_msg, "STOR");
-                                                    if (ServerStatus.BG("validate_upload_physical_file_size_error")) {
-                                                        this.doTempUploadRename(vrl, false);
-                                                        throw new IOException(error_msg);
+                                                if (!com.crushftp.client.Common.dmz_mode) {
+                                                    if (ServerStatus.BG("validate_upload_physical_file_size") && ServerStatus.SG("validate_upload_physical_file_size_ignore_protocols").toLowerCase().indexOf(vrl.getProtocol().toString().toLowerCase()) < 0) {
+                                                        ok = true;
+                                                        if (this.c.getConfig("pgpDecryptUpload", "").equals("true") || this.c.getConfig("pgpEncryptUpload", "").equals("true")) {
+                                                            ok = false;
+                                                        }
+                                                        if (this.thisSession.user != null && !this.thisSession.user.getProperty("filePublicEncryptionKey", "").equals("")) {
+                                                            ok = false;
+                                                        }
+                                                        if (ok && !String.valueOf(this.current_loc).equals(stat.getProperty("size", "-1"))) {
+                                                            error_msg = "Error with file size after upload completion! received bytes:" + this.current_loc + " versus local lookup up size:" + stat.getProperty("size");
+                                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: " + error_msg, "STOR");
+                                                            if (ServerStatus.BG("validate_upload_physical_file_size_error")) {
+                                                                this.doTempUploadRename(vrl, false);
+                                                                throw new IOException(error_msg);
+                                                            }
+                                                        }
                                                     }
                                                 }
                                                 this.stop_message = STOR_handler.finishedUpload(this.c, this.thisSession, this.item, this.the_file_path, this.the_file_name, this.stop_message, this.quota_exceeded, this.quota, this.httpUpload, vrl, this.asciiLineCount, binary_mode, start_transfer_time, md5_str, fileItem, resume_loc, true, this.realAction, this.metaInfo, this.user_agent, this.current_loc);
-                                                this.last_md5s.addElement(md5_str);
-                                                while (this.last_md5s.size() > 100) {
-                                                    this.last_md5s.remove(0);
+                                                this.last_md5s.put(filePath, md5_str);
+                                                if (this.last_md5s.size() > 100) {
+                                                    this.last_md5s.clear();
                                                 }
                                             }
                                             if (!this.stop_message.equals("")) {
@@ -1237,7 +1292,7 @@ lbl738:
                                             if (current_upload_item != null) {
                                                 ServerStatus.siVG("incoming_transfers").remove(current_upload_item);
                                             }
-                                            break block389;
+                                            break block402;
                                         }
                                         catch (Exception e) {
                                             this.inError = true;
@@ -1248,13 +1303,13 @@ lbl738:
                                             Log.log("UPLOAD", 1, e);
                                             Log.log("UPLOAD", 1, this.the_file_path);
                                             Log.log("UPLOAD", 1, this.the_file_name);
-                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: Error with files (path):" + this.thisSession.stripRoot(this.the_file_path), "STOR");
-                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: Error with files (name):" + this.the_file_name, "STOR");
+                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: Error with files (path):" + this.thisSession.stripRoot(this.the_file_path), "STOR");
+                                            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: Error with files (name):" + this.the_file_name, "STOR");
                                             if (current_upload_item != null) {
                                                 ServerStatus.siVG("incoming_transfers").remove(current_upload_item);
                                             }
                                             try {
-                                                this.thisSession.uiPUT("receiving_file", "false");
+                                                this.thisSession.uiPUT("receiving_file", String.valueOf(this.thisSession.stor_files_pool_used.size() > 0));
                                             }
                                             catch (Exception message_string) {
                                                 // empty catch block
@@ -1303,11 +1358,15 @@ lbl738:
                                                 }
                                             }
                                             catch (Exception ee) {
+                                                if (this.stop_message.toLowerCase().indexOf("denied") >= 0) {
+                                                    this.stop_message = ee.getMessage();
+                                                    e = ee;
+                                                }
                                                 Log.log("UPLOAD", 1, ee);
                                             }
                                             stat = this.c.stat(vrl.getPath());
                                             try {
-                                                v0 = protocols_without_rename_support = vrl.toString().toLowerCase().startsWith("s3") != false || vrl.toString().toLowerCase().startsWith("azure") != false || vrl.toString().toLowerCase().startsWith("glacier") != false;
+                                                v0 = protocols_without_rename_support = ServerStatus.SG("temp_upload_ext_ignore_protocols").toLowerCase().indexOf(vrl.getProtocol().toString().toLowerCase()) >= 0;
                                                 if (this.allowTempExtensions && !this.SG("temp_upload_ext").equals("") && !this.SG("temp_upload_ext").equals("temp_upload_ext") && (protocols_without_rename_support || vrl.getName().endsWith(this.SG("temp_upload_ext")) || this.SG("temp_upload_ext").startsWith("!!"))) {
                                                     Log.log("UPLOAD", 2, "Temp uploaded file still exist:" + vrl.safe());
                                                     if (ServerStatus.BG("delete_partial_uploads") || this.thisSession.BG("delete_partial_uploads") || vrl.getProtocol().equalsIgnoreCase("HADOOP")) {
@@ -1322,7 +1381,7 @@ lbl738:
                                                             u = u.substring(0, u.length() - 1);
                                                         }
                                                         vrl2 = new VRL(u.substring(0, vrl.toString().length() - this.SG("temp_upload_ext").length()));
-                                                        this.c.rename(vrl.getPath(), vrl2.getPath());
+                                                        this.c.rename(vrl.getPath(), vrl2.getPath(), true);
                                                         vrl = vrl2;
                                                     }
                                                 }
@@ -1377,7 +1436,10 @@ lbl738:
                                                 fileItem.put("the_file_speed", String.valueOf(this.thisSession.uiLG("overall_transfer_speed")));
                                                 fileItem.put("the_file_error", this.stop_message);
                                                 fileItem.put("the_file_status", "FAILED");
+                                                fileItem.put("type", "FILE");
                                                 fileItem.put("the_file_type", "FILE");
+                                                fileItem.put("the_file_start", String.valueOf(start_transfer_time));
+                                                fileItem.put("the_file_end", String.valueOf(new Date().getTime()));
                                                 if (this.metaInfo != null) {
                                                     fileItem.put("metaInfo", this.metaInfo);
                                                 }
@@ -1391,7 +1453,7 @@ lbl738:
                                             }
                                             this.thisSession.not_done = ServerStatus.BG("rfc_proxy") != false && e.getMessage() != null && e.getMessage().length() > 3 && e.getMessage().charAt(3) == ' ' ? this.thisSession.ftp_write_command_logged(e.getMessage(), "STOR") : this.thisSession.ftp_write_command_logged("550", String.valueOf(e.getMessage()) + " " + LOC.G("(\"$0$1\") " + this.realAction, this.thisSession.stripRoot(this.the_file_path), this.the_file_name), "STOR");
                                             this.thisSession.doErrorEvent(new Exception(this.thisSession.uiSG("lastLog")));
-                                            if (this.the_file_name.indexOf(".DS_Store") >= 0 || this.thisSession.uiLG("bytes_received") <= 0L) break block390;
+                                            if (this.the_file_name.indexOf(".DS_Store") >= 0 || this.thisSession.uiLG("bytes_received") <= 0L) break block403;
                                             lastUploadStat = ServerStatus.thisObj.statTools.add_item_stat(this.thisSession, fileItem, "UPLOAD");
                                             if (this.metaInfo != null) {
                                                 lastUploadStat.put("metaInfo", this.metaInfo);
@@ -1421,7 +1483,7 @@ lbl-1000:
                                         }
                                         this.thisSession.do_event5("UPLOAD", fileItem);
                                     }
-                                    this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: " + LOC.G("Error") + ":" + e, "STOR");
+                                    this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: " + LOC.G("Error") + ":" + e, "STOR");
                                     this.thisSession.stop_idle_timer();
                                 }
                                 if (ServerStatus.BG("posix")) {
@@ -1430,7 +1492,12 @@ lbl-1000:
                                 if (this.quota != -12345L) {
                                     this.thisSession.set_quota(this.the_file_path, this.quota);
                                 }
-                                this.thisSession.uiPUT("receiving_file", "false");
+                                try {
+                                    this.thisSession.uiPUT("receiving_file", String.valueOf(this.thisSession.stor_files_pool_used.size() > 0));
+                                }
+                                catch (Exception var35_44) {
+                                    // empty catch block
+                                }
                             }
                         }
                     }
@@ -1441,13 +1508,13 @@ lbl-1000:
                     try {
                         this.thisSession.uVFS.reset();
                     }
-                    catch (Exception var2_4) {
+                    catch (Exception var2_5) {
                         // empty catch block
                     }
                     try {
                         this.thisSession.uiPUT("last_action", "STOR-" + LOC.G("Done."));
                     }
-                    catch (Exception var2_5) {
+                    catch (Exception var2_6) {
                         // empty catch block
                     }
                     try {
@@ -1455,7 +1522,7 @@ lbl-1000:
                             this.out.close();
                         }
                     }
-                    catch (Exception var2_6) {
+                    catch (Exception var2_7) {
                         // empty catch block
                     }
                     try {
@@ -1463,7 +1530,7 @@ lbl-1000:
                             this.c.close();
                         }
                     }
-                    catch (Exception var2_7) {
+                    catch (Exception var2_8) {
                         // empty catch block
                     }
                     try {
@@ -1473,25 +1540,25 @@ lbl-1000:
                             this.c.logout();
                         }
                     }
-                    catch (Exception var2_8) {
+                    catch (Exception var2_9) {
                         // empty catch block
                     }
                     try {
                         this.proxy.close();
                     }
-                    catch (Exception var2_9) {
+                    catch (Exception var2_10) {
                         // empty catch block
                     }
                     try {
                         this.data_is.close();
                     }
-                    catch (Exception var2_10) {
+                    catch (Exception var2_11) {
                         // empty catch block
                     }
                     try {
                         this.data_sock.close();
                     }
-                    catch (Exception var2_11) {
+                    catch (Exception var2_12) {
                         // empty catch block
                     }
                     if (this.data_sock != null) {
@@ -1500,23 +1567,17 @@ lbl-1000:
                     try {
                         this.proxy_remote_out.close();
                     }
-                    catch (Exception var2_12) {
+                    catch (Exception var2_13) {
                         // empty catch block
                     }
                     try {
                         this.thisSession.uiPUT("overall_transfer_speed", "0");
                     }
-                    catch (Exception var2_13) {
-                        // empty catch block
-                    }
-                    try {
-                        this.thisSession.uiPUT("current_transfer_speed", "0");
-                    }
                     catch (Exception var2_14) {
                         // empty catch block
                     }
                     try {
-                        this.thisSession.uiPUT("receiving_file", "false");
+                        this.thisSession.uiPUT("current_transfer_speed", "0");
                     }
                     catch (Exception var2_15) {
                         // empty catch block
@@ -1529,13 +1590,13 @@ lbl-1000:
                     Log.log("UPLOAD", 1, e);
                     this.thisThread = null;
                     this.active2.put("active", "false");
-                    break block392;
+                    break block405;
                 }
             }
-            catch (Throwable var62_130) {
+            catch (Throwable var62_135) {
                 this.thisThread = null;
                 this.active2.put("active", "false");
-                throw var62_130;
+                throw var62_135;
             }
             this.thisThread = null;
             this.active2.put("active", "false");
@@ -1543,6 +1604,12 @@ lbl-1000:
         this.kill();
         while (this.thisSession.stor_files_pool_used.indexOf(this) >= 0) {
             this.thisSession.stor_files_pool_used.removeElement(this);
+        }
+        try {
+            this.thisSession.uiPUT("receiving_file", String.valueOf(this.thisSession.stor_files_pool_used.size() > 0));
+        }
+        catch (Exception var1_3) {
+            // empty catch block
         }
         if (!this.wait_for_parent_free && this.thisSession.stor_files_pool_free.indexOf(this) < 0) {
             this.thisSession.stor_files_pool_free.addElement(this);
@@ -1628,13 +1695,7 @@ lbl33:
 
     public VRL doTempUploadRename(VRL vrl, boolean zero_byte_first) throws Exception {
         if (!(!this.allowTempExtensions || this.SG("temp_upload_ext").equals("") || this.SG("temp_upload_ext").equals("temp_upload_ext") || vrl.getName().endsWith(this.SG("temp_upload_ext")) && !this.SG("temp_upload_ext").startsWith("!!") || com.crushftp.client.Common.dmz_mode)) {
-            if (vrl.toString().toLowerCase().startsWith("s3")) {
-                return vrl;
-            }
-            if (vrl.toString().toLowerCase().startsWith("azure")) {
-                return vrl;
-            }
-            if (vrl.toString().toLowerCase().startsWith("glacier")) {
+            if (ServerStatus.SG("temp_upload_ext_ignore_protocols").toLowerCase().indexOf(vrl.getProtocol().toString().toLowerCase()) >= 0) {
                 return vrl;
             }
             if (vrl.toString().toLowerCase().endsWith(".zipstream")) {
@@ -1649,11 +1710,11 @@ lbl33:
                 try {
                     this.c.makedirs(vrl2.getPath());
                     vrl2 = new VRL(String.valueOf(Common.all_but_last(u)) + this.SG("temp_upload_ext").substring(2) + "/" + Common.last(u));
-                    this.c.rename(vrl2.getPath(), vrl.getPath());
+                    this.c.rename(vrl2.getPath(), vrl.getPath(), true);
                     if (zero_byte_first) {
                         this.c.upload_0_byte(vrl.getPath());
                     }
-                    this.c.rename(vrl.getPath(), vrl2.getPath());
+                    this.c.rename(vrl.getPath(), vrl2.getPath(), true);
                     VRL vrl_temp = new VRL(String.valueOf(Common.all_but_last(u)) + this.SG("temp_upload_ext").substring(2));
                     this.c.delete(vrl_temp.getPath());
                 }
@@ -1670,7 +1731,7 @@ lbl33:
                     if (this.c.stat(vrl2.getPath()) != null) {
                         this.c.delete(vrl2.getPath());
                     }
-                    this.c.rename(vrl.getPath(), vrl2.getPath());
+                    this.c.rename(vrl.getPath(), vrl2.getPath(), true);
                 }
                 catch (Exception e) {
                     Log.log("UPLOAD", 1, e);
@@ -1683,13 +1744,7 @@ lbl33:
 
     public VRL doTempUploadRenameDone(VRL vrl) throws Exception {
         if (this.allowTempExtensions && !this.SG("temp_upload_ext").equals("") && !this.SG("temp_upload_ext").equals("temp_upload_ext") && (vrl.getName().endsWith(this.SG("temp_upload_ext")) || this.SG("temp_upload_ext").startsWith("!!")) && !this.quota_exceeded) {
-            if (vrl.toString().toLowerCase().startsWith("s3")) {
-                return vrl;
-            }
-            if (vrl.toString().toLowerCase().startsWith("azure")) {
-                return vrl;
-            }
-            if (vrl.toString().toLowerCase().startsWith("glacier")) {
+            if (ServerStatus.SG("temp_upload_ext_ignore_protocols").toLowerCase().indexOf(vrl.getProtocol().toString().toLowerCase()) >= 0) {
                 return vrl;
             }
             if (vrl.toString().toLowerCase().endsWith(".zipstream")) {
@@ -1701,11 +1756,11 @@ lbl33:
             }
             if (this.SG("temp_upload_ext").startsWith("!!")) {
                 VRL vrl2 = new VRL(String.valueOf(Common.all_but_last(Common.all_but_last(u))) + Common.last(u));
-                this.c.rename(vrl.getPath(), vrl2.getPath());
+                this.c.rename(vrl.getPath(), vrl2.getPath(), true);
                 vrl = vrl2;
             } else {
                 VRL vrl2 = new VRL(u.substring(0, vrl.toString().length() - this.SG("temp_upload_ext").length()));
-                this.c.rename(vrl.getPath(), vrl2.getPath());
+                this.c.rename(vrl.getPath(), vrl2.getPath(), true);
                 vrl = vrl2;
             }
         }
@@ -1810,7 +1865,7 @@ lbl33:
             lesserSpeed = ServerStatus.IG("max_server_upload_speed");
         }
         if (lesserSpeed != 0 && logSpeed) {
-            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.thisSession.uiSG("user_name") + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: Bandwidth is being limited:" + lesserSpeed, "STOR");
+            this.thisSession.add_log("[" + this.thisSession.uiSG("user_number") + ":" + this.stor_user_name + ":" + this.thisSession.uiSG("user_ip") + "] WROTE: Bandwidth is being limited:" + lesserSpeed, "STOR");
         }
         if (lesserSpeed > 0 && (this.thisSession.server_item.getProperty("port", "0").startsWith("55580") || this.thisSession.server_item.getProperty("port", "0").startsWith("55521"))) {
             lesserSpeed = 0;
@@ -1884,7 +1939,12 @@ lbl33:
         catch (Exception exception) {
             // empty catch block
         }
+        if (this.md5 != null) {
+            this.md5.close();
+        }
         this.active2.put("active", "false");
+        global_uploads_by_user_and_path.remove(String.valueOf(this.stor_user_name) + "_" + this.the_dir, this);
+        this.stor_user_name = "";
     }
 
     public static String finishedUpload(GenericClient c, SessionCrush thisSession, Properties item, String the_file_path, String the_file_name, String stop_message, boolean quota_exceeded, long quota, boolean httpUpload, VRL vrl, long asciiLineCount, boolean binary_mode, long start_transfer_time, String md5Str, Properties fileItem, long resume_loc, boolean writeMessages, String realAction, Properties metaInfo, String user_agent, long current_loc) throws Exception {
@@ -1893,6 +1953,10 @@ lbl33:
         }
         thisSession.uiPUT("md5", md5Str);
         thisSession.uiPUT("sfv", md5Str);
+        if (ServerStatus.BG("fail_stor_0_byte_versus_data_received") && current_loc > 0L && vrl.getProtocol().equalsIgnoreCase("file") && new File_U(vrl.getCanonicalPath()).length() == 0L) {
+            stop_message = LOC.G("File upload data received by CrushFTP, but OS filesystem did not store it properly resulting in a 0 byte file. " + current_loc + " vs. 0:" + vrl.getCanonicalPath());
+            throw new Exception(stop_message);
+        }
         String message_string = "";
         if (!binary_mode && ServerStatus.BG("log_transfer_speeds")) {
             message_string = String.valueOf(message_string) + asciiLineCount + " lines received.";
@@ -1918,6 +1982,7 @@ lbl33:
             fileItem.put("the_file_status", "FAILED");
             fileItem.put("the_file_resume_loc", String.valueOf(resume_loc));
             fileItem.put("the_file_md5", md5Str);
+            fileItem.put("type", "FILE");
             fileItem.put("the_file_type", "FILE");
             if (metaInfo != null) {
                 fileItem.put("metaInfo", metaInfo);
@@ -1999,6 +2064,7 @@ lbl33:
             fileItem.put("the_file_status", "SUCCESS");
             fileItem.put("the_file_resume_loc", String.valueOf(resume_loc));
             fileItem.put("the_file_md5", md5Str);
+            fileItem.put("type", "FILE");
             fileItem.put("the_file_type", "FILE");
             fileItem.put("user_agent", user_agent == null ? "" : user_agent);
             fileItem.put("modified", item.getProperty("modified", "0"));
@@ -2073,6 +2139,9 @@ lbl33:
                 while (lastUploadStats.size() > ServerStatus.IG("user_log_buffer")) {
                     lastUploadStats.removeElementAt(0);
                 }
+                if (fileItem.getProperty("unique_rename", "").equals("true") && !fileItem.getProperty("org_url", "").equals("") && !fileItem.getProperty("org_url", "").equals(fileItem.getProperty("url", ""))) {
+                    fileItem.put("url", fileItem.getProperty("org_url", ""));
+                }
                 thisSession.do_event5("UPLOAD", fileItem);
             }
             if (responseNumber.equals("226")) {
@@ -2089,14 +2158,22 @@ lbl33:
         return "";
     }
 
-    public String getLastMd5() {
+    public String getLastMd5Path(String path) {
+        if (!path.startsWith(this.thisSession.SG("root_dir"))) {
+            path = String.valueOf(this.thisSession.SG("root_dir")) + (path.startsWith("/") ? path.substring(1) : path);
+        }
         try {
             int x = 0;
-            while (x < 10000 && this.last_md5s.size() == 0) {
+            while (x < 10000 && !this.last_md5s.containsKey(path)) {
                 Thread.sleep(1L);
                 ++x;
             }
-            return this.last_md5s.remove(0).toString();
+            String md5_result = (String)this.last_md5s.remove(path);
+            if (md5_result == null) {
+                Log.log("SERVER", 1, "Waiting for MD5 for path:" + path + " failed after 10 seconds." + this.last_md5s);
+                return "Waiting for MD5 for path:" + path + " failed after 10 seconds." + this.last_md5s;
+            }
+            return md5_result;
         }
         catch (Exception e) {
             Log.log("SERVER", 1, e);
@@ -2116,10 +2193,12 @@ lbl33:
         current_item.put("size", current_item.getProperty("the_file_size"));
         current_item.put("the_file_speed", "0");
         current_item.put("current_loc", String.valueOf(this.current_loc));
-        current_item.put("user_name", this.thisSession.uiSG("user_name"));
+        current_item.put("user_name", this.stor_user_name);
         current_item.put("user_ip", this.thisSession.uiSG("user_ip"));
         current_item.put("user_protocol", this.thisSession.uiSG("user_protocol"));
         current_item.put("the_file_start", String.valueOf(start_transfer_time));
+        current_item.put("path", String.valueOf(this.item.getProperty("root_dir")) + this.item.getProperty("name"));
+        current_item.put("folder_type", new VRL(this.item.getProperty("url", "")).getProtocol());
         ServerStatus.siVG("incoming_transfers").addElement(current_item);
         return current_item;
     }
@@ -2127,14 +2206,12 @@ lbl33:
     /*
      * WARNING - Removed try catching itself - possible behaviour change.
      */
-    public static void updateTransferStats(SessionCrush thisSession, int data_read, boolean httpUpload, byte[] temp_array, MessageDigest md5, Properties current_upload_item) {
+    public static void updateTransferStats(SessionCrush thisSession, int data_read, boolean httpUpload, byte[] temp_array, MD5Calculator md5, Properties current_upload_item) {
         thisSession.active_transfer();
         if (data_read < 0) {
             return;
         }
-        if (System.getProperty("crushftp.stor_md5", "true").equals("true")) {
-            md5.update(temp_array, 0, data_read);
-        }
+        md5.update(temp_array, 0, data_read);
         thisSession.uiPPUT("bytes_received", data_read);
         thisSession.uiPUT("bytes_received_formatted", com.crushftp.client.Common.format_bytes_short2(Long.parseLong(thisSession.uiSG("bytes_received"))));
         ServerStatus.thisObj.total_server_bytes_received += (long)data_read;
@@ -2156,7 +2233,7 @@ lbl33:
 
     public static Properties do_unique_rename(Properties item, VRL vrl, GenericClient c, boolean unique, String the_file_name, Properties stat) throws Exception {
         Properties result;
-        block9: {
+        block11: {
             result = new Properties();
             try {
                 int fileNameInt = 1;
@@ -2178,18 +2255,38 @@ lbl33:
                     the_file_name = Common.last(String.valueOf(itemName) + fileNameInt + itemExt);
                     vrl = vrl2;
                     item.put("name", the_file_name);
-                } else if (!stat.getProperty("size").equals("0")) {
-                    if (ServerStatus.BG("drop_folder_rename_new")) {
+                    break block11;
+                }
+                if (ServerStatus.BG("drop_folder_rename_new")) {
+                    if (!stat.getProperty("size").equals("0")) {
                         the_file_name = vrl2.getName();
                         vrl = vrl2;
                         item.put("name", the_file_name);
-                    } else {
-                        c.rename(vrl.getPath(), vrl2.getPath());
                     }
+                    break block11;
+                }
+                boolean rename_ok = c.rename(vrl.getPath(), vrl2.getPath(), false);
+                if (!rename_ok) break block11;
+                c.mdtm(vrl2.getPath(), Long.parseLong(stat.getProperty("modified", "0")));
+                try {
+                    String the_dir = SearchHandler.getPreviewPath(vrl.toString(), "1", 1);
+                    String index = String.valueOf(ServerStatus.SG("previews_path")) + the_dir.substring(1);
+                    if (new File_U(Common.all_but_last(index)).exists()) {
+                        String path_org = index.substring(0, index.indexOf("/p1/"));
+                        long mdtm = new File_U(path_org).lastModified();
+                        rename_ok = new File_U(path_org).renameTo(new File_U(String.valueOf(Common.all_but_last(path_org)) + vrl2.getName()));
+                        if (!rename_ok) {
+                            throw new Exception("Could not reanme keywords! Path source: " + path_org + " dest : " + Common.all_but_last(path_org) + vrl2.getName());
+                        }
+                        new File_U(String.valueOf(Common.all_but_last(path_org)) + vrl2.getName()).setLastModified(mdtm);
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("SERVER", 1, "Auto Rename: Error on keywords rename: " + e);
                 }
             }
             catch (Exception e) {
-                if (("" + e).indexOf("Interrupted") < 0) break block9;
+                if (("" + e).indexOf("Interrupted") < 0) break block11;
                 throw e;
             }
         }

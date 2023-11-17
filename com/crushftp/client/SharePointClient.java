@@ -1,5 +1,10 @@
 /*
  * Decompiled with CFR 0.152.
+ * 
+ * Could not load the following classes:
+ *  org.json.simple.JSONArray
+ *  org.json.simple.JSONObject
+ *  org.json.simple.JSONValue
  */
 package com.crushftp.client;
 
@@ -85,9 +90,9 @@ extends GenericClient {
             throw new Exception(this.getErrorInfo(result, code));
         }
         this.log("HTTP_CLIENT", 2, "Sharepoint REST API Client: List path : " + path + " Result : " + result);
-        JSONObject jo = (JSONObject)((JSONObject)JSONValue.parse(result)).get("d");
-        JSONArray folders = (JSONArray)((JSONObject)jo.get("Folders")).get("results");
-        JSONArray files = (JSONArray)((JSONObject)jo.get("Files")).get("results");
+        JSONObject jo = (JSONObject)((JSONObject)JSONValue.parse((String)result)).get((Object)"d");
+        JSONArray folders = (JSONArray)((JSONObject)jo.get((Object)"Folders")).get((Object)"results");
+        JSONArray files = (JSONArray)((JSONObject)jo.get((Object)"Files")).get((Object)"results");
         this.parseItemArray(path, list, folders, true);
         this.parseItemArray(path, list, files, false);
         return list;
@@ -103,16 +108,16 @@ extends GenericClient {
                 SimpleDateFormat sdf_rfc1123_2 = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US);
                 SimpleDateFormat sdf_rfc1123_3 = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
                 try {
-                    d = ((String)jop.get("TimeLastModified")).contains(".") ? sdf_rfc1123_2.parse((String)jop.get("TimeLastModified")) : sdf_rfc1123_3.parse((String)jop.get("TimeLastModified"));
+                    d = ((String)jop.get((Object)"TimeLastModified")).contains(".") ? sdf_rfc1123_2.parse((String)jop.get((Object)"TimeLastModified")) : sdf_rfc1123_3.parse((String)jop.get((Object)"TimeLastModified"));
                 }
                 catch (Exception e) {
                     this.log(e);
                 }
                 SimpleDateFormat yyyyMMddHHmmss = new SimpleDateFormat("yyyyMMddHHmmss", Locale.US);
-                String name = (String)jop.get("Name");
+                String name = (String)jop.get((Object)"Name");
                 String size = "0";
                 if (!folder) {
-                    size = (String)jop.get("Length");
+                    size = (String)jop.get((Object)"Length");
                 }
                 String line = String.valueOf(folder ? "d" : "-") + "rwxrwxrwx   1    owner   group   " + size + "   " + yyyyMMddHHmmss.format(d) + "   " + this.dd.format(d) + " " + this.yyyy.format(d) + " /" + name;
                 Properties stat = SharePointClient.parseStat(line);
@@ -489,7 +494,7 @@ extends GenericClient {
         urlc.setRequestProperty("Content-Type", "application/json");
         urlc.setRequestProperty("X-RequestDigest", "digest");
         JSONObject data = new JSONObject();
-        data.put("ServerRelativeUrl", Common.replace_str(String.valueOf(this.config.getProperty("sharepoint_site_path", "")) + this.config.getProperty("sharepoint_site_drive_name", "") + temp_path, "//", "/"));
+        data.put((Object)"ServerRelativeUrl", (Object)Common.replace_str(String.valueOf(this.config.getProperty("sharepoint_site_path", "")) + this.config.getProperty("sharepoint_site_drive_name", "") + temp_path, "//", "/"));
         OutputStream out = urlc.getOutputStream();
         out.write(data.toJSONString().getBytes("UTF8"));
         out.close();
@@ -571,8 +576,8 @@ extends GenericClient {
         if (code < 200 || code > 299) {
             throw new Exception(this.getErrorInfo(result, code));
         }
-        String access_token = (String)((JSONObject)JSONValue.parse(result)).get("access_token");
-        String expires_in = "" + ((JSONObject)JSONValue.parse(result)).get("expires_in");
+        String access_token = (String)((JSONObject)JSONValue.parse((String)result)).get((Object)"access_token");
+        String expires_in = "" + ((JSONObject)JSONValue.parse((String)result)).get((Object)"expires_in");
         Properties p = new Properties();
         p.put("access_token", access_token);
         p.put("expires_in", expires_in);
@@ -607,31 +612,31 @@ extends GenericClient {
         if (!result.equals("")) {
             String error = "ERROR: Error code: " + code + "\n";
             try {
-                JSONObject jo = (JSONObject)JSONValue.parse(result);
-                if (jo != null && jo.get("error") != null) {
-                    if (jo.get("error") instanceof String) {
-                        if (jo.get("error_description") != null) {
-                            if (jo.get("error_description").toString().startsWith("AADSTS7000222")) {
+                JSONObject jo = (JSONObject)JSONValue.parse((String)result);
+                if (jo != null && jo.get((Object)"error") != null) {
+                    if (jo.get((Object)"error") instanceof String) {
+                        if (jo.get((Object)"error_description") != null) {
+                            if (jo.get((Object)"error_description").toString().startsWith("AADSTS7000222")) {
                                 error = String.valueOf(error) + "Description: AADSTS7000222 - The provided client secret keys for the app are expired! Create new keys for the app!";
-                            } else if (jo.get("error_description").toString().startsWith("AADSTS700016")) {
+                            } else if (jo.get((Object)"error_description").toString().startsWith("AADSTS700016")) {
                                 error = String.valueOf(error) + "Description: AADSTS700016 - Invalid Client Id! The provided client id : " + this.config.getProperty("username", "");
-                            } else if (jo.get("error_description").toString().startsWith("AADSTS7000215")) {
+                            } else if (jo.get((Object)"error_description").toString().startsWith("AADSTS7000215")) {
                                 error = String.valueOf(error) + "Description: AADSTS7000215 - Invalid client secret provided!";
                             } else {
-                                error = String.valueOf(error) + "Description: " + jo.get("error_description") + "\n";
-                                if (jo.get("error_codes") != null) {
-                                    error = String.valueOf(error) + "Codes: " + jo.get("error_codes") + "\n";
+                                error = String.valueOf(error) + "Description: " + jo.get((Object)"error_description") + "\n";
+                                if (jo.get((Object)"error_codes") != null) {
+                                    error = String.valueOf(error) + "Codes: " + jo.get((Object)"error_codes") + "\n";
                                 }
                             }
                         }
-                    } else if (jo.get("error") instanceof JSONObject) {
+                    } else if (jo.get((Object)"error") instanceof JSONObject) {
                         JSONObject message_jo;
-                        JSONObject err_jo = (JSONObject)jo.get("error");
-                        if (err_jo.get("code") != null) {
-                            error = String.valueOf(error) + "Error: " + err_jo.get("code") + "\n";
+                        JSONObject err_jo = (JSONObject)jo.get((Object)"error");
+                        if (err_jo.get((Object)"code") != null) {
+                            error = String.valueOf(error) + "Error: " + err_jo.get((Object)"code") + "\n";
                         }
-                        if (err_jo.get("message") != null && (message_jo = (JSONObject)err_jo.get("message")).get("value") != null) {
-                            error = String.valueOf(error) + "Error Message: " + message_jo.get("value") + "\n";
+                        if (err_jo.get((Object)"message") != null && (message_jo = (JSONObject)err_jo.get((Object)"message")).get((Object)"value") != null) {
+                            error = String.valueOf(error) + "Error Message: " + message_jo.get((Object)"value") + "\n";
                         }
                     }
                 } else {

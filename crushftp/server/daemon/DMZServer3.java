@@ -196,7 +196,7 @@ extends DMZServerCommon {
                                 Common.sockLog(tempSock, "tempSock create.  pending_data_socks size=" + pending_data_socks.size());
                                 tempSock.setSoTimeout(0);
                                 tempSock.setTcpNoDelay(true);
-                                if (DMZServer3.this.checkLoggingSockneeded(tempSock)) continue;
+                                if (DMZServer3.this.checkLoggingSockNeeded(tempSock)) continue;
                                 DMZServer3.this.processDataSocket(tempSock, pending_data_socks);
                             }
                             catch (IOException e) {

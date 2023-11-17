@@ -8,14 +8,17 @@ import com.crushftp.client.File_S;
 import com.crushftp.client.VRL;
 import com.crushftp.client.Worker;
 import crushftp.gui.LOC;
+import crushftp.handlers.JobFilesHandler;
 import crushftp.handlers.JobScheduler;
 import crushftp.handlers.Log;
 import crushftp.handlers.SessionCrush;
 import crushftp.handlers.UserTools;
 import crushftp.server.AdminControls;
 import crushftp.server.ServerStatus;
+import crushftp.server.VFS;
 import java.io.File;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.Map;
@@ -50,158 +53,49 @@ public class Events {
             }
             return info;
         }
+        Log.log("EVENT", 2, "Checking event info:" + event_type + ":" + VRL.safe(fileItem1));
         int x = 0;
         while (x < the_events.size()) {
-            block76: {
+            block22: {
                 Properties eventRun;
                 Properties event;
-                block77: {
-                    block78: {
-                        String path;
+                block23: {
+                    block24: {
                         event = (Properties)the_events.elementAt(x);
                         if (!event.containsKey("id")) {
                             event.put("id", crushftp.handlers.Common.makeBoundary());
                         }
-                        if (!(event.getProperty("event_user_action_list", "").indexOf("(connect)") >= 0 && event_type.equals("LOGIN") || event.getProperty("event_user_action_list", "").indexOf("(upload)") >= 0 && event_type.equals("UPLOAD") || event.getProperty("event_user_action_list", "").indexOf("(upload)") >= 0 && event.getProperty("event_user_action_list", "").indexOf("(rename)") >= 0 && event_type.equals("RENAME") || event.getProperty("event_user_action_list", "").indexOf("(upload)") >= 0 && event_type.equals("RENAME") && fileItem2 != null && fileItem2.getProperty("url", "").endsWith(".filepart") || event.getProperty("event_user_action_list", "").indexOf("(download)") >= 0 && event_type.equals("DOWNLOAD") || event.getProperty("event_user_action_list", "").indexOf("(pre_download)") >= 0 && event_type.equals("PRE_DOWNLOAD") || event.getProperty("event_user_action_list", "").indexOf("(delete)") >= 0 && event_type.equals("DELETE") || event.getProperty("event_user_action_list", "").indexOf("(site)") >= 0 && event_type.equals("SITE") || event.getProperty("event_user_action_list", "").indexOf("(share)") >= 0 && event_type.equals("SHARE") || event.getProperty("event_user_action_list", "").indexOf("(custom)") >= 0 && event_type.equals("CUSTOM") || event.getProperty("event_user_action_list", "").indexOf("(problem)") >= 0 && event_type.equals("PROBLEM") || event.getProperty("event_user_action_list", "").indexOf("(rename)") >= 0 && event_type.equals("RENAME") || event.getProperty("event_user_action_list", "").indexOf("(error)") >= 0 && event_type.equals("ERROR") || event.getProperty("event_user_action_list", "").indexOf("(welcome)") >= 0 && event_type.equals("WELCOME")) && (event.getProperty("event_user_action_list", "").indexOf("(makedir)") < 0 || !event_type.equals("MAKEDIR"))) break block76;
+                        if (!(event.getProperty("event_user_action_list", "").indexOf("(connect)") >= 0 && event_type.equals("LOGIN") || event.getProperty("event_user_action_list", "").indexOf("(upload)") >= 0 && event_type.equals("UPLOAD") || event.getProperty("event_user_action_list", "").indexOf("(upload)") >= 0 && event.getProperty("event_user_action_list", "").indexOf("(rename)") >= 0 && event_type.equals("RENAME") || event.getProperty("event_user_action_list", "").indexOf("(upload)") >= 0 && event_type.equals("RENAME") && fileItem2 != null && fileItem2.getProperty("url", "").endsWith(".filepart") || event.getProperty("event_user_action_list", "").indexOf("(download)") >= 0 && event_type.equals("DOWNLOAD") || event.getProperty("event_user_action_list", "").indexOf("(pre_download)") >= 0 && event_type.equals("PRE_DOWNLOAD") || event.getProperty("event_user_action_list", "").indexOf("(delete)") >= 0 && event_type.equals("DELETE") || event.getProperty("event_user_action_list", "").indexOf("(site)") >= 0 && event_type.equals("SITE") || event.getProperty("event_user_action_list", "").indexOf("(share)") >= 0 && event_type.equals("SHARE") || event.getProperty("event_user_action_list", "").indexOf("(custom)") >= 0 && event_type.equals("CUSTOM") || event.getProperty("event_user_action_list", "").indexOf("(problem)") >= 0 && event_type.equals("PROBLEM") || event.getProperty("event_user_action_list", "").indexOf("(rename)") >= 0 && event_type.equals("RENAME") || event.getProperty("event_user_action_list", "").indexOf("(error)") >= 0 && event_type.equals("ERROR") || event.getProperty("event_user_action_list", "").indexOf("(welcome)") >= 0 && event_type.equals("WELCOME")) && (event.getProperty("event_user_action_list", "").indexOf("(makedir)") < 0 || !event_type.equals("MAKEDIR"))) break block22;
                         boolean criteria_met = false;
+                        Properties config = new Properties();
+                        config.put("event", event);
+                        config.put("event_type", event_type);
+                        if (theSession != null) {
+                            config.put("theSession", theSession);
+                        }
+                        config.put("update_tracker", "true");
+                        config.put("id", id);
                         if (fileItem1 != null) {
-                            fileItem1.put("event_type", event_type);
+                            config.put("fileItem1", fileItem1);
                         }
                         if (fileItem2 != null) {
-                            fileItem2.put("event_type", event_type);
+                            config.put("fileItem2", fileItem2);
                         }
-                        if (event.getProperty("event_always_cb", "").equals("true")) {
-                            criteria_met = true;
-                        } else if (event.getProperty("event_if_list", "").equals("(upload)") && event_type.equals("UPLOAD")) {
-                            criteria_met = true;
-                        } else if (event.getProperty("event_if_list", "").equals("(download)") && event_type.equals("DOWNLOAD")) {
-                            criteria_met = true;
-                        } else if (event.getProperty("event_if_list", "").equals("(pre_download)") && event_type.equals("PRE_DOWNLOAD")) {
-                            criteria_met = true;
-                        } else if (event.getProperty("event_if_list", "").equals("(real_url)") && (event_type.equals("UPLOAD") || event_type.equals("DOWNLOAD") || event_type.equals("DELETE") || event_type.equals("RENAME") || event_type.equals("MAKEDIR"))) {
-                            String url = ServerStatus.thisObj.change_vars_to_values(event.getProperty("event_dir_data", ""), theSession);
-                            String url2 = fileItem1.getProperty("url", "");
-                            String url3 = url;
-                            if (url2.toUpperCase().startsWith("FILE:/") && !url2.toUpperCase().startsWith("FILE://")) {
-                                url2 = "file://" + url2.substring("file:/".length());
-                            }
-                            if (url3.toUpperCase().startsWith("FILE:/") && !url3.toUpperCase().startsWith("FILE://")) {
-                                url3 = "file://" + url3.substring("file:/".length());
-                            }
-                            if (url.indexOf("*") < 0 && url.indexOf("?") < 0) {
-                                if (url2.toUpperCase().startsWith(url3.toUpperCase())) {
-                                    criteria_met = true;
-                                }
-                            } else if (Common.do_search(url3.toUpperCase(), url2.toUpperCase(), false, 0)) {
-                                criteria_met = true;
-                            }
-                            if (ServerStatus.siIG("enterprise_level") <= 0 && criteria_met) {
-                                Log.log("EVENT", 0, "Enterprise license is required for URL matching on events.  Event has been ignored.");
-                                criteria_met = false;
-                            }
-                            if (criteria_met) {
-                                Log.log("EVENT", 0, "Matched event url:" + fileItem1.getProperty("url", "") + "   starts with:" + url);
-                            }
-                        } else if (event.getProperty("event_if_list", "").equals("(upload_dir)") && (event_type.equals("UPLOAD") || event_type.equals("RENAME") || event_type.equals("DELETE"))) {
-                            path = event.getProperty("event_dir_data", "");
-                            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
-                            String path2 = fileItem1.getProperty("the_command_data");
-                            if (path.indexOf("*") < 0 && path.indexOf("?") < 0) {
-                                String path3 = path2;
-                                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
-                                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
-                                }
-                                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
-                                    if (event_type.equals("RENAME") || event_type.equals("DELETE")) {
-                                        this.updateTracker(id, event_type, event, fileItem1, fileItem2, theSession);
-                                        break;
-                                    }
-                                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
-                                    criteria_met = true;
-                                }
-                            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
-                                if (event_type.equals("RENAME") || event_type.equals("DELETE")) {
-                                    this.updateTracker(id, event_type, event, fileItem1, fileItem2, theSession);
-                                } else {
-                                    criteria_met = true;
-                                }
-                            }
-                        } else if (event.getProperty("event_if_list", "").equals("(download_dir)") && (event_type.equals("DOWNLOAD") || event_type.equals("RENAME"))) {
-                            path = event.getProperty("event_dir_data", "");
-                            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
-                            String path2 = fileItem1.getProperty("the_command_data");
-                            if (path.indexOf("*") < 0 && path.indexOf("?") < 0) {
-                                String path3 = path2;
-                                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
-                                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
-                                }
-                                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
-                                    if (event_type.equals("RENAME")) {
-                                        this.updateTracker(id, event_type, event, fileItem1, fileItem2, theSession);
-                                        break;
-                                    }
-                                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
-                                    criteria_met = true;
-                                }
-                            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
-                                if (event_type.equals("RENAME")) {
-                                    this.updateTracker(id, event_type, event, fileItem1, fileItem2, theSession);
-                                } else {
-                                    criteria_met = true;
-                                }
-                            }
-                        } else if (event.getProperty("event_if_list", "").equals("(delete_dir)") && event_type.equals("DELETE")) {
-                            path = event.getProperty("event_dir_data", "");
-                            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
-                            String path2 = fileItem1.getProperty("the_command_data");
-                            if (path.indexOf("*") < 0 && path.indexOf("?") < 0) {
-                                String path3 = path2;
-                                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
-                                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
-                                }
-                                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
-                                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
-                                    criteria_met = true;
-                                }
-                            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
-                                criteria_met = true;
-                            }
-                        } else if (event.getProperty("event_if_list", "").equals("(rename_dir)") && event_type.equals("RENAME")) {
-                            path = event.getProperty("event_dir_data", "");
-                            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
-                            String path2 = fileItem1.getProperty("the_command_data");
-                            if (path.indexOf("*") < 0 && path.indexOf("?") < 0) {
-                                String path3 = path2;
-                                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
-                                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
-                                }
-                                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
-                                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
-                                    criteria_met = true;
-                                }
-                            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
-                                criteria_met = true;
-                            }
-                        } else if (event.getProperty("event_if_list", "").equals("(make_dir)") && event_type.equals("MAKEDIR")) {
-                            path = event.getProperty("event_dir_data", "");
-                            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
-                            String path2 = fileItem1.getProperty("the_command_data");
-                            if (path.indexOf("*") < 0 && path.indexOf("?") < 0) {
-                                String path3 = path2;
-                                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
-                                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
-                                }
-                                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
-                                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
-                                    criteria_met = true;
-                                }
-                            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
-                                criteria_met = true;
-                            }
+                        String criteria_result = "";
+                        try {
+                            criteria_result = this.checkCriteriaOfEvents(config);
                         }
-                        if (!criteria_met) break block76;
+                        catch (Exception e) {
+                            Log.log("EVENT", 1, e);
+                        }
+                        if (criteria_result.equals("")) break;
+                        if (criteria_result.equals("true")) {
+                            criteria_met = true;
+                        }
+                        Log.log("EVENT", 2, "Checking event info:criteria_met=" + criteria_met + ":" + event_type + ":" + VRL.safe(fileItem1));
+                        if (!criteria_met) break block22;
                         Log.log("EVENT", 2, new Exception("Event trigger stack"));
-                        if (!event.getProperty("event_now_cb", "").equals("true")) break block77;
+                        if (!event.getProperty("event_now_cb", "").equals("true")) break block23;
                         Log.log("EVENT", 2, "Event is set to run immediately, running it in 2 seconds...");
                         eventRun = new Properties();
                         eventRun.put("time", String.valueOf(System.currentTimeMillis()));
@@ -211,9 +105,9 @@ public class Events {
                         eventRun.put("event", event);
                         eventRun.put("id", id);
                         eventRun.put("event_type", event_type);
-                        if (fileItem1 == null) break block78;
+                        if (fileItem1 == null) break block24;
                         eventRun.put("fileItem", fileItem1);
-                        if (event_type.equals("SITE") && !fileItem1.getProperty("event_name").equals(event.getProperty("name", ""))) break block76;
+                        if (event_type.equals("SITE") && !fileItem1.getProperty("event_name").equals(event.getProperty("name", ""))) break block22;
                     }
                     Log.log("EVENT", 2, "Adding 2 second delayed event to the queue...");
                     this.eventRunQueue.addElement(eventRun);
@@ -222,7 +116,7 @@ public class Events {
                         eventRun.put("timeout", "0");
                         info = this.checkEventsNow();
                     }
-                    break block76;
+                    break block22;
                 }
                 eventRun = new Properties();
                 eventRun.put("time", String.valueOf(System.currentTimeMillis()));
@@ -614,11 +508,15 @@ public class Events {
     public Properties runEvent(final Properties event, final SessionCrush the_user, final Vector items, final boolean reverse, final String event_type) throws Exception {
         boolean async;
         Object object;
-        Log.log("EVENT", 2, "runEvent::" + event.getProperty("name"));
+        Log.log("EVENT", 2, "runEvent::" + event.getProperty("name", ""));
         Log.log("EVENT", 2, "runEvent:items size:" + items.size());
         Log.log("EVENT", 2, "runEvent:items:" + items);
         final Properties info = new Properties();
         info.put("event_status", "running");
+        info.put("event_name", event.getProperty("name", ""));
+        if (event_type != null) {
+            info.put("event_type", event_type);
+        }
         Thread t = new Thread(new Runnable(){
 
             /*
@@ -668,7 +566,22 @@ public class Events {
                         }
                         if (event.getProperty("event_action_list", "").indexOf("(reverse)") < 0 || !reverse) continue;
                         if (!ServerStatus.BG("v10_beta")) continue;
-                        Events.this.doReverseEvent(users, groupedItems, the_user, event_type);
+                        Properties event_types = new Properties();
+                        int x2 = 0;
+                        while (x2 < groupedItems.size()) {
+                            Properties item = (Properties)groupedItems.get(x2);
+                            if (!event_types.containsKey(item.getProperty("event_type", event_type))) {
+                                event_types.put(item.getProperty("event_type", event_type), new Vector());
+                            }
+                            Vector event_items = (Vector)event_types.get(item.getProperty("event_type", event_type));
+                            event_items.add(item);
+                            ++x2;
+                        }
+                        Enumeration<Object> event_types_keys = event_types.keys();
+                        while (event_types_keys.hasMoreElements()) {
+                            String reverse_event_type = event_types_keys.nextElement().toString();
+                            Events.this.doReverseEvent(users, (Vector)event_types.get(reverse_event_type), the_user, reverse_event_type);
+                        }
                     }
                 }
                 catch (Throwable throwable) {
@@ -749,12 +662,13 @@ public class Events {
                     // empty catch block
                 }
                 String lineData = "";
+                String user_time = ((SimpleDateFormat)ServerStatus.thisObj.logDateFormat.clone()).format(new Date());
                 int x = 0;
                 while (x < items.size()) {
                     Properties p = (Properties)items.elementAt(x);
                     String the_line = the_body_line;
                     the_line = this.replace_path_url_segments(p, the_line);
-                    the_line = crushftp.handlers.Common.replace_str(the_line, "%user_time%", p.getProperty("user_time", ""));
+                    the_line = crushftp.handlers.Common.replace_str(the_line, "%user_time%", user_time);
                     the_line = crushftp.handlers.Common.replace_str(the_line, "%the_file_path%", p.getProperty("the_file_path", ""));
                     the_line = crushftp.handlers.Common.replace_str(the_line, "%the_file_name%", p.getProperty("the_file_name", ""));
                     the_line = crushftp.handlers.Common.replace_str(the_line, "%the_file_name_2%", p.getProperty("the_file_name_2", ""));
@@ -910,12 +824,13 @@ public class Events {
             // empty catch block
         }
         String lineData = "";
+        String user_time = ((SimpleDateFormat)ServerStatus.thisObj.logDateFormat.clone()).format(new Date());
         int x = 0;
         while (x < items.size()) {
             Properties p = (Properties)items.elementAt(x);
             String the_line = s_line;
             the_line = this.replace_path_url_segments(p, the_line);
-            the_line = crushftp.handlers.Common.replace_str(the_line, "%user_time%", p.getProperty("user_time", ""));
+            the_line = crushftp.handlers.Common.replace_str(the_line, "%user_time%", user_time);
             the_line = crushftp.handlers.Common.replace_str(the_line, "%the_file_path%", p.getProperty("the_file_path", ""));
             the_line = crushftp.handlers.Common.replace_str(the_line, "%the_file_name%", p.getProperty("the_file_name", ""));
             the_line = crushftp.handlers.Common.replace_str(the_line, "%the_file_name_2%", p.getProperty("the_file_name_2", ""));
@@ -984,140 +899,157 @@ public class Events {
      */
     public Properties doEventPlugin(Properties info, Properties event, SessionCrush the_user, Vector items) {
         try {
-            Thread.currentThread().setName(String.valueOf(LOC.G("Event:PLUGIN")) + " " + event.getProperty("name"));
-            StackTraceElement[] ste = Thread.currentThread().getStackTrace();
-            String horizontal_thread = "";
-            int x = 0;
-            while (x < ste.length && x < 4) {
-                horizontal_thread = String.valueOf(horizontal_thread) + "|" + ste[x].getFileName() + ":" + ste[x].getMethodName() + ":" + ste[x].getLineNumber();
-                ++x;
-            }
-            Log.log("EVENT", 0, String.valueOf(LOC.G("Event:PLUGIN")) + " " + event.getProperty("name") + ":" + horizontal_thread);
-            if (info == null) {
-                info = new Properties();
-            }
-            info.put("action", "event");
-            info.put("server_settings", ServerStatus.server_settings);
-            info.put("event", event);
-            if (the_user != null) {
-                info.put("ServerSession", the_user);
-            }
-            if (the_user != null) {
-                info.put("ServerSessionObject", the_user);
-            }
-            if (the_user != null) {
-                info.put("user", the_user.user);
-            }
-            if (the_user != null) {
-                info.put("user_info", the_user.user_info);
-            }
-            info.put("items", items);
-            String pluginName = event.getProperty("event_plugin_list", "");
-            String subItem = "";
-            if (pluginName.indexOf(":") >= 0) {
-                subItem = pluginName.substring(pluginName.indexOf(":") + 1);
-                pluginName = pluginName.substring(0, pluginName.indexOf(":"));
-            }
-            Properties cachedPlugin = null;
-            Vector<Properties> cache = null;
-            if (pluginName.equalsIgnoreCase("Job")) {
-                event = (Properties)event.clone();
-                Vector jobs = JobScheduler.getJobList(false);
-                File job = null;
-                int x2 = 0;
-                while (job == null && x2 < jobs.size()) {
-                    File_S f = (File_S)jobs.elementAt(x2);
-                    String path = f.getAbsolutePath();
-                    if (crushftp.handlers.Common.machine_is_windows()) {
-                        path = Common.winPath(path);
+            Vector<Properties> cache;
+            Properties cachedPlugin;
+            String subItem;
+            String pluginName;
+            block41: {
+                block42: {
+                    Thread.currentThread().setName(String.valueOf(LOC.G("Event:PLUGIN")) + " " + event.getProperty("name"));
+                    StackTraceElement[] ste = Thread.currentThread().getStackTrace();
+                    String horizontal_thread = "";
+                    int x = 0;
+                    while (x < ste.length && x < 4) {
+                        horizontal_thread = String.valueOf(horizontal_thread) + "|" + ste[x].getFileName() + ":" + ste[x].getMethodName() + ":" + ste[x].getLineNumber();
+                        ++x;
                     }
-                    if (subItem.contains("/") && path.endsWith(subItem) || f.getName().equalsIgnoreCase(subItem)) {
-                        job = f;
+                    Log.log("EVENT", 0, String.valueOf(LOC.G("Event:PLUGIN")) + " " + event.getProperty("name") + ":" + horizontal_thread);
+                    if (info == null) {
+                        info = new Properties();
                     }
-                    ++x2;
-                }
-                Properties params = null;
-                int x3 = 0;
-                while (x3 < 30) {
-                    try {
-                        params = (Properties)crushftp.handlers.Common.readXMLObject(String.valueOf(job.getPath()) + "/job.XML");
-                        break;
+                    info.put("action", "event");
+                    info.put("server_settings", ServerStatus.server_settings);
+                    info.put("event", event);
+                    info.put("trigger_name", crushftp.handlers.Common.replace_str(event.getProperty("name", ""), ":", "_"));
+                    if (the_user != null) {
+                        info.put("ServerSession", the_user);
                     }
-                    catch (Exception path) {
-                        Thread.sleep(1000L);
-                        ++x3;
+                    if (the_user != null) {
+                        info.put("ServerSessionObject", the_user);
                     }
-                }
-                params.put("new_job_id", crushftp.handlers.Common.makeBoundary(20));
-                try {
-                    Cloneable cloneable;
-                    event.putAll((Map<?, ?>)params);
-                    event.put("event_plugin_list", params.getProperty("plugin", params.getProperty("event_plugin_list")));
-                    event.put("name", "ScheduledPluginEvent:" + params.getProperty("scheduleName"));
-                    boolean override = false;
-                    if (event.getProperty("async", "").equals("no")) {
-                        int loops = 0;
-                        while (loops++ < 600) {
-                            cloneable = AdminControls.runningSchedules;
-                            synchronized (cloneable) {
-                                if (AdminControls.runningSchedules.indexOf(params.getProperty("scheduleName")) < 0) {
-                                    override = true;
-                                    AdminControls.runningSchedules.addElement(params.getProperty("scheduleName"));
-                                    break;
+                    if (the_user != null && the_user.user != null) {
+                        info.put("user", the_user.user);
+                    }
+                    if (the_user != null && the_user.user_info != null) {
+                        info.put("user_info", the_user.user_info);
+                    }
+                    info.put("items", items);
+                    pluginName = event.getProperty("event_plugin_list", "");
+                    subItem = "";
+                    if (pluginName.indexOf(":") >= 0) {
+                        subItem = pluginName.substring(pluginName.indexOf(":") + 1);
+                        pluginName = pluginName.substring(0, pluginName.indexOf(":"));
+                    }
+                    cachedPlugin = null;
+                    cache = null;
+                    if (!pluginName.equalsIgnoreCase("Job")) break block42;
+                    event = (Properties)event.clone();
+                    Vector jobs = JobScheduler.getJobList(false);
+                    File job = null;
+                    int x2 = 0;
+                    while (job == null && x2 < jobs.size()) {
+                        block44: {
+                            File_S f;
+                            block43: {
+                                f = (File_S)jobs.elementAt(x2);
+                                String path = f.getAbsolutePath();
+                                if (crushftp.handlers.Common.machine_is_windows()) {
+                                    path = Common.winPath(path);
                                 }
+                                if (subItem.contains("/") && path.endsWith(subItem)) break block43;
+                                if (!f.getName().equalsIgnoreCase(subItem)) break block44;
+                                if (!f.getParentFile().getAbsolutePath().equals(new File_S(String.valueOf(ServerStatus.SG("jobs_location")) + "jobs/").getAbsolutePath())) break block44;
                             }
-                            Thread.sleep(1000L);
+                            job = f;
                         }
+                        ++x2;
                     }
-                    if (!event.getProperty("async", "").equalsIgnoreCase("no")) {
-                        override = true;
-                    }
-                    if (AdminControls.runningSchedules.indexOf(params.getProperty("scheduleName")) < 0 || override) {
+                    Properties params = null;
+                    int x3 = 0;
+                    while (x3 < 30) {
                         try {
-                            if (!override) {
-                                AdminControls.runningSchedules.addElement(params.getProperty("scheduleName"));
+                            params = (Properties)JobFilesHandler.readXMLObject(String.valueOf(job.getPath()) + "/job.XML");
+                            break;
+                        }
+                        catch (Exception path) {
+                            Thread.sleep(1000L);
+                            ++x3;
+                        }
+                    }
+                    params.put("new_job_id", crushftp.handlers.Common.makeBoundary(20));
+                    try {
+                        Cloneable cloneable;
+                        event.putAll((Map<?, ?>)params);
+                        event.put("event_plugin_list", params.getProperty("plugin", params.getProperty("event_plugin_list")));
+                        event.put("name", "ScheduledPluginEvent:" + params.getProperty("scheduleName"));
+                        boolean override = false;
+                        if (event.getProperty("async", "").equals("no")) {
+                            int loops = 0;
+                            while (loops++ < 600) {
+                                cloneable = AdminControls.runningSchedules;
+                                synchronized (cloneable) {
+                                    if (AdminControls.runningSchedules.indexOf(params.getProperty("scheduleName")) < 0) {
+                                        override = true;
+                                        AdminControls.runningSchedules.addElement(params.getProperty("scheduleName"));
+                                        break;
+                                    }
+                                }
+                                Thread.sleep(1000L);
                             }
-                            cloneable = ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
-                            return cloneable;
                         }
-                        finally {
-                            AdminControls.runningSchedules.remove(params.getProperty("scheduleName"));
+                        if (!event.getProperty("async", "").equalsIgnoreCase("no")) {
+                            override = true;
+                        }
+                        if (AdminControls.runningSchedules.indexOf(params.getProperty("scheduleName")) < 0 || override) {
+                            try {
+                                if (!override) {
+                                    AdminControls.runningSchedules.addElement(params.getProperty("scheduleName"));
+                                }
+                                cloneable = ServerStatus.thisObj.events6.doEventPlugin(info, event, null, items);
+                                return cloneable;
+                            }
+                            finally {
+                                AdminControls.runningSchedules.remove(params.getProperty("scheduleName"));
+                            }
+                        }
+                        break block41;
+                    }
+                    catch (Exception e) {
+                        Log.log("HTTP_SERVER", 1, e);
+                    }
+                    break block41;
+                }
+                if (pluginName.endsWith(" (User Defined)")) {
+                    pluginName = pluginName.substring(0, pluginName.indexOf(" (User Defined)"));
+                    Object thePlugin = null;
+                    cache = (Vector<Properties>)eventPluginCache.get(pluginName);
+                    Properties job = eventPluginCache;
+                    synchronized (job) {
+                        if (cache == null) {
+                            cache = new Vector<Properties>();
+                        }
+                        eventPluginCache.put(pluginName, cache);
+                        if (cache.size() > 0) {
+                            cachedPlugin = (Properties)cache.remove(0);
+                            thePlugin = cachedPlugin.get("plugin");
+                            subItem = cachedPlugin.getProperty("subItem");
+                            Properties defaultPrefs = (Properties)cachedPlugin.get("defaultPrefs");
+                            defaultPrefs = (Properties)Common.CLONE(defaultPrefs);
+                            defaultPrefs.putAll((Map<?, ?>)event);
+                            ServerStatus.thisObj.common_code.setPluginSettings(thePlugin, defaultPrefs);
                         }
                     }
-                }
-                catch (Exception e) {
-                    Log.log("HTTP_SERVER", 1, e);
-                }
-            } else if (pluginName.endsWith(" (User Defined)")) {
-                pluginName = pluginName.substring(0, pluginName.indexOf(" (User Defined)"));
-                Object thePlugin = null;
-                cache = (Vector<Properties>)eventPluginCache.get(pluginName);
-                Properties job = eventPluginCache;
-                synchronized (job) {
-                    if (cache == null) {
-                        cache = new Vector<Properties>();
-                    }
-                    eventPluginCache.put(pluginName, cache);
-                    if (cache.size() > 0) {
-                        cachedPlugin = (Properties)cache.remove(0);
-                        thePlugin = cachedPlugin.get("plugin");
-                        subItem = cachedPlugin.getProperty("subItem");
-                        Properties defaultPrefs = (Properties)cachedPlugin.get("defaultPrefs");
-                        defaultPrefs = (Properties)Common.CLONE(defaultPrefs);
+                    if (thePlugin == null) {
+                        subItem = crushftp.handlers.Common.makeBoundary(10);
+                        thePlugin = crushftp.handlers.Common.getPlugin(pluginName, new File_S(String.valueOf(System.getProperty("crushftp.plugins")) + "plugins/").toURI().toURL().toExternalForm(), subItem);
+                        Properties defaultPrefs = ServerStatus.thisObj.common_code.getPluginDefaultPrefs(pluginName, subItem);
+                        cachedPlugin = new Properties();
+                        cachedPlugin.put("plugin", thePlugin);
+                        cachedPlugin.put("defaultPrefs", Common.CLONE(defaultPrefs));
+                        cachedPlugin.put("subItem", subItem);
                         defaultPrefs.putAll((Map<?, ?>)event);
                         ServerStatus.thisObj.common_code.setPluginSettings(thePlugin, defaultPrefs);
                     }
-                }
-                if (thePlugin == null) {
-                    subItem = crushftp.handlers.Common.makeBoundary(10);
-                    thePlugin = crushftp.handlers.Common.getPlugin(pluginName, new File_S(String.valueOf(System.getProperty("crushftp.plugins")) + "plugins/").toURI().toURL().toExternalForm(), subItem);
-                    Properties defaultPrefs = ServerStatus.thisObj.common_code.getPluginDefaultPrefs(pluginName, subItem);
-                    cachedPlugin = new Properties();
-                    cachedPlugin.put("plugin", thePlugin);
-                    cachedPlugin.put("defaultPrefs", Common.CLONE(defaultPrefs));
-                    cachedPlugin.put("subItem", subItem);
-                    defaultPrefs.putAll((Map<?, ?>)event);
-                    ServerStatus.thisObj.common_code.setPluginSettings(thePlugin, defaultPrefs);
                 }
             }
             info.put("job_max_runtime_hours", ServerStatus.SG("job_max_runtime_hours"));
@@ -1146,6 +1078,9 @@ public class Events {
         if (test_url.toLowerCase().startsWith("file:/") && !test_url.toLowerCase().startsWith("file://")) {
             test_url = "file:/" + test_url.substring(test_url.indexOf(":") + 1);
         }
+        if (test_url.contains("%")) {
+            test_url = crushftp.handlers.Common.url_decode3(test_url);
+        }
         int x = users.size() - 1;
         while (x >= 0) {
             String username = users.elementAt(x).toString();
@@ -1172,7 +1107,8 @@ public class Events {
                         ++xx;
                     }
                     if (user_is_listening_for_reverse) {
-                        Properties virtual = UserTools.ut.getVirtualVFS(theSession.uiSG("listen_ip_port"), username);
+                        VFS vfs = UserTools.ut.get_full_VFS(theSession.uiSG("listen_ip_port"), username, user);
+                        Properties virtual = vfs.getCombinedVFS();
                         Enumeration<Object> keys = virtual.keys();
                         while (keys.hasMoreElements()) {
                             String key = keys.nextElement().toString();
@@ -1197,9 +1133,32 @@ public class Events {
                                     if (!partial_path.startsWith("/")) {
                                         partial_path = "/" + partial_path;
                                     }
-                                    fileItem2.put("path", partial_path);
-                                    fileItem2.put("the_file_path", partial_path);
-                                    modified_items_list.addElement(fileItem2);
+                                    Properties vfs_item = null;
+                                    try {
+                                        vfs_item = vfs.get_item(String.valueOf(key) + partial_path);
+                                    }
+                                    catch (Exception e) {
+                                        Log.log("EVENT", 1, e);
+                                    }
+                                    if (vfs_item != null) {
+                                        fileItem2.put("path", String.valueOf(vfs_item.getProperty("root_dir", "")) + vfs_item.getProperty("name", ""));
+                                        fileItem2.put("the_file_path", String.valueOf(vfs_item.getProperty("root_dir", "")) + vfs_item.getProperty("name", ""));
+                                    } else {
+                                        fileItem2.put("path", partial_path);
+                                        fileItem2.put("the_file_path", partial_path);
+                                    }
+                                    boolean contains = false;
+                                    int xxx = 0;
+                                    while (xxx < modified_items_list.size()) {
+                                        Properties item = (Properties)modified_items_list.get(xxx);
+                                        if (item.getProperty("url", "").equals(fileItem2.getProperty("url", "")) && item.getProperty("url_2", "").equals(fileItem2.getProperty("url_2", "")) && item.getProperty("event_type", "").equals(fileItem2.getProperty("event_type", "")) && item.getProperty("the_command", "").equals(fileItem2.getProperty("the_command", ""))) {
+                                            contains = true;
+                                        }
+                                        ++xxx;
+                                    }
+                                    if (!contains) {
+                                        modified_items_list.addElement(fileItem2);
+                                    }
                                 }
                                 ++xx2;
                             }
@@ -1231,18 +1190,48 @@ public class Events {
                     while (keys.hasMoreElements()) {
                         Vector events;
                         String username = keys.nextElement().toString();
+                        if (ServerStatus.BG("reverse_events_skip_sender") && the_user != null && the_user.user != null && username.equals(the_user.user.getProperty("user_name", ""))) continue;
                         Vector modified_items_list = (Vector)users_with_access.get(username);
                         Properties user = UserTools.ut.getUser(the_user.uiSG("listen_ip_port"), username, true);
                         if (user == null || (events = (Vector)user.get("events")) == null) continue;
                         int xx = 0;
                         while (xx < events.size()) {
-                            Properties event_tmp = (Properties)events.elementAt(xx);
+                            Properties event_tmp = (Properties)Common.CLONE(events.elementAt(xx));
                             try {
                                 if (event_tmp.getProperty("event_user_action_list", "").indexOf("(r_upload)") >= 0 && event_type.equals("UPLOAD") || event_tmp.getProperty("event_user_action_list", "").indexOf("(r_download)") >= 0 && event_type.equals("DOWNLOAD") || event_tmp.getProperty("event_user_action_list", "").indexOf("(r_delete)") >= 0 && event_type.equals("DELETE") || event_tmp.getProperty("event_user_action_list", "").indexOf("(r_rename)") >= 0 && event_type.equals("RENAME") || event_tmp.getProperty("event_user_action_list", "").indexOf("(r_makedir)") >= 0 && event_type.equals("MAKEDIR")) {
                                     SessionCrush tempSession = new SessionCrush(null, 1, "127.0.0.1", 0, "0.0.0.0", the_user.uiSG("listen_ip_port"), the_user.server_item);
                                     tempSession.verify_user(username, crushftp.handlers.Common.makeBoundary(), true, false);
+                                    if (tempSession.user_info != null && the_user.user != null) {
+                                        tempSession.user_info.put("reverse_event_trigger_username", the_user.user.getProperty("username", ""));
+                                        tempSession.user_info.put("reverse_event_trigger_user_name", the_user.user.getProperty("user_name", ""));
+                                    }
                                     if (tempSession.user != null) {
-                                        Events.this.runEvent(event_tmp, tempSession, modified_items_list, false, event_type);
+                                        Properties config = new Properties();
+                                        config.put("event", event_tmp);
+                                        config.put("event_type", event_type);
+                                        config.put("theSession", tempSession);
+                                        config.put("update_tracker", "false");
+                                        Vector<Properties> temp_items = new Vector<Properties>();
+                                        int xxx = 0;
+                                        while (xxx < modified_items_list.size()) {
+                                            Properties fileItem1 = (Properties)modified_items_list.get(xxx);
+                                            config.put("fileItem1", fileItem1);
+                                            if (!event_tmp.getProperty("event_if_list", "").equals("") && !event_tmp.getProperty("event_dir_data", "").equals("")) {
+                                                String event_if_list = "(" + event_type.toLowerCase() + "_dir)";
+                                                event_if_list = crushftp.handlers.Common.replace_str(event_if_list, "makedir", "make");
+                                                event_tmp.put("event_if_list", event_if_list);
+                                                if (event_tmp.getProperty("name", "").startsWith("subscribe_") && event_tmp.getProperty("event_always_cb", "").equals("true")) {
+                                                    event_tmp.put("event_always_cb", "false");
+                                                }
+                                            }
+                                            if (Events.this.checkCriteriaOfEvents(config).equals("true")) {
+                                                temp_items.add(fileItem1);
+                                            }
+                                            ++xxx;
+                                        }
+                                        if (temp_items.size() > 0) {
+                                            Events.this.runEvent(event_tmp, tempSession, modified_items_list, false, event_type);
+                                        }
                                     }
                                 }
                             }
@@ -1258,6 +1247,161 @@ public class Events {
         catch (IOException iOException) {
             // empty catch block
         }
+    }
+
+    public String checkCriteriaOfEvents(Properties config) {
+        Properties event = (Properties)config.get("event");
+        String event_type = config.getProperty("event_type");
+        SessionCrush theSession = config.get("theSession") != null ? (SessionCrush)config.get("theSession") : null;
+        Properties fileItem1 = config.get("fileItem1") != null ? (Properties)config.get("fileItem1") : null;
+        Properties fileItem2 = config.get("fileItem2") != null ? (Properties)config.get("fileItem2") : null;
+        String id = config.getProperty("id", "");
+        boolean update_tracker = config.getProperty("update_tracker", "false").equals("true");
+        boolean criteria_met = false;
+        if (fileItem1 != null) {
+            fileItem1.put("event_type", event_type);
+        }
+        if (fileItem2 != null) {
+            fileItem2.put("event_type", event_type);
+        }
+        if (event.getProperty("event_always_cb", "").equals("true")) {
+            criteria_met = true;
+        } else if (event.getProperty("event_if_list", "").equals("(upload)") && event_type.equals("UPLOAD")) {
+            criteria_met = true;
+        } else if (event.getProperty("event_if_list", "").equals("(download)") && event_type.equals("DOWNLOAD")) {
+            criteria_met = true;
+        } else if (event.getProperty("event_if_list", "").equals("(pre_download)") && event_type.equals("PRE_DOWNLOAD")) {
+            criteria_met = true;
+        } else if (event.getProperty("event_if_list", "").equals("(real_url)") && (event_type.equals("UPLOAD") || event_type.equals("DOWNLOAD") || event_type.equals("DELETE") || event_type.equals("RENAME") || event_type.equals("MAKEDIR"))) {
+            String url = ServerStatus.thisObj.change_vars_to_values(event.getProperty("event_dir_data", ""), theSession);
+            String url2 = fileItem1.getProperty("url", "");
+            String url3 = url;
+            if (url2.toUpperCase().startsWith("FILE:/") && !url2.toUpperCase().startsWith("FILE://")) {
+                url2 = "file://" + url2.substring("file:/".length());
+            }
+            if (url3.toUpperCase().startsWith("FILE:/") && !url3.toUpperCase().startsWith("FILE://")) {
+                url3 = "file://" + url3.substring("file:/".length());
+            }
+            if (!url.startsWith("REGEX:") && url.indexOf("*") < 0 && url.indexOf("?") < 0) {
+                if (url2.toUpperCase().startsWith(url3.toUpperCase())) {
+                    criteria_met = true;
+                }
+            } else if (Common.do_search(url3.toUpperCase(), url2.toUpperCase(), false, 0)) {
+                criteria_met = true;
+            }
+            if (ServerStatus.siIG("enterprise_level") <= 0 && criteria_met) {
+                Log.log("EVENT", 0, "Enterprise license is required for URL matching on events.  Event has been ignored.");
+                criteria_met = false;
+            }
+            if (criteria_met) {
+                Log.log("EVENT", 0, "Matched event url:" + fileItem1.getProperty("url", "") + "   starts with:" + url);
+            }
+        } else if (event.getProperty("event_if_list", "").contains("(upload_dir)") && (event_type.equals("UPLOAD") || event_type.equals("RENAME") || event_type.equals("DELETE"))) {
+            String path = event.getProperty("event_dir_data", "");
+            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
+            String path2 = fileItem1.getProperty("the_command_data");
+            if (!path.startsWith("REGEX:") && path.indexOf("*") < 0 && path.indexOf("?") < 0) {
+                String path3 = path2;
+                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
+                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
+                }
+                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
+                    if (event_type.equals("RENAME") || event_type.equals("DELETE")) {
+                        if (update_tracker) {
+                            this.updateTracker(id, event_type, event, fileItem1, fileItem2, theSession);
+                        }
+                        return "";
+                    }
+                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
+                    criteria_met = true;
+                }
+            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
+                if (event_type.equals("RENAME") || event_type.equals("DELETE")) {
+                    if (update_tracker) {
+                        this.updateTracker(id, event_type, event, fileItem1, fileItem2, theSession);
+                    }
+                } else {
+                    criteria_met = true;
+                }
+            }
+        } else if (event.getProperty("event_if_list", "").contains("(download_dir)") && (event_type.equals("DOWNLOAD") || event_type.equals("RENAME"))) {
+            String path = event.getProperty("event_dir_data", "");
+            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
+            String path2 = fileItem1.getProperty("the_command_data");
+            if (!path.startsWith("REGEX:") && path.indexOf("*") < 0 && path.indexOf("?") < 0) {
+                String path3 = path2;
+                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
+                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
+                }
+                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
+                    if (event_type.equals("RENAME")) {
+                        if (update_tracker) {
+                            this.updateTracker(id, event_type, event, fileItem1, fileItem2, theSession);
+                        }
+                        return "";
+                    }
+                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
+                    criteria_met = true;
+                }
+            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
+                if (event_type.equals("RENAME")) {
+                    if (update_tracker) {
+                        this.updateTracker(id, event_type, event, fileItem1, fileItem2, theSession);
+                    }
+                } else {
+                    criteria_met = true;
+                }
+            }
+        } else if (event.getProperty("event_if_list", "").contains("(delete_dir)") && event_type.equals("DELETE")) {
+            String path = event.getProperty("event_dir_data", "");
+            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
+            String path2 = fileItem1.getProperty("the_command_data");
+            if (!path.startsWith("REGEX:") && path.indexOf("*") < 0 && path.indexOf("?") < 0) {
+                String path3 = path2;
+                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
+                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
+                }
+                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
+                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
+                    criteria_met = true;
+                }
+            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
+                criteria_met = true;
+            }
+        } else if (event.getProperty("event_if_list", "").contains("(rename_dir)") && event_type.equals("RENAME")) {
+            String path = event.getProperty("event_dir_data", "");
+            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
+            String path2 = fileItem1.getProperty("the_command_data");
+            if (!path.startsWith("REGEX:") && path.indexOf("*") < 0 && path.indexOf("?") < 0) {
+                String path3 = path2;
+                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
+                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
+                }
+                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
+                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
+                    criteria_met = true;
+                }
+            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
+                criteria_met = true;
+            }
+        } else if (event.getProperty("event_if_list", "").contains("(make_dir)") && event_type.equals("MAKEDIR")) {
+            String path = event.getProperty("event_dir_data", "");
+            path = ServerStatus.thisObj.change_vars_to_values(path, theSession);
+            String path2 = fileItem1.getProperty("the_command_data");
+            if (!path.startsWith("REGEX:") && path.indexOf("*") < 0 && path.indexOf("?") < 0) {
+                String path3 = path2;
+                if (theSession != null && path3.startsWith(theSession.SG("root_dir"))) {
+                    path3 = path3.substring(theSession.SG("root_dir").length() - 1);
+                }
+                if (path2.toUpperCase().startsWith(path.toUpperCase()) || path3.toUpperCase().startsWith(path.toUpperCase())) {
+                    Log.log("EVENT", 0, "Matched event dir:" + path2 + "   starts with:" + path);
+                    criteria_met = true;
+                }
+            } else if (Common.do_search(path.toUpperCase(), path2.toUpperCase(), false, 0)) {
+                criteria_met = true;
+            }
+        }
+        return String.valueOf(criteria_met);
     }
 }
 

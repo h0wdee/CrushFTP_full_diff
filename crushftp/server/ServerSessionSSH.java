@@ -2,7 +2,6 @@
  * Decompiled with CFR 0.152.
  * 
  * Could not load the following classes:
- *  com.maverick.events.Event
  *  com.maverick.sshd.Connection
  *  com.maverick.sshd.SessionChannel
  *  com.maverick.sshd.SftpFile
@@ -12,8 +11,6 @@
  *  com.maverick.sshd.platform.InvalidHandleException
  *  com.maverick.sshd.platform.PermissionDeniedException
  *  com.maverick.sshd.platform.UnsupportedFileOperationException
- *  com.maverick.util.UnsignedInteger32
- *  com.maverick.util.UnsignedInteger64
  */
 package crushftp.server;
 
@@ -74,17 +71,43 @@ implements FileSystem {
     public transient Object statLock = new Object();
     public transient Object closeFileLock = new Object();
     private boolean log_dir_listings = false;
+    public static Properties cross_session_lookup = new Properties();
+    public String session_id = null;
+    public final String RANDOM_CLASS_UID = Common.makeBoundary(20);
 
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
     public void init(byte[] sessionid, SessionChannel session, SshContext context, String protocolInUse) throws IOException {
+        this.session_id = session.getConnection().getTransport().getConnection().getSessionId();
         this.thisSession = (SessionCrush)sessionLookup.get(sessionid);
         this.thisSession.active();
+        Properties properties = cross_session_lookup;
+        synchronized (properties) {
+            Vector<String> connected_channels = (Vector<String>)cross_session_lookup.get(this.session_id);
+            if (connected_channels == null) {
+                connected_channels = new Vector<String>();
+                cross_session_lookup.put(this.session_id, connected_channels);
+            }
+            connected_channels.addElement(this.RANDOM_CLASS_UID);
+        }
+        try {
+            context.setSFTPCharsetEncoding(this.thisSession.SG("char_encoding"));
+        }
+        catch (Exception e) {
+            Log.log("SSH_SERVER", 1, e);
+        }
         int minutes = this.thisSession.IG("max_idle_time");
         if (minutes == 0) {
             minutes = 9999;
         }
         this.used_protocol = protocolInUse.trim();
         this.thisSession.thread_killer_item = new IdleMonitor(this.thisSession, new Date().getTime(), minutes, null);
-        this.thisSession.add_log_formatted("CONNECT " + session.getConnection().getTransport().getRemoteIdentification(), "USER");
+        String remote_client_type = session.getConnection().getTransport().getRemoteIdentification();
+        this.thisSession.add_log_formatted("CONNECT " + remote_client_type, "USER");
+        if (ServerStatus.SG("blocked_ssh_clients").toUpperCase().indexOf(remote_client_type.toUpperCase()) >= 0) {
+            throw new IOException("SSH client type blocked:" + remote_client_type);
+        }
         if (ServerStatus.BG("synchronized_sftp")) {
             this.closeFileLock = this.statLock;
         }
@@ -92,18 +115,44 @@ implements FileSystem {
         this.thisSession.logLogin(true, "");
     }
 
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
     public void init(Connection conn, String protocolInUse) throws IOException {
-        this.thisSession = (SessionCrush)sessionLookup.get(conn.getSessionId());
+        this.session_id = conn.getSessionId();
+        this.thisSession = (SessionCrush)sessionLookup.get(this.session_id);
         this.thisSession.active();
+        Properties properties = cross_session_lookup;
+        synchronized (properties) {
+            Vector<String> connected_channels = (Vector<String>)cross_session_lookup.get(this.session_id);
+            if (connected_channels == null) {
+                connected_channels = new Vector<String>();
+                cross_session_lookup.put(this.session_id, connected_channels);
+            }
+            connected_channels.addElement(this.RANDOM_CLASS_UID);
+        }
+        try {
+            conn.getContext().setSFTPCharsetEncoding(this.thisSession.SG("char_encoding"));
+        }
+        catch (Exception e) {
+            Log.log("SSH_SERVER", 1, e);
+        }
         int minutes = this.thisSession.IG("max_idle_time");
         if (minutes == 0) {
             minutes = 9999;
         }
         this.thisSession.thread_killer_item = new IdleMonitor(this.thisSession, new Date().getTime(), minutes, null);
         this.used_protocol = protocolInUse;
-        this.thisSession.add_log_formatted("CONNECT " + conn.getRemoteIdentification() + " CipherCS:" + conn.getCipherCS() + " CipherSC:" + conn.getCipherSC(), "USER");
+        String remote_client_type = conn.getRemoteIdentification();
+        this.thisSession.add_log_formatted("CONNECT " + remote_client_type + " Cipher:" + conn.getCipherCS() + "/" + conn.getCipherSC() + " KEX:" + conn.getKeyEchangeInUse() + " MAC:" + conn.getMacCS() + "/" + conn.getMacSC(), "USER");
+        if (ServerStatus.SG("blocked_ssh_clients").toUpperCase().indexOf(remote_client_type.toUpperCase()) >= 0) {
+            throw new IOException("SSH client type blocked:" + remote_client_type);
+        }
         this.thisSession.uiPUT("user_cipher1", conn.getCipherCS());
         this.thisSession.uiPUT("user_cipher2", conn.getCipherSC());
+        this.thisSession.uiPUT("user_mac1", conn.getMacCS());
+        this.thisSession.uiPUT("user_mac2", conn.getMacSC());
+        this.thisSession.uiPUT("user_kex1", conn.getKeyEchangeInUse());
         if (ServerStatus.BG("synchronized_sftp")) {
             this.closeFileLock = this.statLock;
         }
@@ -133,64 +182,77 @@ implements FileSystem {
 
     public boolean makeDirectory(String path, SftpFileAttributes folderAttributes) throws PermissionDeniedException, FileNotFoundException, IOException {
         try {
-            this.thisSession.stop_idle_timer();
-            this.thisSession.start_idle_timer();
-        }
-        catch (Exception e) {
-            Log.log("SSH_SERVER", 1, e);
-        }
-        this.delay();
-        path = this.fixPath(path);
-        this.thisSession.add_log_formatted("makeDirectory " + path, "MKD");
-        Log.log("SSH_SERVER", 2, "SFTP:MakeDirectory:" + path);
-        this.thisSession.uiPUT("the_command", "MKD");
-        this.thisSession.uiPUT("the_command_data", path);
-        this.thisSession.runPlugin("beforeCommand", null);
-        String result = "error";
-        try {
-            result = this.thisSession.do_MKD(false, path);
-            Properties p = new Properties();
-            p.put("command_code", "0");
-            p.put("command_data", result);
-            this.thisSession.runPlugin("afterCommand", p);
-            Log.log("SSH_SERVER", 2, "SFTP:MakeDirectory:" + result);
-            if (result.equals("%MKD-exists%")) {
-                if (!ServerStatus.BG("sftp_mkdir_exist_silent")) {
-                    throw new IOException("%MKD-exists%");
+            this.Tin();
+            try {
+                this.thisSession.stop_idle_timer();
+                this.thisSession.start_idle_timer();
+            }
+            catch (Exception e) {
+                Log.log("SSH_SERVER", 1, e);
+            }
+            this.delay();
+            path = this.fixPath(path);
+            this.thisSession.add_log_formatted("makeDirectory " + path, "MKD");
+            Log.log("SSH_SERVER", 2, "SFTP:MakeDirectory:" + path);
+            this.thisSession.uiPUT("the_command", "MKD");
+            this.thisSession.uiPUT("the_command_data", path);
+            this.thisSession.runPlugin("beforeCommand", null);
+            String result = "error";
+            try {
+                result = this.thisSession.do_MKD(true, path);
+                Properties p = new Properties();
+                p.put("command_code", "0");
+                p.put("command_data", result);
+                this.thisSession.runPlugin("afterCommand", p);
+                Log.log("SSH_SERVER", 2, "SFTP:MakeDirectory:" + result);
+                if (result.equals("%MKD-exists%")) {
+                    if (!ServerStatus.BG("sftp_mkdir_exist_silent")) {
+                        throw new IOException("%MKD-exists%");
+                    }
+                }
+                if (result.equals("%MKD-bad%")) {
+                    throw new PermissionDeniedException("%MKD-bad%");
                 }
             }
-            if (result.equals("%MKD-bad%")) {
-                throw new PermissionDeniedException("%MKD-bad%");
+            catch (Exception e) {
+                this.thisSession.doErrorEvent(e);
+                throw new IOException(e.getMessage());
             }
+            return true;
         }
-        catch (Exception e) {
-            this.thisSession.doErrorEvent(e);
-            throw new IOException(e.getMessage());
+        finally {
+            this.Tout();
         }
-        return true;
     }
 
     public SftpFileAttributes getFileAttributes(byte[] handle) throws IOException, InvalidHandleException {
-        String path_handle = new String(handle, "UTF8");
-        String path = path_handle.substring(0, path_handle.lastIndexOf(":"));
-        path = this.fixPath(path);
-        this.thisSession.add_log_formatted("getFileAttributes " + path, "MDTM");
-        Log.log("SSH_SERVER", 2, "SFTP:getFileAttributes1:" + path);
-        this.thisSession.uiPUT("the_command_data", path);
-        this.thisSession.uiPUT("the_command", "FILE_ATTRIBUTE");
-        this.thisSession.runPlugin("beforeCommand", null);
-        SftpFileAttributes attrs = null;
         try {
-            attrs = this.getFileAttributes(path_handle.substring(0, path_handle.lastIndexOf(":")));
-            Properties p = new Properties();
-            p.put("command_code", "0");
-            p.put("command_data", "" + attrs);
-            this.thisSession.runPlugin("afterCommand", p);
+            this.Tin();
+            String path_handle = new String(handle, "UTF8");
+            String path = path_handle.substring(0, path_handle.lastIndexOf(":"));
+            path = this.fixPath(path);
+            this.thisSession.add_log_formatted("getFileAttributes " + path, "MDTM");
+            Log.log("SSH_SERVER", 2, "SFTP:getFileAttributes1:" + path);
+            this.thisSession.uiPUT("the_command_data", path);
+            this.thisSession.uiPUT("the_command", "FILE_ATTRIBUTE");
+            this.thisSession.runPlugin("beforeCommand", null);
+            SftpFileAttributes attrs = null;
+            try {
+                attrs = this.getFileAttributes(path_handle.substring(0, path_handle.lastIndexOf(":")));
+                Properties p = new Properties();
+                p.put("command_code", "0");
+                p.put("command_data", "" + attrs);
+                this.thisSession.runPlugin("afterCommand", p);
+            }
+            catch (FileNotFoundException e) {
+                throw new IOException(e.getMessage());
+            }
+            SftpFileAttributes sftpFileAttributes = attrs;
+            return sftpFileAttributes;
         }
-        catch (FileNotFoundException e) {
-            throw new IOException(e.getMessage());
+        finally {
+            this.Tout();
         }
-        return attrs;
     }
 
     /*
@@ -211,144 +273,171 @@ implements FileSystem {
                 if (item != null) break block11;
                 Object object = this.statLock;
                 synchronized (object) {
-                    if (item == null) {
-                        item = this.thisSession.uVFS.get_item(path);
-                        if (item == null && !ServerStatus.BG("jailproxy")) {
-                            item = this.thisSession.uVFS.get_item_parent(path);
-                        }
-                        if (item != null) {
-                            this.quickLookupDirItem.put(path, item);
-                        }
+                    if (item == null && (item = this.thisSession.uVFS.get_item(path)) != null) {
+                        this.quickLookupDirItem.put(path, item);
                     }
                 }
             }
             catch (Exception e) {
-                e.printStackTrace();
+                Log.log("SSH_SERVER", 1, e);
             }
         }
-        if (ServerStatus.IG("log_debug_level") >= 2 && item != null) {
-            Log.log("SSH_SERVER", 2, "SFTP:getFileAttributes2:" + VRL.safe(item));
+        try {
+            if (ServerStatus.IG("log_debug_level") >= 2 && item != null) {
+                Log.log("SSH_SERVER", 2, "SFTP:getFileAttributes2:" + VRL.safe(item));
+            }
+            if (path.indexOf(":filetree") >= 0 && ServerStatus.BG("allow_filetree")) {
+                SftpFileAttributes attrs = new SftpFileAttributes("rwxrwxrwx");
+                return attrs;
+            }
+            if (item == null) {
+                throw new FileNotFoundException(LOC.G("File not found3:" + path));
+            }
+            SftpFileAttributes sfa = this.getFileAttributes(item);
+            Properties p = new Properties();
+            p.put("command_code", "0");
+            p.put("command_data", "" + sfa);
+            this.thisSession.runPlugin("afterCommand", p);
+            return sfa;
         }
-        if (path.indexOf(":filetree") >= 0 && ServerStatus.BG("allow_filetree")) {
-            SftpFileAttributes attrs = new SftpFileAttributes("rwxrwxrwx");
-            return attrs;
+        catch (Exception e) {
+            Log.log("SSH_SERVER", 1, e);
+            throw e;
         }
-        if (item == null) {
-            throw new FileNotFoundException(LOC.G("File not found3:" + path));
-        }
-        SftpFileAttributes sfa = this.getFileAttributes(item);
-        Properties p = new Properties();
-        p.put("command_code", "0");
-        p.put("command_data", "" + sfa);
-        this.thisSession.runPlugin("afterCommand", p);
-        return sfa;
     }
 
     public SftpFileAttributes getFileAttributes(Properties item) {
         GregorianCalendar cal = new GregorianCalendar();
         SftpFileAttributes attrs = new SftpFileAttributes("rw-rw-rw-");
-        attrs.setPermissions(item.getProperty("permissions", "-----------").substring(1, 10));
-        attrs.setPermissions(new UnsignedInteger32(attrs.getPermissions().longValue() | (long)(item.getProperty("type").equals("DIR") ? 16384 : 32768)));
-        if (Long.parseLong(item.getProperty("size", "0")) < 0L) {
-            item.put("size", "0");
+        try {
+            attrs.setPermissions(item.getProperty("permissions", "-----------").substring(1, 10));
+            attrs.setPermissions(new UnsignedInteger32(attrs.getPermissions().longValue() | (long)(item.getProperty("type").equals("DIR") ? 16384 : 32768)));
+            if (Long.parseLong(item.getProperty("size", "0")) < 0L) {
+                item.put("size", "0");
+            }
+            attrs.setSize(new UnsignedInteger64(item.getProperty("size", "0")));
+            long lastMod = Long.parseLong(item.getProperty("modified", String.valueOf(System.currentTimeMillis())));
+            if (this.thisSession.DG("timezone_offset") != 0.0) {
+                Date d = new Date(lastMod);
+                cal.setTime(d);
+                cal.setTimeInMillis((long)((double)cal.getTimeInMillis() + this.thisSession.DG("timezone_offset") * 1000.0 * 60.0 * 60.0));
+                lastMod = cal.getTime().getTime();
+            }
+            if (lastMod <= 0L) {
+                lastMod = new Date().getTime();
+            }
+            UnsignedInteger64 t = null;
+            t = ServerStatus.BG("sftp_round_seconds_up") ? new UnsignedInteger64(new BigDecimal(lastMod).divide(new BigDecimal(1000), 4).toBigInteger()) : new UnsignedInteger64(lastMod / 1000L);
+            attrs.setTimes(t, t);
         }
-        attrs.setSize(new UnsignedInteger64(item.getProperty("size", "0")));
-        long lastMod = Long.parseLong(item.getProperty("modified", String.valueOf(System.currentTimeMillis())));
-        if (this.thisSession.DG("timezone_offset") != 0.0) {
-            Date d = new Date(lastMod);
-            cal.setTime(d);
-            cal.setTimeInMillis((long)((double)cal.getTimeInMillis() + this.thisSession.DG("timezone_offset") * 1000.0 * 60.0 * 60.0));
-            lastMod = cal.getTime().getTime();
+        catch (Exception e) {
+            Log.log("SSH_SERVER", 1, e);
+            throw e;
         }
-        if (lastMod <= 0L) {
-            lastMod = new Date().getTime();
-        }
-        UnsignedInteger64 t = null;
-        t = ServerStatus.BG("sftp_round_seconds_up") ? new UnsignedInteger64(new BigDecimal(lastMod).divide(new BigDecimal(1000), 4).toBigInteger()) : new UnsignedInteger64(lastMod / 1000L);
-        attrs.setTimes(t, t);
         return attrs;
     }
 
     public byte[] openDirectory(String path) throws PermissionDeniedException, FileNotFoundException, IOException {
-        this.quickLookupDirItem.clear();
-        this.delay();
-        if (!path.endsWith("/")) {
-            path = String.valueOf(path) + "/";
-        }
-        path = this.fixPath(path);
-        this.thisSession.add_log_formatted("CWD " + path, "CWD");
-        Log.log("SSH_SERVER", 2, "SFTP:openDirectory:" + path);
-        if (!path.startsWith("/")) {
-            path = "/" + path;
-        }
-        this.thisSession.uiPUT("the_command_data", path);
-        this.thisSession.uiPUT("the_command", "CWD");
-        this.thisSession.runPlugin("beforeCommand", null);
-        Properties item = null;
         try {
-            item = this.thisSession.uVFS.get_fake_item(path, "DIR");
-            if (item == null && !ServerStatus.BG("jailproxy")) {
-                item = this.thisSession.uVFS.get_item_parent(path);
+            this.Tin();
+            this.quickLookupDirItem.clear();
+            this.delay();
+            if (!path.endsWith("/")) {
+                path = String.valueOf(path) + "/";
             }
-        }
-        catch (Exception e) {
-            Log.log("SSH_SERVER", 2, e);
-        }
-        if (ServerStatus.IG("log_debug_level") >= 2) {
-            Log.log("SSH_SERVER", 2, "SFTP:openDirectory:" + VRL.safe(item));
-        }
-        if (item == null) {
-            throw new FileNotFoundException(LOC.G("File not found1:" + path));
-        }
-        if (item.getProperty("type").equals("FILE")) {
-            this.thisSession.add_log_formatted("550 CWD " + path + ":" + LOC.G("Item is a file!"), "CWD");
-            throw new IOException(LOC.G("Item is a file!"));
-        }
-        String result = "";
-        try {
+            path = this.fixPath(path);
+            this.thisSession.add_log_formatted("CWD " + path, "CWD");
+            Log.log("SSH_SERVER", 2, "SFTP:openDirectory:" + path);
+            if (!path.startsWith("/")) {
+                path = "/" + path;
+            }
+            this.thisSession.uiPUT("the_command_data", path);
+            this.thisSession.uiPUT("the_command", "CWD");
+            this.thisSession.runPlugin("beforeCommand", null);
+            Properties item = null;
             try {
-                result = this.thisSession.do_CWD();
+                item = this.thisSession.uVFS.get_fake_item(path, "DIR");
+                if (item == null && !ServerStatus.BG("jailproxy")) {
+                    item = this.thisSession.uVFS.get_item_parent(path);
+                }
             }
             catch (Exception e) {
-                this.thisSession.add_log_formatted("550 CWD " + path + ":" + e.getMessage(), "CWD");
-                throw new IOException(e.getMessage());
+                Log.log("SSH_SERVER", 2, e);
             }
-            Log.log("SSH_SERVER", 2, "SFTP:openDirectory:" + result);
-            if (result.equals("%CWD-bad%")) {
-                this.thisSession.add_log_formatted("550 CWD " + path + ":%CWD-bad%", "CWD");
-                throw new PermissionDeniedException("%CWD-bad%");
+            if (ServerStatus.IG("log_debug_level") >= 2) {
+                Log.log("SSH_SERVER", 2, "SFTP:openDirectory:" + VRL.safe(item));
             }
-            if (result.equals("%CWD-not found%")) {
-                this.thisSession.add_log_formatted("550 CWD " + path + ":%CWD-not found%", "CWD");
-                throw new FileNotFoundException("%CWD-not found%");
+            if (item == null) {
+                throw new FileNotFoundException(LOC.G("File not found1:" + path));
             }
-            this.dirList.put(String.valueOf(path) + "_status", "READY");
-            this.dirList.remove(String.valueOf(path) + "_list");
-            this.dirList.remove(String.valueOf(path) + "_hash");
+            if (item.getProperty("type").equals("FILE")) {
+                this.thisSession.add_log_formatted("550 CWD " + path + ":" + LOC.G("Item is a file!"), "CWD");
+                throw new IOException(LOC.G("Item is a file!"));
+            }
+            String result = "";
+            try {
+                try {
+                    result = this.thisSession.do_CWD();
+                }
+                catch (Exception e) {
+                    this.thisSession.add_log_formatted("550 CWD " + path + ":" + e.getMessage(), "CWD");
+                    throw new IOException(e.getMessage());
+                }
+                Log.log("SSH_SERVER", 2, "SFTP:openDirectory:" + result);
+                if (result.equals("%CWD-bad%")) {
+                    this.thisSession.add_log_formatted("550 CWD " + path + ":%CWD-bad%", "CWD");
+                    throw new PermissionDeniedException("%CWD-bad%");
+                }
+                if (result.equals("%CWD-not found%")) {
+                    this.thisSession.add_log_formatted("550 CWD " + path + ":%CWD-not found%", "CWD");
+                    throw new FileNotFoundException("%CWD-not found%");
+                }
+                this.dirList.put(String.valueOf(path) + "_status", "READY");
+                this.dirList.remove(String.valueOf(path) + "_list");
+                this.dirList.remove(String.valueOf(path) + "_hash");
+            }
+            finally {
+                Properties p = new Properties();
+                p.put("command_code", "0");
+                p.put("command_data", String.valueOf(result));
+                this.thisSession.runPlugin("afterCommand", p);
+            }
+            byte[] byArray = path.getBytes("UTF8");
+            return byArray;
         }
         finally {
-            Properties p = new Properties();
-            p.put("command_code", "0");
-            p.put("command_data", String.valueOf(result));
-            this.thisSession.runPlugin("afterCommand", p);
+            this.Tout();
         }
-        return path.getBytes("UTF8");
     }
 
     public SftpFile[] readDirectory(byte[] handle) throws InvalidHandleException, EOFException {
+        String original_thread_name = Thread.currentThread().getName();
+        try {
+            this.Tin();
+            String path = new String(handle);
+            Thread.currentThread().setName(String.valueOf(this.thisSession.uiSG("user_name")) + ":(" + this.thisSession.uiSG("user_number") + ")-" + this.thisSession.uiSG("user_ip") + " (LIST):" + path);
+            try {
+                path = new String(handle, "UTF8");
+            }
+            catch (Exception exception) {
+                // empty catch block
+            }
+            SftpFile[] sftpFileArray = this.readDirectory2(path, true);
+            return sftpFileArray;
+        }
+        finally {
+            this.Tout();
+            Thread.currentThread().setName(original_thread_name);
+        }
+    }
+
+    public SftpFile[] readDirectory2(String path, boolean resolve_star) throws InvalidHandleException, EOFException {
         try {
             this.thisSession.stop_idle_timer();
             this.thisSession.start_idle_timer();
         }
         catch (Exception e) {
             Log.log("SSH_SERVER", 1, e);
-        }
-        String path = new String(handle);
-        try {
-            path = new String(handle, "UTF8");
-        }
-        catch (Exception exception) {
-            // empty catch block
         }
         path = this.fixPath(path);
         Log.log("SSH_SERVER", 2, "SFTP:readDirectory:" + path);
@@ -425,9 +514,9 @@ implements FileSystem {
             if (Log.log("SSH_SERVER", 3, "")) {
                 Log.log("SSH_SERVER", 3, "SFTP:readDirectory:" + list);
             }
-            files = this.getListFiles(list, path, (Properties)this.dirList.get(String.valueOf(path) + "_hash"));
+            files = this.getListFiles(list, path, (Properties)this.dirList.get(String.valueOf(path) + "_hash"), resolve_star);
         } else if (this.dirList.get(String.valueOf(path) + "_status").toString().equals("LISTING") || this.dirList.get(String.valueOf(path) + "_status").toString().equals("LISTING_DONE")) {
-            files = this.getListFiles((Vector)this.dirList.get(String.valueOf(path) + "_list"), path, (Properties)this.dirList.get(String.valueOf(path) + "_hash"));
+            files = this.getListFiles((Vector)this.dirList.get(String.valueOf(path) + "_list"), path, (Properties)this.dirList.get(String.valueOf(path) + "_hash"), resolve_star);
         } else {
             if (this.dirList.get(String.valueOf(path) + "_status").toString().equals("DONE")) {
                 this.thisSession.add_log_formatted("226 LIST " + path, "LIST");
@@ -435,8 +524,12 @@ implements FileSystem {
             }
             if (this.dirList.get(String.valueOf(path) + "_status").toString().startsWith("ERROR:")) {
                 this.dirList.remove(String.valueOf(path) + "_list");
-                this.thisSession.add_log_formatted("550 ERROR " + path + ":" + this.dirList.get(String.valueOf(path) + "_status").toString(), "LIST");
-                throw new InvalidHandleException("ERROR:" + this.dirList.get(String.valueOf(path) + "_status").toString());
+                String error_message = this.dirList.get(String.valueOf(path) + "_status").toString();
+                if (error_message.contains("No such item:")) {
+                    error_message = "ERROR: No such item: " + path;
+                }
+                this.thisSession.add_log_formatted("550 ERROR " + path + ":" + error_message, "LIST");
+                throw new InvalidHandleException("ERROR:" + error_message);
             }
         }
         SftpFile[] sftpfiles = new SftpFile[files.size()];
@@ -465,7 +558,7 @@ implements FileSystem {
         return sftpfiles;
     }
 
-    public Vector getListFiles(Vector list, String path, Properties name_hash) {
+    public Vector getListFiles(Vector list, String path, Properties name_hash, boolean resolve_star) {
         Vector<Properties> files = new Vector<Properties>();
         while (list.size() > 0 || this.dirList.get(String.valueOf(path) + "_status").toString().equals("LISTING")) {
             String sftp_path;
@@ -494,7 +587,7 @@ implements FileSystem {
             }
             p.put("sftp_path", sftp_path);
             if (this.quickLookupDirItem.size() < 10000 && !p.getProperty("url").toLowerCase().startsWith("file:/")) {
-                this.quickLookupDirItem.put(this.fixPath(sftp_path), p);
+                this.quickLookupDirItem.put(this.fixPath(sftp_path, resolve_star), p);
             }
             files.addElement(p);
             if (this.log_dir_listings) {
@@ -514,198 +607,216 @@ implements FileSystem {
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     public byte[] openFile(String path, UnsignedInteger32 flags, SftpFileAttributes attrs) throws PermissionDeniedException, FileNotFoundException, IOException {
-        Object object = this.statLock;
-        synchronized (object) {
-            Properties p;
-            this.delay();
-            path = this.fixPath(path);
-            boolean open_create = (flags.intValue() & 8) == 8;
-            boolean open_write = (flags.intValue() & 2) == 2;
-            boolean open_truncate = (flags.intValue() & 0x10) == 16;
-            boolean open_append = (flags.intValue() & 4) == 4;
-            boolean open_exclusive = (flags.intValue() & 0x20) == 32;
-            boolean open_text = (flags.intValue() & 0x40) == 64;
-            Log.log("SSH_SERVER", 0, "SFTP:openFile:" + path + "  create=" + open_create + ", write=" + open_write + ", truncate=" + open_truncate + ", append=" + open_append + ", exclusive=" + open_exclusive + ", text=" + open_text);
-            Properties item = null;
-            try {
-                if (open_create || open_write || open_truncate || open_append) {
-                    this.thisSession.uiPUT("the_command_data", path);
-                    this.thisSession.uiPUT("the_command", "STOR_INIT");
-                    this.thisSession.add_log_formatted("STOR START " + path, "STOR");
-                    p = new Properties();
-                    p.put("actual_path", path);
-                    p.put("message_string", "");
-                    this.thisSession.runPlugin("beforeCommand", p);
-                    if (!p.getProperty("message_string", "").equals("")) {
-                        throw new IOException(p.getProperty("message_string"));
-                    }
-                    path = p.getProperty("actual_path");
-                    this.thisSession.uiPUT("the_command", "STOR");
-                    try {
-                        item = this.thisSession.uVFS.get_item(path);
-                    }
-                    catch (Exception exception) {
-                        // empty catch block
-                    }
-                    if (ServerStatus.IG("log_debug_level") >= 2) {
-                        Log.log("SSH_SERVER", 2, "SFTP:openFile1:" + VRL.safe(item));
-                    }
-                    if (!(this.thisSession.check_access_privs(Common.all_but_last(path), "STOR") && Common.filter_check("U", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && Common.filter_check("F", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")))) {
-                        if (!Common.filter_check("U", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) || !Common.filter_check("F", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter"))) {
-                            this.thisSession.add_log_formatted("550 STOR error: Upload attempt was rejected because the block matching names! File name :" + Common.last(path) + " Filters :" + ServerStatus.SG("filename_filters_str"), "STOR");
+        try {
+            this.Tin();
+            Object object = this.statLock;
+            synchronized (object) {
+                Properties p;
+                this.delay();
+                path = this.fixPath(path);
+                boolean open_create = (flags.intValue() & 8) == 8;
+                boolean open_write = (flags.intValue() & 2) == 2;
+                boolean open_truncate = (flags.intValue() & 0x10) == 16;
+                boolean open_append = (flags.intValue() & 4) == 4;
+                boolean open_exclusive = (flags.intValue() & 0x20) == 32;
+                boolean open_text = (flags.intValue() & 0x40) == 64;
+                Log.log("SSH_SERVER", 0, "SFTP:openFile:" + path + "  create=" + open_create + ", write=" + open_write + ", truncate=" + open_truncate + ", append=" + open_append + ", exclusive=" + open_exclusive + ", text=" + open_text);
+                Properties item = null;
+                try {
+                    if (open_create || open_write || open_truncate || open_append) {
+                        this.thisSession.uiPUT("the_command_data", path);
+                        this.thisSession.uiPUT("the_command", "STOR_INIT");
+                        this.thisSession.add_log_formatted("STOR START " + path, "STOR");
+                        p = new Properties();
+                        p.put("actual_path", path);
+                        p.put("message_string", "");
+                        this.thisSession.runPlugin("beforeCommand", p);
+                        if (!p.getProperty("message_string", "").equals("")) {
+                            throw new IOException(p.getProperty("message_string"));
                         }
-                        throw new PermissionDeniedException(p.getProperty("message_string", LOC.G("STOR Denied for " + path + "!")));
-                    }
-                    boolean fileExists = true;
-                    if (open_create || open_truncate) {
-                        if (item != null) {
-                            if (open_exclusive) {
-                                throw new IOException("File exists, cannot be exclusive.");
-                            }
-                            if (open_text) {
-                                item.put("text_mode", "true");
-                            }
-                            GenericClient c = this.thisSession.uVFS.getClient(item);
-                            try {
-                                VRL vrl;
-                                block49: {
-                                    vrl = new VRL(item.getProperty("url"));
-                                    Properties stat = c.stat(vrl.getPath());
-                                    if (item.getProperty("privs").indexOf("(view)") < 0 && stat != null) {
-                                        try {
-                                            int fileNameInt = 1;
-                                            String itemName = item.getProperty("url");
-                                            String itemExt = "";
-                                            if (itemName.lastIndexOf(".") > 0 && (itemName.lastIndexOf(".") == itemName.length() - 4 || itemName.lastIndexOf(".") == itemName.length() - 5)) {
-                                                itemExt = itemName.substring(itemName.lastIndexOf("."));
-                                                itemName = itemName.substring(0, itemName.lastIndexOf("."));
-                                            }
-                                            while (c.stat(String.valueOf(Common.all_but_last(vrl.getPath())) + itemName + fileNameInt + itemExt) != null) {
-                                                ++fileNameInt;
-                                            }
-                                            c.rename(vrl.getPath(), String.valueOf(Common.all_but_last(vrl.getPath())) + itemName + fileNameInt + itemExt);
-                                            vrl = new VRL(String.valueOf(Common.all_but_last(vrl.toString())) + itemName + fileNameInt + itemExt);
-                                        }
-                                        catch (Exception e) {
-                                            if (("" + e).indexOf("Interrupted") < 0) break block49;
-                                            throw e;
-                                        }
-                                    }
-                                }
-                                if (c.stat(vrl.getPath()) != null && !this.thisSession.check_access_privs(path, "DELE") && !open_append) {
-                                    throw new PermissionDeniedException(p.getProperty("message_string", LOC.G("STOR Denied for " + path + "!")));
-                                }
-                            }
-                            finally {
-                                c = this.thisSession.uVFS.releaseClient(c);
-                            }
-                            if (ServerStatus.IG("log_debug_level") >= 2) {
-                                Log.log("SSH_SERVER", 2, "SFTP:openFile:setZeroLength:" + VRL.safe(item));
-                            }
-                        } else {
-                            fileExists = false;
-                            try {
-                                item = this.thisSession.uVFS.get_item_parent(path);
-                                item.put("type", "FILE");
-                                item.put("modified", String.valueOf(new Date().getTime()));
-                                Calendar cal = Calendar.getInstance();
-                                cal.setTime(new Date());
-                                item.put("time_or_year", String.valueOf(cal.get(1)));
-                            }
-                            catch (Exception cal) {
-                                // empty catch block
-                            }
-                        }
-                        if (ServerStatus.BG("allow_ssh_0_byte_file")) {
-                            if (ServerStatus.IG("log_debug_level") >= 2) {
-                                Log.log("SSH_SERVER", 2, "SFTP:openFile:zero:" + VRL.safe(item));
-                            }
-                            if (item != null && item.getProperty("privs", "").indexOf("(sync") < 0 && !path.endsWith("zipstream") && (fileExists || !fileExists && open_create)) {
-                                item.put("zero_wanted", "true");
-                            }
-                        }
-                    }
-                    if (open_create && ServerStatus.BG("allow_ssh_0_byte_file")) {
+                        path = p.getProperty("actual_path");
+                        this.thisSession.uiPUT("the_command", "STOR");
                         try {
-                            String former_type = "FILE";
-                            if (fileExists) {
-                                former_type = item.getProperty("type");
-                            }
-                            if ((item = this.thisSession.uVFS.get_item_parent(path)) != null) {
-                                item.put("type", former_type);
-                            }
+                            item = this.thisSession.uVFS.get_item(path);
                         }
                         catch (Exception exception) {
                             // empty catch block
                         }
-                        if (item != null && item.getProperty("privs", "").indexOf("(sync") < 0 && !path.endsWith("zipstream")) {
-                            item.put("zero_wanted", "true");
-                            item.put("size", "0");
-                            if (!fileExists) {
-                                item.put("type", "FILE");
-                            }
-                            this.quickLookupDirItem.put(path, item);
+                        if (ServerStatus.IG("log_debug_level") >= 2) {
+                            Log.log("SSH_SERVER", 2, "SFTP:openFile1:" + VRL.safe(item));
                         }
+                        if (!(this.thisSession.check_access_privs(Common.all_but_last(path), "STOR") && Common.filter_check("U", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && Common.filter_check("F", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")))) {
+                            if (!Common.filter_check("U", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) || !Common.filter_check("F", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter"))) {
+                                this.thisSession.add_log_formatted("550 STOR error: Upload attempt was rejected because the block matching names! File name :" + Common.last(path) + " Filters :" + ServerStatus.SG("filename_filters_str") + this.thisSession.SG("file_filter"), "STOR");
+                                throw new PermissionDeniedException("Upload attempt was rejected because the block matching names! File name :" + Common.last(path) + " Filters :" + ServerStatus.SG("filename_filters_str") + this.thisSession.SG("file_filter"));
+                            }
+                            throw new PermissionDeniedException("Upload attempt was rejected because of your VFS permissions! File name :" + Common.last(path));
+                        }
+                        boolean fileExists = true;
+                        if (open_create || open_truncate) {
+                            if (item != null) {
+                                item.put("open_text", String.valueOf(open_text));
+                                if (open_exclusive) {
+                                    throw new IOException("File exists, cannot be exclusive.");
+                                }
+                                GenericClient c = this.thisSession.uVFS.getClient(item);
+                                try {
+                                    VRL vrl;
+                                    block53: {
+                                        vrl = new VRL(item.getProperty("url"));
+                                        Properties stat = c.stat(vrl.getPath());
+                                        if (item.getProperty("privs").indexOf("(view)") < 0 && stat != null) {
+                                            try {
+                                                int fileNameInt = 1;
+                                                String itemName = item.getProperty("url");
+                                                String itemExt = "";
+                                                if (itemName.lastIndexOf(".") > 0 && (itemName.lastIndexOf(".") == itemName.length() - 4 || itemName.lastIndexOf(".") == itemName.length() - 5)) {
+                                                    itemExt = itemName.substring(itemName.lastIndexOf("."));
+                                                    itemName = itemName.substring(0, itemName.lastIndexOf("."));
+                                                }
+                                                while (c.stat(String.valueOf(Common.all_but_last(vrl.getPath())) + itemName + fileNameInt + itemExt) != null) {
+                                                    ++fileNameInt;
+                                                }
+                                                c.rename(vrl.getPath(), String.valueOf(Common.all_but_last(vrl.getPath())) + itemName + fileNameInt + itemExt, false);
+                                                vrl = new VRL(String.valueOf(Common.all_but_last(vrl.toString())) + itemName + fileNameInt + itemExt);
+                                            }
+                                            catch (Exception e) {
+                                                if (("" + e).indexOf("Interrupted") < 0) break block53;
+                                                throw e;
+                                            }
+                                        }
+                                    }
+                                    if (c.stat(vrl.getPath()) != null) {
+                                        c = this.thisSession.uVFS.releaseClient(c);
+                                        if (!this.thisSession.check_access_privs(path, "DELE") && !open_append) {
+                                            throw new PermissionDeniedException(p.getProperty("message_string", LOC.G("STOR Denied for " + path + "!")));
+                                        }
+                                    }
+                                }
+                                finally {
+                                    c = this.thisSession.uVFS.releaseClient(c);
+                                }
+                                if (ServerStatus.IG("log_debug_level") >= 2) {
+                                    Log.log("SSH_SERVER", 2, "SFTP:openFile:setZeroLength:" + VRL.safe(item));
+                                }
+                            } else {
+                                fileExists = false;
+                                try {
+                                    item = this.thisSession.uVFS.get_item_parent(path);
+                                    item.put("open_text", String.valueOf(open_text));
+                                    item.put("type", "FILE");
+                                    item.put("size", "0");
+                                    item.put("modified", String.valueOf(new Date().getTime()));
+                                    Calendar cal = Calendar.getInstance();
+                                    cal.setTime(new Date());
+                                    item.put("time_or_year", String.valueOf(cal.get(1)));
+                                }
+                                catch (Exception cal) {
+                                    // empty catch block
+                                }
+                            }
+                            if (ServerStatus.BG("allow_ssh_0_byte_file")) {
+                                if (ServerStatus.IG("log_debug_level") >= 2) {
+                                    Log.log("SSH_SERVER", 2, "SFTP:openFile:zero:" + VRL.safe(item));
+                                }
+                                if (item != null && item.getProperty("privs", "").indexOf("(sync") < 0 && !path.endsWith("zipstream") && (fileExists || !fileExists && open_create)) {
+                                    item.put("zero_wanted", "true");
+                                }
+                            }
+                        }
+                        if (open_create && ServerStatus.BG("allow_ssh_0_byte_file")) {
+                            try {
+                                String former_type = "FILE";
+                                if (fileExists) {
+                                    former_type = item.getProperty("type");
+                                }
+                                if ((item = this.thisSession.uVFS.get_item_parent(path)) != null) {
+                                    item.put("type", former_type);
+                                    item.put("open_text", String.valueOf(open_text));
+                                    item.put("size", "0");
+                                }
+                            }
+                            catch (Exception exception) {
+                                // empty catch block
+                            }
+                            if (item != null && item.getProperty("privs", "").indexOf("(sync") < 0 && !path.endsWith("zipstream")) {
+                                item.put("zero_wanted", "true");
+                                item.put("size", "0");
+                                if (!fileExists) {
+                                    item.put("type", "FILE");
+                                }
+                                item.put("open_text", String.valueOf(open_text));
+                                item.put("modified", String.valueOf(new Date().getTime()));
+                                this.quickLookupDirItem.put(path, item);
+                            }
+                        }
+                        if (item == null) {
+                            item = this.thisSession.uVFS.get_item_parent(path);
+                            item.put("type", "FILE");
+                            item.put("open_text", String.valueOf(open_text));
+                            item.put("size", "0");
+                        }
+                        item.put("allow_write", "true");
+                    } else {
+                        String temp_path = path;
+                        if (path.indexOf(":filetree") >= 0 && ServerStatus.BG("allow_filetree")) {
+                            temp_path = path.substring(0, path.indexOf(":filetree"));
+                        }
+                        this.thisSession.uiPUT("the_command_data", path);
+                        this.thisSession.uiPUT("the_command", "RETR_INIT");
+                        Properties p2 = new Properties();
+                        p2.put("actual_path", temp_path);
+                        this.thisSession.runPlugin("beforeCommand", p2);
+                        temp_path = p2.getProperty("actual_path");
+                        try {
+                            item = this.thisSession.uVFS.get_item(temp_path);
+                        }
+                        catch (Exception exception) {
+                            // empty catch block
+                        }
+                        if (ServerStatus.IG("log_debug_level") >= 2) {
+                            Log.log("SSH_SERVER", 2, "SFTP:openFile2:" + VRL.safe(item));
+                        }
+                        if (item == null) {
+                            throw new FileNotFoundException("File not found2:" + path);
+                        }
+                        item.put("open_text", String.valueOf(open_text));
+                        this.thisSession.uiPUT("the_command", "LIST");
+                        if (!(this.thisSession.check_access_privs(path, "RETR", item) && Common.filter_check("D", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && Common.filter_check("F", String.valueOf(item.getProperty("name")) + (item.getProperty("type").equalsIgnoreCase("DIR") && !item.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")))) {
+                            throw new PermissionDeniedException(p2.getProperty("message_string", "Denied!"));
+                        }
+                        this.thisSession.add_log_formatted("RETR START " + path, "RETR");
                     }
-                    if (item == null) {
-                        item = this.thisSession.uVFS.get_item_parent(path);
-                        item.put("type", "FILE");
-                    }
-                    item.put("allow_write", "true");
-                } else {
-                    String temp_path = path;
-                    if (path.indexOf(":filetree") >= 0 && ServerStatus.BG("allow_filetree")) {
-                        temp_path = path.substring(0, path.indexOf(":filetree"));
-                    }
-                    this.thisSession.uiPUT("the_command_data", path);
-                    this.thisSession.uiPUT("the_command", "RETR_INIT");
-                    Properties p2 = new Properties();
-                    p2.put("actual_path", temp_path);
-                    this.thisSession.runPlugin("beforeCommand", p2);
-                    temp_path = p2.getProperty("actual_path");
-                    try {
-                        item = this.thisSession.uVFS.get_item(temp_path);
-                    }
-                    catch (Exception exception) {
-                        // empty catch block
-                    }
+                    path = String.valueOf(path) + ":" + Common.makeBoundary(5);
+                    this.openFiles.put(path, item);
                     if (ServerStatus.IG("log_debug_level") >= 2) {
-                        Log.log("SSH_SERVER", 2, "SFTP:openFile2:" + VRL.safe(item));
+                        Log.log("SSH_SERVER", 2, "SFTP:openedFile:" + path + ":" + VRL.safe(item));
                     }
-                    if (item == null) {
-                        throw new FileNotFoundException("File not found2:" + path);
-                    }
-                    this.thisSession.uiPUT("the_command", "LIST");
-                    if (!(this.thisSession.check_access_privs(path, "RETR", item) && Common.filter_check("D", Common.last(path), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")) && Common.filter_check("F", String.valueOf(item.getProperty("name")) + (item.getProperty("type").equalsIgnoreCase("DIR") && !item.getProperty("name").endsWith("/") ? "/" : ""), String.valueOf(ServerStatus.SG("filename_filters_str")) + "\r\n" + this.thisSession.SG("file_filter")))) {
-                        throw new PermissionDeniedException(p2.getProperty("message_string", "Denied!"));
-                    }
-                    this.thisSession.add_log_formatted("RETR START " + path, "RETR");
                 }
-                path = String.valueOf(path) + ":" + Common.makeBoundary(5);
-                this.openFiles.put(path, item);
-                if (ServerStatus.IG("log_debug_level") >= 2) {
-                    Log.log("SSH_SERVER", 2, "SFTP:openedFile:" + path + ":" + VRL.safe(item));
+                catch (Exception e) {
+                    Log.log("SSH_SERVER", 1, e);
+                    this.thisSession.add_log_formatted("550 openFile error:" + e.getMessage(), "RETR");
+                    Properties p3 = new Properties();
+                    p3.put("command_code", "0");
+                    p3.put("command_data", String.valueOf(e.getMessage()));
+                    this.thisSession.runPlugin("afterCommand", p3);
+                    this.thisSession.doErrorEvent(e);
+                    if (("" + e).indexOf("not found") >= 0) {
+                        throw new FileNotFoundException(e.getMessage());
+                    }
+                    throw new IOException(e.getMessage());
                 }
+                Log.log("SSH_SERVER", 2, "SFTP:openFile:reply:" + path);
+                p = new Properties();
+                p.put("command_code", "0");
+                p.put("command_data", String.valueOf(path));
+                this.thisSession.runPlugin("afterCommand", p);
+                byte[] byArray = path.getBytes("UTF8");
+                return byArray;
             }
-            catch (Exception e) {
-                Log.log("SSH_SERVER", 1, e);
-                this.thisSession.add_log_formatted("550 openFile error:" + e.getMessage(), "RETR");
-                Properties p3 = new Properties();
-                p3.put("command_code", "0");
-                p3.put("command_data", String.valueOf(e.getMessage()));
-                this.thisSession.runPlugin("afterCommand", p3);
-                this.thisSession.doErrorEvent(e);
-                if (("" + e).indexOf("not found") >= 0) {
-                    throw new FileNotFoundException(e.getMessage());
-                }
-                throw new IOException(e.getMessage());
-            }
-            Log.log("SSH_SERVER", 2, "SFTP:openFile:reply:" + path);
-            p = new Properties();
-            p.put("command_code", "0");
-            p.put("command_data", String.valueOf(path));
-            this.thisSession.runPlugin("afterCommand", p);
-            return path.getBytes("UTF8");
+        }
+        finally {
+            this.Tout();
         }
     }
 
@@ -716,13 +827,199 @@ implements FileSystem {
      * Enabled aggressive exception aggregation
      */
     public void writeFile(byte[] handle, UnsignedInteger64 offset, byte[] data, int off, int len) throws InvalidHandleException, IOException {
-        Object object = this.statLock;
-        synchronized (object) {
-            boolean buffered;
-            STOR_handler stor_files;
-            OutputStream outStream;
+        try {
+            this.Tin();
+            Object object = this.statLock;
+            synchronized (object) {
+                boolean buffered;
+                STOR_handler stor_files;
+                OutputStream outStream;
+                Properties item;
+                String path_handle;
+                block40: {
+                    try {
+                        this.thisSession.stop_idle_timer();
+                        this.thisSession.start_idle_timer();
+                    }
+                    catch (Exception e) {
+                        Log.log("SSH_SERVER", 1, e);
+                    }
+                    path_handle = new String(handle, "UTF8");
+                    String path = path_handle.substring(0, path_handle.lastIndexOf(":"));
+                    path = this.fixPath(path);
+                    if (ServerStatus.IG("log_debug_level") >= 2) {
+                        Log.log("SSH_SERVER", 2, "SFTP:writeFile:" + path_handle);
+                    }
+                    item = (Properties)this.openFiles.get(path_handle);
+                    outStream = (OutputStream)item.get("outputstream");
+                    stor_files = (STOR_handler)item.get("stor_files");
+                    if (ServerStatus.IG("log_debug_level") >= 2) {
+                        Log.log("SSH_SERVER", 2, "SFTP:writeFile:" + VRL.safe(item));
+                    }
+                    buffered = false;
+                    try {
+                        if (!item.getProperty("allow_write", "false").equals("true")) break block40;
+                        if (item.getProperty("open_text", "false").equals("true")) {
+                            offset = new UnsignedInteger64(Long.parseLong(item.getProperty("size", "0")));
+                        }
+                        if (outStream == null) {
+                            this.delay();
+                            if (item.getProperty("type", "").equalsIgnoreCase("DIR") && !item.getProperty("name").toUpperCase().endsWith(".ZIPSTREAM")) {
+                                throw new IOException("File cannot replace a directory.");
+                            }
+                            if (item.getProperty("socket_closed", "false").equals("true")) {
+                                throw new IOException("Socket closed already.");
+                            }
+                            this.thisSession.uiPUT("the_command_data", path);
+                            this.thisSession.uiPUT("the_command", "beforeUpload_SSH");
+                            this.thisSession.add_log_formatted("STOR START " + path_handle + " pos:" + offset.longValue(), "STOR");
+                            Properties p = new Properties();
+                            p.put("actual_path", path);
+                            p.put("message_string", "");
+                            this.thisSession.runPlugin("beforeCommand", p);
+                            if (!p.getProperty("message_string", "").equals("")) {
+                                throw new IOException(p.getProperty("message_string"));
+                            }
+                            path = p.getProperty("actual_path");
+                            this.thisSession.uiPUT("the_command", "STOR");
+                            this.thisSession.add_log_formatted("STOR " + path_handle, "STOR");
+                            long too_big = 0x640000000000L;
+                            if (offset.longValue() > too_big) {
+                                offset = new UnsignedInteger64(0L);
+                            }
+                            this.getOutputStream(offset.longValue(), path, item);
+                            item.put("buffer", new Properties());
+                            outStream = (OutputStream)item.get("outputstream");
+                            stor_files = (STOR_handler)item.get("stor_files");
+                            item.put("size", String.valueOf(offset.longValue()));
+                            p = new Properties();
+                            p.put("command_code", "0");
+                            p.put("command_data", String.valueOf(path));
+                            this.thisSession.runPlugin("afterCommand", p);
+                            break block40;
+                        }
+                        if (stor_files.inError) {
+                            throw new Exception(stor_files.stop_message);
+                        }
+                        if (Long.parseLong(item.getProperty("size", "0")) == offset.longValue()) break block40;
+                        if (System.getProperty("crushftp.sftp_buffered_write", "true").equals("true")) {
+                            if (!item.getProperty("allow_write", "false").equals("true")) break block40;
+                            Properties buffer = (Properties)item.get("buffer");
+                            Log.log("SSH_SERVER", 2, "Offset out of sequence during STOR of file:" + path_handle + " : " + item.getProperty("size", "0") + " vs." + (offset.longValue() - (long)off) + ":buffer count=" + buffer.size());
+                            if (buffer.size() > ServerStatus.IG("sftp_chunk_buffer")) {
+                                Log.log("SSH_SERVER", 0, "Offset out of sequence during STOR of file:" + path_handle + " : " + item.getProperty("size", "0") + " vs." + (offset.longValue() - (long)off) + ":buffer count=" + buffer.size());
+                                throw new IOException("Streaming out of sequence buffer full:" + buffer.size());
+                            }
+                            byte[] b = new byte[len];
+                            System.arraycopy(data, off, b, 0, len);
+                            if (offset.longValue() >= Long.MAX_VALUE) break block40;
+                            buffer.put(String.valueOf(offset.longValue()), b);
+                            buffered = true;
+                            if (ServerStatus.IG("log_debug_level") >= 2) {
+                                Log.log("SSH_SERVER", 2, "SFTP:writeFile:BUFFERED:" + path_handle + ":size=" + item.getProperty("size") + ":offset=" + offset.longValue() + ":off=" + off + ":len=" + len + ":data_len=" + data.length + ":buffered=" + buffered);
+                            }
+                            item.put("zero_wanted", "false");
+                            if (buffer.size() > 100) {
+                                Thread.sleep(buffer.size());
+                            }
+                            if (stor_files.slow_transfer > 0.0f) {
+                                Thread.sleep((int)stor_files.slow_transfer);
+                            }
+                            break block40;
+                        }
+                        Log.log("SSH_SERVER", 0, "Offset jump during STOR of file:" + path_handle + " : " + item.getProperty("size", "0") + " vs." + (offset.longValue() - (long)off));
+                        item.remove("stor_files");
+                        item.remove("outputstream");
+                        outStream.close();
+                        while (true) {
+                            if (!stor_files.active2.getProperty("active", "").equals("true")) {
+                                try {
+                                    stor_files.c.close();
+                                }
+                                catch (Exception buffer) {
+                                    // empty catch block
+                                }
+                                break;
+                            }
+                            Thread.sleep(1L);
+                        }
+                        if (stor_files.quota_exceeded) {
+                            throw new IOException("Quota Exceeded.");
+                        }
+                        if (item.getProperty("socket_closed", "false").equals("true")) {
+                            throw new IOException("Socket closed already.");
+                        }
+                        this.getOutputStream(offset.longValue(), path, item);
+                        outStream = (OutputStream)item.get("outputstream");
+                        item.put("size", String.valueOf(offset.longValue()));
+                    }
+                    catch (Exception e) {
+                        Log.log("SSH_SERVER", 1, e);
+                        this.thisSession.add_log_formatted("550 STOR error:" + e.getMessage(), "STOR");
+                        this.thisSession.doErrorEvent(e);
+                        throw new IOException(e.getMessage());
+                    }
+                }
+                if (ServerStatus.IG("log_debug_level") >= 2) {
+                    Log.log("SSH_SERVER", 2, "SFTP:writeFile:" + path_handle + ":size=" + item.getProperty("size") + ":offset=" + offset.longValue() + ":off=" + off + ":len=" + len + ":data_len=" + data.length + ":buffered=" + buffered);
+                }
+                try {
+                    if (!item.getProperty("allow_write", "false").equals("true")) return;
+                    if (buffered) return;
+                    try {
+                        outStream.write(data, off, len);
+                        outStream.flush();
+                        if (stor_files.inError) {
+                            throw new IOException(stor_files.stop_message);
+                        }
+                        item.put("zero_wanted", "false");
+                        if (offset.longValue() + (long)len > Long.parseLong(item.getProperty("size"))) {
+                            item.put("size", String.valueOf(offset.longValue() + (long)len));
+                        }
+                        if (!System.getProperty("crushftp.sftp_buffered_write", "true").equals("true")) return;
+                        long pos = Long.parseLong(item.getProperty("size"));
+                        Properties buffer = (Properties)item.get("buffer");
+                        while (buffer.containsKey(String.valueOf(pos))) {
+                            byte[] b = (byte[])buffer.remove(String.valueOf(pos));
+                            outStream.write(b);
+                            outStream.flush();
+                            item.put("size", String.valueOf(pos += (long)b.length));
+                        }
+                    }
+                    catch (SocketException e) {
+                        if (item.getProperty("socket_closed", "false").equals("true")) {
+                            throw e;
+                        }
+                        if (stor_files == null) throw e;
+                        if (stor_files.data_sock != null) {
+                            if (!stor_files.data_sock.isClosed()) throw e;
+                        }
+                        Log.log("SSH_SERVER", 0, "Tried to write extra bytes after socket closed, " + len + "bytes discarded.");
+                        item.put("socket_closed", "true");
+                    }
+                }
+                catch (IOException e) {
+                    Log.log("SSH_SERVER", 0, "Exception on write1:" + Thread.currentThread().getName() + ":" + len);
+                    Log.log("SSH_SERVER", 0, e);
+                    this.thisSession.add_log_formatted("550 STOR error:" + e.getMessage(), "STOR");
+                    throw e;
+                }
+                return;
+            }
+        }
+        finally {
+            this.Tout();
+        }
+    }
+
+    public int readFile(byte[] handle, UnsignedInteger64 offset, byte[] buf, int off, int numBytesToRead) throws InvalidHandleException, EOFException, IOException {
+        try {
+            Properties alreadyRead;
+            boolean bufferedRead;
+            InputStream inStream;
             Properties item;
-            block35: {
+            block26: {
+                this.Tin();
                 try {
                     this.thisSession.stop_idle_timer();
                     this.thisSession.start_idle_timer();
@@ -733,282 +1030,122 @@ implements FileSystem {
                 String path_handle = new String(handle, "UTF8");
                 String path = path_handle.substring(0, path_handle.lastIndexOf(":"));
                 path = this.fixPath(path);
-                if (ServerStatus.IG("log_debug_level") >= 2) {
-                    Log.log("SSH_SERVER", 2, "SFTP:writeFile:" + path_handle);
+                if (ServerStatus.IG("log_debug_level") >= 3) {
+                    Log.log("SSH_SERVER", 3, "SFTP:readFile:" + path_handle);
                 }
                 item = (Properties)this.openFiles.get(path_handle);
-                outStream = (OutputStream)item.get("outputstream");
-                stor_files = (STOR_handler)item.get("stor_files");
-                if (ServerStatus.IG("log_debug_level") >= 2) {
-                    Log.log("SSH_SERVER", 2, "SFTP:writeFile:" + VRL.safe(item));
+                inStream = (InputStream)item.get("inputstream");
+                RETR_handler retr_files = (RETR_handler)item.get("retr_files");
+                if (ServerStatus.IG("log_debug_level") >= 3) {
+                    Log.log("SSH_SERVER", 3, "SFTP:readFile:" + VRL.safe(item));
                 }
-                buffered = false;
+                bufferedRead = false;
                 try {
-                    if (!item.getProperty("allow_write", "false").equals("true")) break block35;
-                    if (item.getProperty("text_mode", "false").equals("true")) {
-                        offset = new UnsignedInteger64(Long.parseLong(item.getProperty("size")));
-                    }
-                    if (outStream == null) {
+                    if (inStream == null) {
                         this.delay();
-                        if (item.getProperty("type", "").equalsIgnoreCase("DIR") && !item.getProperty("name").toUpperCase().endsWith(".ZIPSTREAM")) {
-                            throw new IOException("File cannot replace a directory.");
-                        }
-                        if (item.getProperty("socket_closed", "false").equals("true")) {
-                            throw new IOException("Socket closed already.");
-                        }
-                        this.thisSession.uiPUT("the_command_data", path);
-                        this.thisSession.uiPUT("the_command", "beforeUpload_SSH");
-                        this.thisSession.add_log_formatted("STOR START " + path_handle + " pos:" + offset.longValue(), "STOR");
-                        Properties p = new Properties();
-                        p.put("actual_path", path);
-                        p.put("message_string", "");
-                        this.thisSession.runPlugin("beforeCommand", p);
-                        if (!p.getProperty("message_string", "").equals("")) {
-                            throw new IOException(p.getProperty("message_string"));
-                        }
-                        path = p.getProperty("actual_path");
-                        this.thisSession.uiPUT("the_command", "STOR");
-                        this.thisSession.add_log_formatted("STOR " + path_handle, "STOR");
+                        this.thisSession.add_log_formatted("RETR " + path_handle, "RETR");
                         long too_big = 0x640000000000L;
                         if (offset.longValue() > too_big) {
                             offset = new UnsignedInteger64(0L);
                         }
-                        this.getOutputStream(offset.longValue(), path, item);
-                        item.put("buffer", new Properties());
-                        outStream = (OutputStream)item.get("outputstream");
-                        stor_files = (STOR_handler)item.get("stor_files");
-                        item.put("size", String.valueOf(offset.longValue()));
-                        p = new Properties();
-                        p.put("command_code", "0");
-                        p.put("command_data", String.valueOf(path));
-                        this.thisSession.runPlugin("afterCommand", p);
-                        break block35;
+                        Log.log("SSH_SERVER", 1, "SFTP:readFile3:" + path_handle + ":offset=" + offset.longValue() + ":off=" + off + ":numbytes=" + numBytesToRead + ":" + VRL.safe(item));
+                        this.getInputStream(offset.longValue(), path, item);
+                        inStream = (InputStream)item.get("inputstream");
+                        item.put("loc", String.valueOf(offset.longValue()));
+                        break block26;
                     }
-                    if (stor_files.inError) {
-                        throw new Exception(stor_files.stop_message);
+                    long loc = Long.parseLong(item.getProperty("loc", "0"));
+                    alreadyRead = (Properties)item.get("alreadyRead");
+                    while (alreadyRead.containsKey(String.valueOf(loc))) {
+                        loc += Long.parseLong(alreadyRead.getProperty(String.valueOf(loc)));
+                        item.put("loc", String.valueOf(loc));
                     }
-                    if (Long.parseLong(item.getProperty("size", "0")) == offset.longValue()) break block35;
-                    if (System.getProperty("crushftp.sftp_buffered_write", "true").equals("true")) {
-                        if (!item.getProperty("allow_write", "false").equals("true")) break block35;
-                        Properties buffer = (Properties)item.get("buffer");
-                        Log.log("SSH_SERVER", 2, "Offset out of sequence during STOR of file:" + path_handle + " : " + item.getProperty("size", "0") + " vs." + (offset.longValue() - (long)off) + ":buffer count=" + buffer.size());
-                        if (buffer.size() > ServerStatus.IG("sftp_chunk_buffer")) {
-                            Log.log("SSH_SERVER", 0, "Offset out of sequence during STOR of file:" + path_handle + " : " + item.getProperty("size", "0") + " vs." + (offset.longValue() - (long)off) + ":buffer count=" + buffer.size());
-                            throw new IOException("Streaming out of sequence buffer full:" + buffer.size());
-                        }
-                        byte[] b = new byte[len];
-                        System.arraycopy(data, off, b, 0, len);
-                        if (offset.longValue() >= Long.MAX_VALUE) break block35;
-                        buffer.put(String.valueOf(offset.longValue()), b);
-                        buffered = true;
-                        item.put("zero_wanted", "false");
-                        if (buffer.size() > 100) {
-                            Thread.sleep(buffer.size());
-                        }
-                        if (stor_files.slow_transfer > 0.0f) {
-                            Thread.sleep((int)stor_files.slow_transfer);
-                        }
-                        break block35;
-                    }
-                    Log.log("SSH_SERVER", 0, "Offset jump during STOR of file:" + path_handle + " : " + item.getProperty("size", "0") + " vs." + (offset.longValue() - (long)off));
-                    item.remove("stor_files");
-                    item.remove("outputstream");
-                    outStream.close();
-                    while (true) {
-                        if (!stor_files.active2.getProperty("active", "").equals("true")) {
-                            try {
-                                stor_files.c.close();
+                    boolean restartRETR = false;
+                    if (loc < offset.longValue()) {
+                        long bytesToSkip = offset.longValue() - loc;
+                        if (bytesToSkip > 0x500000L) {
+                            restartRETR = true;
+                        } else {
+                            bufferedRead = true;
+                            inStream.mark(0x500000);
+                            while (bytesToSkip > 0L) {
+                                long bytes = inStream.skip(bytesToSkip);
+                                if (bytes <= 0L) {
+                                    bytesToSkip = 0L;
+                                    continue;
+                                }
+                                if (bytes < 0L) continue;
+                                bytesToSkip -= bytes;
                             }
-                            catch (Exception buffer) {
-                                // empty catch block
-                            }
-                            break;
                         }
+                    }
+                    if (loc <= offset.longValue() && !restartRETR) break block26;
+                    Log.log("SSH_SERVER", 1, "SFTP:readFile4:" + path_handle + ": changing location in stream...offset:" + offset.longValue() + "  vs   lastPos:" + loc + ": openFiles size:" + this.openFiles.size());
+                    if (offset.longValue() >= Long.parseLong(item.getProperty("size", "0"))) break block26;
+                    item.remove("retr_files");
+                    item.remove("inputstream");
+                    inStream.close();
+                    while (retr_files.active2.getProperty("active", "").equals("true")) {
                         Thread.sleep(1L);
                     }
-                    if (stor_files.quota_exceeded) {
-                        throw new IOException("Quota Exceeded.");
+                    try {
+                        retr_files.c.close();
                     }
-                    if (item.getProperty("socket_closed", "false").equals("true")) {
-                        throw new IOException("Socket closed already.");
+                    catch (Exception exception) {
+                        // empty catch block
                     }
-                    this.getOutputStream(offset.longValue(), path, item);
-                    outStream = (OutputStream)item.get("outputstream");
-                    item.put("size", String.valueOf(offset.longValue()));
+                    this.getInputStream(offset.longValue(), path, item);
+                    inStream = (InputStream)item.get("inputstream");
+                    item.put("loc", String.valueOf(offset.longValue()));
+                }
+                catch (EOFException e) {
+                    throw e;
                 }
                 catch (Exception e) {
                     Log.log("SSH_SERVER", 1, e);
-                    this.thisSession.add_log_formatted("550 STOR error:" + e.getMessage(), "STOR");
+                    if (e.toString().indexOf("EOF") >= 0) {
+                        throw new EOFException(e.toString());
+                    }
+                    this.thisSession.add_log_formatted("550 RETR error:" + e.getMessage(), "RETR");
                     this.thisSession.doErrorEvent(e);
                     throw new IOException(e.getMessage());
                 }
             }
-            try {
-                if (!item.getProperty("allow_write", "false").equals("true")) return;
-                if (buffered) return;
-                try {
-                    outStream.write(data, off, len);
-                    outStream.flush();
-                    if (stor_files.inError) {
-                        throw new IOException(stor_files.stop_message);
-                    }
-                    item.put("zero_wanted", "false");
-                    if (offset.longValue() + (long)len > Long.parseLong(item.getProperty("size"))) {
-                        item.put("size", String.valueOf(offset.longValue() + (long)len));
-                    }
-                    if (!System.getProperty("crushftp.sftp_buffered_write", "true").equals("true")) return;
-                    long pos = Long.parseLong(item.getProperty("size"));
-                    Properties buffer = (Properties)item.get("buffer");
-                    while (buffer.containsKey(String.valueOf(pos))) {
-                        byte[] b = (byte[])buffer.remove(String.valueOf(pos));
-                        outStream.write(b);
-                        outStream.flush();
-                        item.put("size", String.valueOf(pos += (long)b.length));
-                    }
-                }
-                catch (SocketException e) {
-                    if (item.getProperty("socket_closed", "false").equals("true")) {
-                        throw e;
-                    }
-                    if (stor_files == null) throw e;
-                    if (stor_files.data_sock != null) {
-                        if (!stor_files.data_sock.isClosed()) throw e;
-                    }
-                    Log.log("SSH_SERVER", 0, "Tried to write extra bytes after socket closed, " + len + "bytes discarded.");
-                    item.put("socket_closed", "true");
-                }
+            int totalBytesRead = 0;
+            int read = 0;
+            while (read >= 0 && totalBytesRead < numBytesToRead) {
+                read = inStream.read(buf, off, numBytesToRead - totalBytesRead);
+                if (read < 0) continue;
+                totalBytesRead += read;
+                off += read;
             }
-            catch (IOException e) {
-                Log.log("SSH_SERVER", 0, "Exception on write1:" + Thread.currentThread().getName() + ":" + len);
-                Log.log("SSH_SERVER", 0, e);
-                this.thisSession.add_log_formatted("550 STOR error:" + e.getMessage(), "STOR");
-                throw e;
+            if (totalBytesRead >= 0 && !bufferedRead) {
+                item.put("loc", String.valueOf(offset.longValue() + (long)totalBytesRead));
             }
-            return;
-        }
-    }
-
-    public int readFile(byte[] handle, UnsignedInteger64 offset, byte[] buf, int off, int numBytesToRead) throws InvalidHandleException, EOFException, IOException {
-        Properties alreadyRead;
-        boolean bufferedRead;
-        InputStream inStream;
-        Properties item;
-        block23: {
-            try {
-                this.thisSession.stop_idle_timer();
-                this.thisSession.start_idle_timer();
-            }
-            catch (Exception e) {
-                Log.log("SSH_SERVER", 1, e);
-            }
-            String path_handle = new String(handle, "UTF8");
-            String path = path_handle.substring(0, path_handle.lastIndexOf(":"));
-            path = this.fixPath(path);
-            if (ServerStatus.IG("log_debug_level") >= 3) {
-                Log.log("SSH_SERVER", 3, "SFTP:readFile:" + path_handle);
-            }
-            item = (Properties)this.openFiles.get(path_handle);
-            inStream = (InputStream)item.get("inputstream");
-            RETR_handler retr_files = (RETR_handler)item.get("retr_files");
-            if (ServerStatus.IG("log_debug_level") >= 3) {
-                Log.log("SSH_SERVER", 3, "SFTP:readFile:" + VRL.safe(item));
-            }
-            bufferedRead = false;
-            try {
-                if (inStream == null) {
-                    this.delay();
-                    this.thisSession.add_log_formatted("RETR " + path_handle, "RETR");
-                    long too_big = 0x640000000000L;
-                    if (offset.longValue() > too_big) {
-                        offset = new UnsignedInteger64(0L);
-                    }
-                    Log.log("SSH_SERVER", 1, "SFTP:readFile3:" + path_handle + ":offset=" + offset.longValue() + ":off=" + off + ":numbytes=" + numBytesToRead + ":" + VRL.safe(item));
-                    this.getInputStream(offset.longValue(), path, item);
-                    inStream = (InputStream)item.get("inputstream");
-                    item.put("loc", String.valueOf(offset.longValue()));
-                    break block23;
-                }
-                long loc = Long.parseLong(item.getProperty("loc", "0"));
+            if (bufferedRead) {
                 alreadyRead = (Properties)item.get("alreadyRead");
-                while (alreadyRead.containsKey(String.valueOf(loc))) {
-                    loc += Long.parseLong(alreadyRead.getProperty(String.valueOf(loc)));
-                    item.put("loc", String.valueOf(loc));
-                }
-                boolean restartRETR = false;
-                if (loc < offset.longValue()) {
-                    long bytesToSkip = offset.longValue() - loc;
-                    if (bytesToSkip > 0x500000L) {
-                        restartRETR = true;
-                    } else {
-                        bufferedRead = true;
-                        inStream.mark(0x500000);
-                        while (bytesToSkip > 0L) {
-                            long bytes = inStream.skip(bytesToSkip);
-                            if (bytes <= 0L) {
-                                bytesToSkip = 0L;
-                                continue;
-                            }
-                            if (bytes < 0L) continue;
-                            bytesToSkip -= bytes;
-                        }
-                    }
-                }
-                if (loc <= offset.longValue() && !restartRETR) break block23;
-                Log.log("SSH_SERVER", 1, "SFTP:readFile4:" + path_handle + ": changing location in stream...offset:" + offset.longValue() + "  vs   lastPos:" + loc + ": openFiles size:" + this.openFiles.size());
-                if (offset.longValue() >= Long.parseLong(item.getProperty("size", "0"))) break block23;
-                item.remove("retr_files");
-                item.remove("inputstream");
-                inStream.close();
-                while (retr_files.active2.getProperty("active", "").equals("true")) {
-                    Thread.sleep(1L);
-                }
-                try {
-                    retr_files.c.close();
-                }
-                catch (Exception exception) {
-                    // empty catch block
-                }
-                this.getInputStream(offset.longValue(), path, item);
-                inStream = (InputStream)item.get("inputstream");
-                item.put("loc", String.valueOf(offset.longValue()));
+                alreadyRead.put(String.valueOf(offset.longValue()), String.valueOf(totalBytesRead));
+                inStream.reset();
             }
-            catch (EOFException e) {
-                throw e;
+            if (totalBytesRead == 0 && read == -1) {
+                throw new EOFException(LOC.G("The file is EOF"));
             }
-            catch (Exception e) {
-                Log.log("SSH_SERVER", 1, e);
-                if (e.toString().indexOf("EOF") >= 0) {
-                    throw new EOFException(e.toString());
-                }
-                this.thisSession.add_log_formatted("550 RETR error:" + e.getMessage(), "RETR");
-                this.thisSession.doErrorEvent(e);
-                throw new IOException(e.getMessage());
-            }
+            int n = totalBytesRead;
+            return n;
         }
-        int totalBytesRead = 0;
-        int read = 0;
-        while (read >= 0 && totalBytesRead < numBytesToRead) {
-            read = inStream.read(buf, off, numBytesToRead - totalBytesRead);
-            if (read < 0) continue;
-            totalBytesRead += read;
-            off += read;
+        finally {
+            this.Tout();
         }
-        if (totalBytesRead >= 0 && !bufferedRead) {
-            item.put("loc", String.valueOf(offset.longValue() + (long)totalBytesRead));
-        }
-        if (bufferedRead) {
-            alreadyRead = (Properties)item.get("alreadyRead");
-            alreadyRead.put(String.valueOf(offset.longValue()), String.valueOf(totalBytesRead));
-            inStream.reset();
-        }
-        if (totalBytesRead == 0 && read == -1) {
-            throw new EOFException(LOC.G("The file is EOF"));
-        }
-        return totalBytesRead;
     }
 
     public void closeFile(byte[] handle) throws InvalidHandleException, IOException {
-        this.closeFileMsg(handle, null);
+        try {
+            this.Tin();
+            this.closeFileMsg(handle, null);
+        }
+        finally {
+            this.Tout();
+        }
     }
 
     /*
@@ -1024,7 +1161,7 @@ implements FileSystem {
         path = this.fixPath(path);
         Object object = this.closeFileLock;
         synchronized (object) {
-            block44: {
+            block48: {
                 Log.log("SSH_SERVER", 0, "SFTP:closeFile:" + path_handle);
                 Properties item = (Properties)this.openFiles.get(path_handle);
                 if (item != null) {
@@ -1069,7 +1206,12 @@ implements FileSystem {
                             if (stor_files != null) {
                                 stor_files.inError = true;
                                 stor_files.stop_message = error_msg;
-                                stor_files.thisThread.interrupt();
+                                try {
+                                    stor_files.thisThread.interrupt();
+                                }
+                                catch (Exception missing_parts) {
+                                    // empty catch block
+                                }
                             }
                             this.thisSession.add_log_formatted("STOR END   " + path_handle + ":ABORTED! " + error_msg, "STOR");
                         }
@@ -1118,7 +1260,12 @@ implements FileSystem {
                             retr_files.inError = true;
                             retr_files.stop_message = error_msg;
                             this.thisSession.add_log_formatted("RETR END   " + path_handle + ":ABORTED! " + error_msg, "STOR");
-                            retr_files.thisThread.interrupt();
+                            try {
+                                retr_files.thisThread.interrupt();
+                            }
+                            catch (Exception buffer) {
+                                // empty catch block
+                            }
                         }
                         try {
                             int i = 1;
@@ -1159,7 +1306,7 @@ implements FileSystem {
                                 catch (Exception e2) {
                                     Log.log("SSH_SERVER", 1, e2);
                                 }
-                                break block44;
+                                break block48;
                             }
                         }
                         catch (Throwable throwable) {
@@ -1189,274 +1336,318 @@ implements FileSystem {
 
     public void removeFile(String path) throws PermissionDeniedException, IOException, FileNotFoundException {
         try {
-            this.thisSession.stop_idle_timer();
-            this.thisSession.start_idle_timer();
-        }
-        catch (Exception e) {
-            Log.log("SSH_SERVER", 1, e);
-        }
-        this.delay();
-        if (path.endsWith("/*")) {
-            this.quickLookupDirItem.clear();
-            this.thisSession.add_log_formatted("550 DELE error:%DELE-error%", "DELE");
-            this.thisSession.doErrorEvent(new FileNotFoundException("DELE error: There is no file in:" + path));
-            throw new FileNotFoundException("%DELE-error There is no file.%");
-        }
-        if (!this.getFileAttributes(path = this.fixPath(path)).isFile()) {
-            this.quickLookupDirItem.clear();
-            this.thisSession.add_log_formatted("550 DELE error:%DELE-error%", "DELE");
-            this.thisSession.doErrorEvent(new FileNotFoundException("DELE error: There is no file in:" + path));
-            throw new FileNotFoundException("%DELE-error There is no file.%");
-        }
-        Log.log("SSH_SERVER", 2, "SFTP:removeFile:" + path);
-        this.thisSession.uiPUT("the_command_data", path);
-        this.thisSession.uiPUT("the_command", "DELE");
-        this.thisSession.runPlugin("beforeCommand", null);
-        String result = "";
-        try {
+            this.Tin();
             try {
-                result = this.thisSession.do_DELE(false, path);
-                Log.log("SSH_SERVER", 2, "SFTP:removeFile:" + result);
+                this.thisSession.stop_idle_timer();
+                this.thisSession.start_idle_timer();
             }
             catch (Exception e) {
-                this.thisSession.add_log_formatted("Delete failed" + e.getMessage(), "DELE");
-                throw new IOException(e.getMessage());
+                Log.log("SSH_SERVER", 1, e);
             }
-            if (result.equals("%DELE-error%")) {
+            this.delay();
+            if (path.endsWith("/*")) {
+                this.quickLookupDirItem.clear();
                 this.thisSession.add_log_formatted("550 DELE error:%DELE-error%", "DELE");
-                this.thisSession.doErrorEvent(new IOException("DELE error:" + path));
-                throw new IOException("%DELE-error%");
+                this.thisSession.doErrorEvent(new FileNotFoundException("DELE error: There is no file in:" + path));
+                throw new FileNotFoundException("%DELE-error There is no file.%");
             }
-            if (result.equals("%DELE-not found%")) {
-                this.thisSession.add_log_formatted("550 DELE error:%DELE-not found%", "DELE");
-                throw new FileNotFoundException("%DELE-not found%");
+            if (!this.getFileAttributes(path = this.fixPath(path)).isFile()) {
+                this.quickLookupDirItem.clear();
+                this.thisSession.add_log_formatted("550 DELE error:%DELE-error%", "DELE");
+                this.thisSession.doErrorEvent(new FileNotFoundException("DELE error: There is no file in:" + path));
+                throw new FileNotFoundException("%DELE-error There is no file.%");
             }
-            if (result.equals("%DELE-bad%")) {
-                this.thisSession.add_log_formatted("550 DELE error:%DELE-bad%", "DELE");
-                throw new PermissionDeniedException("%DELE-bad%");
+            Log.log("SSH_SERVER", 2, "SFTP:removeFile:" + path);
+            this.thisSession.uiPUT("the_command_data", path);
+            this.thisSession.uiPUT("the_command", "DELE");
+            this.thisSession.runPlugin("beforeCommand", null);
+            String result = "";
+            try {
+                try {
+                    result = this.thisSession.do_DELE(false, path);
+                    Log.log("SSH_SERVER", 2, "SFTP:removeFile:" + result);
+                }
+                catch (Exception e) {
+                    this.thisSession.add_log_formatted("Delete failed" + e.getMessage(), "DELE");
+                    throw new IOException(e.getMessage());
+                }
+                if (result.equals("%DELE-error%")) {
+                    this.thisSession.add_log_formatted("550 DELE error:%DELE-error%", "DELE");
+                    this.thisSession.doErrorEvent(new IOException("DELE error:" + path));
+                    throw new IOException("%DELE-error%");
+                }
+                if (result.equals("%DELE-not found%")) {
+                    this.thisSession.add_log_formatted("550 DELE error:%DELE-not found%", "DELE");
+                    throw new FileNotFoundException("%DELE-not found%");
+                }
+                if (result.equals("%DELE-bad%")) {
+                    this.thisSession.add_log_formatted("550 DELE error:%DELE-bad%", "DELE");
+                    throw new PermissionDeniedException("%DELE-bad%");
+                }
             }
+            finally {
+                Properties p = new Properties();
+                p.put("command_code", "0");
+                p.put("command_data", String.valueOf(result));
+                this.thisSession.runPlugin("afterCommand", p);
+            }
+            this.quickLookupDirItem.clear();
         }
         finally {
-            Properties p = new Properties();
-            p.put("command_code", "0");
-            p.put("command_data", String.valueOf(result));
-            this.thisSession.runPlugin("afterCommand", p);
+            this.Tout();
         }
-        this.quickLookupDirItem.clear();
     }
 
     public void renameFile(String oldpath, String newpath) throws PermissionDeniedException, FileNotFoundException, IOException {
         try {
-            this.thisSession.stop_idle_timer();
-            this.thisSession.start_idle_timer();
-        }
-        catch (Exception e) {
-            Log.log("SSH_SERVER", 1, e);
-        }
-        this.delay();
-        oldpath = this.fixPath(oldpath);
-        newpath = this.fixPath(newpath);
-        this.thisSession.add_log_formatted("RNFR " + oldpath, "RNFR");
-        this.thisSession.add_log_formatted("RNTO " + newpath, "RNTO");
-        Log.log("SSH_SERVER", 2, "SFTP:renameFile:" + oldpath);
-        Log.log("SSH_SERVER", 2, "SFTP:renameFile:" + newpath);
-        this.thisSession.uiPUT("the_command_data", oldpath);
-        this.thisSession.uiPUT("the_command", "RNFR");
-        this.thisSession.runPlugin("beforeCommand", null);
-        String result = "";
-        try {
-            result = this.thisSession.do_RNFR(oldpath);
-            Log.log("SSH_SERVER", 2, "SFTP:renameFile:" + result);
-        }
-        catch (Exception e) {
-            this.thisSession.add_log_formatted("550 RNFR error:" + e.getMessage(), "RNFR");
-            this.thisSession.doErrorEvent(e);
-            throw new IOException(e.getMessage());
-        }
-        if (result.indexOf("%RNFR-not found%") >= 0) {
-            this.thisSession.add_log_formatted("550 RNFR error:%RNFR-not found%", "RNFR");
-            throw new FileNotFoundException("%RNFR-not found%");
-        }
-        if (result.indexOf("%RNFR-bad%") >= 0) {
-            this.thisSession.add_log_formatted("550 RNFR error:%RNFR-bad%", "RNFR");
-            this.thisSession.doErrorEvent(new IOException("RNFR bad:" + oldpath + " -> " + newpath));
-            throw new PermissionDeniedException("%RNFR-bad%");
-        }
-        this.thisSession.uiPUT("the_command_data", newpath);
-        this.thisSession.uiPUT("the_command", "RNTO");
-        this.thisSession.runPlugin("beforeCommand", null);
-        result = "";
-        try {
+            this.Tin();
             try {
-                boolean rnto_overwrite = ServerStatus.BG("ssh_rename_overwrite");
-                if (!this.thisSession.user.getProperty("rnto_overwrite", "").equals("")) {
-                    rnto_overwrite = this.thisSession.BG("rnto_overwrite");
-                }
-                result = this.thisSession.do_RNTO(rnto_overwrite, oldpath, newpath);
+                this.thisSession.stop_idle_timer();
+                this.thisSession.start_idle_timer();
+            }
+            catch (Exception e) {
+                Log.log("SSH_SERVER", 1, e);
+            }
+            this.delay();
+            oldpath = this.fixPath(oldpath);
+            newpath = this.fixPath(newpath);
+            this.thisSession.add_log_formatted("RNFR " + oldpath, "RNFR");
+            this.thisSession.add_log_formatted("RNTO " + newpath, "RNTO");
+            Log.log("SSH_SERVER", 2, "SFTP:renameFile:" + oldpath);
+            Log.log("SSH_SERVER", 2, "SFTP:renameFile:" + newpath);
+            this.thisSession.uiPUT("the_command_data", oldpath);
+            this.thisSession.uiPUT("the_command", "RNFR");
+            this.thisSession.runPlugin("beforeCommand", null);
+            String result = "";
+            try {
+                result = this.thisSession.do_RNFR(oldpath);
+                Log.log("SSH_SERVER", 2, "SFTP:renameFile:" + result);
             }
             catch (Exception e) {
                 this.thisSession.add_log_formatted("550 RNFR error:" + e.getMessage(), "RNFR");
+                this.thisSession.doErrorEvent(e);
                 throw new IOException(e.getMessage());
             }
-            if (result.indexOf("%RNTO-error%") >= 0) {
-                this.thisSession.add_log_formatted("550 RNTO error:%RNTO-error%", "RNTO");
-                throw new IOException("%RNTO-error%");
+            if (result.indexOf("%RNFR-not found%") >= 0) {
+                this.thisSession.add_log_formatted("550 RNFR error:%RNFR-not found%", "RNFR");
+                throw new FileNotFoundException("%RNFR-not found%");
             }
-            if (result.indexOf("%RNTO-bad_ext%") >= 0) {
-                this.thisSession.add_log_formatted("550 RNTO error:%RNTO-bad_ext%", "RNTO");
-                throw new PermissionDeniedException("%RNTO-bad_ext%");
+            if (result.indexOf("%RNFR-bad%") >= 0) {
+                this.thisSession.add_log_formatted("550 RNFR error:%RNFR-bad%", "RNFR");
+                this.thisSession.doErrorEvent(new IOException("RNFR bad:" + oldpath + " -> " + newpath));
+                throw new PermissionDeniedException("%RNFR-bad%");
             }
-            if (result.indexOf("%RNTO-bad%") >= 0) {
-                this.thisSession.add_log_formatted("550 RNTO error:%RNTO-bad%", "RNTO");
-                throw new PermissionDeniedException("%RNTO-bad%");
+            this.thisSession.uiPUT("the_command_data", newpath);
+            this.thisSession.uiPUT("the_command", "RNTO");
+            this.thisSession.runPlugin("beforeCommand", null);
+            result = "";
+            try {
+                try {
+                    boolean rnto_overwrite = ServerStatus.BG("ssh_rename_overwrite");
+                    if (!this.thisSession.user.getProperty("rnto_overwrite", "").equals("")) {
+                        rnto_overwrite = this.thisSession.BG("rnto_overwrite");
+                    }
+                    result = this.thisSession.do_RNTO(rnto_overwrite, oldpath, newpath);
+                }
+                catch (Exception e) {
+                    this.thisSession.add_log_formatted("550 RNFR error:" + e.getMessage(), "RNFR");
+                    throw new IOException(e.getMessage());
+                }
+                if (result.indexOf("%RNTO-error%") >= 0) {
+                    this.thisSession.add_log_formatted("550 RNTO error:%RNTO-error%", "RNTO");
+                    throw new IOException("%RNTO-error%");
+                }
+                if (result.indexOf("%RNTO-bad_ext%") >= 0) {
+                    this.thisSession.add_log_formatted("550 RNTO error:%RNTO-bad_ext%", "RNTO");
+                    throw new PermissionDeniedException("%RNTO-bad_ext%");
+                }
+                if (result.indexOf("%RNTO-bad%") >= 0) {
+                    this.thisSession.add_log_formatted("550 RNTO error:%RNTO-bad%", "RNTO");
+                    throw new PermissionDeniedException("%RNTO-bad%");
+                }
             }
+            finally {
+                Properties p = new Properties();
+                p.put("command_code", "0");
+                p.put("command_data", String.valueOf(result));
+                this.thisSession.runPlugin("afterCommand", p);
+            }
+            this.quickLookupDirItem.clear();
         }
         finally {
-            Properties p = new Properties();
-            p.put("command_code", "0");
-            p.put("command_data", String.valueOf(result));
-            this.thisSession.runPlugin("afterCommand", p);
+            this.Tout();
         }
-        this.quickLookupDirItem.clear();
     }
 
     public void removeDirectory(String path) throws PermissionDeniedException, FileNotFoundException, IOException {
         try {
-            this.thisSession.stop_idle_timer();
-            this.thisSession.start_idle_timer();
-        }
-        catch (Exception e) {
-            Log.log("SSH_SERVER", 1, e);
-        }
-        this.delay();
-        path = this.fixPath(path);
-        Log.log("SSH_SERVER", 2, "SFTP:removeDirectory:" + path);
-        this.thisSession.uiPUT("the_command_data", path);
-        this.thisSession.uiPUT("the_command", "RMD");
-        this.thisSession.runPlugin("beforeCommand", null);
-        String result = "";
-        try {
+            this.Tin();
             try {
-                result = this.thisSession.do_RMD(path);
-                Log.log("SSH_SERVER", 2, "SFTP:removeDirectory:" + result);
-                if (result.equals("%RMD-not_empty%") && ServerStatus.BG("sftp_recurse_delete")) {
-                    result = this.thisSession.do_DELE(true, path);
-                    result = Common.replace_str(result, "DELE", "RMD");
-                    this.thisSession.add_log_formatted("RMD (deleted) " + path + "    " + result, "RMD");
-                    this.thisSession.uVFS.reset();
-                }
+                this.thisSession.stop_idle_timer();
+                this.thisSession.start_idle_timer();
             }
             catch (Exception e) {
                 Log.log("SSH_SERVER", 1, e);
-                throw new IOException(e.getMessage());
             }
-            if (result.equals("%RMD-not_empty%")) {
-                this.thisSession.add_log_formatted("550 RMD error:%RMD-not_empty%", "RMD");
-                throw new IOException("%RMD-not_empty%");
+            this.delay();
+            path = this.fixPath(path);
+            Log.log("SSH_SERVER", 2, "SFTP:removeDirectory:" + path);
+            this.thisSession.uiPUT("the_command_data", path);
+            this.thisSession.uiPUT("the_command", "RMD");
+            this.thisSession.runPlugin("beforeCommand", null);
+            String result = "";
+            try {
+                try {
+                    result = this.thisSession.do_RMD(path);
+                    Log.log("SSH_SERVER", 2, "SFTP:removeDirectory:" + result);
+                    if (result.equals("%RMD-not_empty%") && ServerStatus.BG("sftp_recurse_delete")) {
+                        result = this.thisSession.do_DELE(true, path);
+                        result = Common.replace_str(result, "DELE", "RMD");
+                        this.thisSession.add_log_formatted("RMD (deleted) " + path + "    " + result, "RMD");
+                        this.thisSession.uVFS.reset();
+                    }
+                }
+                catch (Exception e) {
+                    Log.log("SSH_SERVER", 1, e);
+                    throw new IOException(e.getMessage());
+                }
+                if (result.equals("%RMD-not_empty%")) {
+                    this.thisSession.add_log_formatted("550 RMD error:%RMD-not_empty%", "RMD");
+                    throw new IOException("%RMD-not_empty%");
+                }
+                if (result.equals("%RMD-not_found%")) {
+                    this.thisSession.add_log_formatted("550 RMD error:%RMD-not_found%", "RMD");
+                    throw new FileNotFoundException("%RMD-not_found%");
+                }
+                if (result.equals("%RMD-bad%")) {
+                    this.thisSession.add_log_formatted("550 RMD error:%RMD-bad%", "RMD");
+                    this.thisSession.doErrorEvent((Exception)new PermissionDeniedException("RMD-bad:" + path));
+                    throw new PermissionDeniedException("%RMD-bad%");
+                }
             }
-            if (result.equals("%RMD-not_found%")) {
-                this.thisSession.add_log_formatted("550 RMD error:%RMD-not_found%", "RMD");
-                throw new FileNotFoundException("%RMD-not_found%");
+            finally {
+                Properties p = new Properties();
+                p.put("command_code", "0");
+                p.put("command_data", String.valueOf(result));
+                this.thisSession.runPlugin("afterCommand", p);
             }
-            if (result.equals("%RMD-bad%")) {
-                this.thisSession.add_log_formatted("550 RMD error:%RMD-bad%", "RMD");
-                this.thisSession.doErrorEvent((Exception)new PermissionDeniedException("RMD-bad:" + path));
-                throw new PermissionDeniedException("%RMD-bad%");
-            }
+            this.quickLookupDirItem.clear();
         }
         finally {
-            Properties p = new Properties();
-            p.put("command_code", "0");
-            p.put("command_data", String.valueOf(result));
-            this.thisSession.runPlugin("afterCommand", p);
+            this.Tout();
         }
-        this.quickLookupDirItem.clear();
     }
 
     public void setFileAttributes(String path, SftpFileAttributes attrs) throws PermissionDeniedException, IOException, FileNotFoundException {
         try {
-            Log.log("SSH_SERVER", 2, "SFTP:setFileAttributes1:" + path);
-            this.setFileAttributes(path.getBytes("UTF8"), attrs);
-            Log.log("SSH_SERVER", 2, "SFTP:setFileAttributes2:" + path);
+            this.Tin();
+            try {
+                Log.log("SSH_SERVER", 2, "SFTP:setFileAttributes1:" + path);
+                this.setFileAttributes(path.getBytes("UTF8"), attrs);
+                Log.log("SSH_SERVER", 2, "SFTP:setFileAttributes2:" + path);
+            }
+            catch (Exception e) {
+                this.thisSession.add_log_formatted("550 setFileAttributes error:" + e.getMessage(), "CHMOD");
+                throw new IOException(e.getMessage());
+            }
         }
-        catch (Exception e) {
-            this.thisSession.add_log_formatted("550 setFileAttributes error:" + e.getMessage(), "CHMOD");
-            throw new IOException(e.getMessage());
+        finally {
+            this.Tout();
         }
     }
 
+    /*
+     * Enabled aggressive block sorting
+     * Enabled unnecessary exception pruning
+     * Enabled aggressive exception aggregation
+     */
     public void setFileAttributes(byte[] handle, SftpFileAttributes attrs) throws PermissionDeniedException, IOException, InvalidHandleException {
-        String path_handle;
-        String path = path_handle = new String(handle, "UTF8");
-        if (path_handle.indexOf(":") > 0) {
-            path = path_handle.substring(0, path_handle.lastIndexOf(":"));
-        }
-        this.delay();
-        path = this.fixPath(path);
-        this.thisSession.add_log_formatted("MDTM " + path + "  " + attrs.getModifiedTime().longValue() * 1000L, "MDTM");
-        Log.log("SSH_SERVER", 2, "SFTP:setFileAttributes3:" + path);
-        Properties item = null;
         try {
-            int x = 0;
-            while (x < 100) {
-                item = this.thisSession.uVFS.get_item(path);
-                if (item == null && (item = (Properties)this.openFiles.get(path_handle)) == null) {
+            String path_handle;
+            this.Tin();
+            String path = path_handle = new String(handle, "UTF8");
+            if (path_handle.indexOf(":") > 0) {
+                path = path_handle.substring(0, path_handle.lastIndexOf(":"));
+            }
+            this.delay();
+            path = this.fixPath(path);
+            this.thisSession.add_log_formatted("MDTM " + path + "  " + attrs.getModifiedTime().longValue() * 1000L, "MDTM");
+            Log.log("SSH_SERVER", 2, "SFTP:setFileAttributes3:" + path);
+            Properties item = null;
+            try {
+                int x = 0;
+                while (x < 100 && (item = this.thisSession.uVFS.get_item(path)) == null && (item = (Properties)this.openFiles.get(path_handle)) == null) {
                     Thread.sleep(100L);
                     ++x;
-                    continue;
                 }
-                break;
             }
-        }
-        catch (Exception x) {
-            // empty catch block
-        }
-        if (ServerStatus.IG("log_debug_level") >= 2) {
-            Log.log("SSH_SERVER", 2, "SFTP:setFileAttributes3:" + VRL.safe(item));
-        }
-        try {
-            GenericClient c = this.thisSession.uVFS.getClient(item);
+            catch (Exception x) {
+                // empty catch block
+            }
+            if (ServerStatus.IG("log_debug_level") >= 2) {
+                Log.log("SSH_SERVER", 2, "SFTP:setFileAttributes3:" + VRL.safe(item));
+            }
             try {
-                VRL vrl = new VRL(item.getProperty("url"));
-                this.thisSession.uiPUT("the_command", "STOR");
-                this.thisSession.add_log_formatted("STOR START " + path, "STOR");
-                if (!this.thisSession.check_access_privs(path, "STOR")) {
-                    throw new PermissionDeniedException("MDTM " + LOC.G("Denied!"));
-                }
-                boolean disable_mdtm_modifications = ServerStatus.BG("disable_mdtm_modifications");
-                if (this.thisSession.user.containsKey("disable_mdtm_modifications")) {
-                    disable_mdtm_modifications = this.thisSession.BG("disable_mdtm_modifications");
-                }
-                if (attrs.getModifiedTime().longValue() > 0L && !disable_mdtm_modifications) {
-                    c.mdtm(vrl.getPath(), attrs.getModifiedTime().longValue() * 1000L);
-                }
-                if (this.thisSession.SG("site").toUpperCase().indexOf("(SITE_CHMOD)") < 0) {
+                VRL vrl;
+                GenericClient c;
+                block25: {
+                    c = this.thisSession.uVFS.getClient(item);
+                    vrl = new VRL(item.getProperty("url"));
+                    this.thisSession.uiPUT("the_command", "STOR");
+                    this.thisSession.add_log_formatted("STOR START " + path, "STOR");
+                    if (!this.thisSession.check_access_privs(path, "STOR")) {
+                        throw new PermissionDeniedException("MDTM " + LOC.G("Denied!"));
+                    }
+                    boolean disable_mdtm_modifications = ServerStatus.BG("disable_mdtm_modifications");
+                    if (this.thisSession.user.containsKey("disable_mdtm_modifications")) {
+                        disable_mdtm_modifications = this.thisSession.BG("disable_mdtm_modifications");
+                    }
+                    if (attrs.getModifiedTime().longValue() > 0L && !disable_mdtm_modifications) {
+                        c.mdtm(vrl.getPath(), attrs.getModifiedTime().longValue() * 1000L);
+                        if (this.quickLookupDirItem.containsKey(path)) {
+                            this.quickLookupDirItem.remove(path);
+                        }
+                    }
+                    if (this.thisSession.SG("site").toUpperCase().indexOf("(SITE_CHMOD)") >= 0) break block25;
+                    c = this.thisSession.uVFS.releaseClient(c);
                     return;
                 }
-                if (attrs.getPermissions() != null && attrs.getPermissions().intValue() > 0) {
-                    int i = attrs.getPermissions().intValue();
-                    StringBuffer buf = new StringBuffer();
-                    buf.append('0');
-                    buf.append(this.toOct(i, 6));
-                    buf.append(this.toOct(i, 3));
-                    buf.append(this.toOct(i, 0));
-                    String filePath = vrl.getPath();
-                    if (item.get("stor_files") != null && this.thisSession.SG("temp_upload_ext").length() > 0 && !filePath.endsWith(this.thisSession.SG("temp_upload_ext"))) {
-                        c.setMod(String.valueOf(filePath) + this.thisSession.SG("temp_upload_ext"), buf.toString(), "");
-                    } else {
-                        c.setMod(filePath, buf.toString(), "");
+                try {
+                    if (attrs.getPermissions() != null && attrs.getPermissions().intValue() > 0) {
+                        int i = attrs.getPermissions().intValue();
+                        StringBuffer buf = new StringBuffer();
+                        buf.append('0');
+                        buf.append(this.toOct(i, 6));
+                        buf.append(this.toOct(i, 3));
+                        buf.append(this.toOct(i, 0));
+                        String filePath = vrl.getPath();
+                        if (item.get("stor_files") != null && this.thisSession.SG("temp_upload_ext").length() > 0 && !filePath.endsWith(this.thisSession.SG("temp_upload_ext"))) {
+                            c.setMod(String.valueOf(filePath) + this.thisSession.SG("temp_upload_ext"), buf.toString(), "");
+                            if (this.quickLookupDirItem.containsKey(path)) {
+                                this.quickLookupDirItem.remove(path);
+                            }
+                        } else {
+                            c.setMod(filePath, buf.toString(), "");
+                            if (this.quickLookupDirItem.containsKey(path)) {
+                                this.quickLookupDirItem.remove(path);
+                            }
+                        }
                     }
+                    Log.log("SSH_SERVER", 2, "SFTP:setFileAttributesModified:" + attrs.getModifiedTime().longValue() * 1000L);
+                    return;
                 }
-                Log.log("SSH_SERVER", 2, "SFTP:setFileAttributesModified:" + attrs.getModifiedTime().longValue() * 1000L);
+                finally {
+                    c = this.thisSession.uVFS.releaseClient(c);
+                }
             }
-            finally {
-                c = this.thisSession.uVFS.releaseClient(c);
+            catch (Exception e) {
+                this.thisSession.add_log_formatted("550 setFileAttributes error:" + e.getMessage(), "CHMOD");
+                this.thisSession.doErrorEvent(e);
+                throw new IOException(e.getMessage());
             }
         }
-        catch (Exception e) {
-            this.thisSession.add_log_formatted("550 setFileAttributes error:" + e.getMessage(), "CHMOD");
-            this.thisSession.doErrorEvent(e);
-            throw new IOException(e.getMessage());
+        finally {
+            this.Tout();
         }
     }
 
@@ -1497,14 +1688,14 @@ implements FileSystem {
                 stor_files = this.thisSession.stor_files_pool_free.size() > 0 ? (STOR_handler)this.thisSession.stor_files_pool_free.remove(0) : new STOR_handler();
             }
         }
-        if (path.endsWith(".filepart")) {
+        if (!ServerStatus.BG("filepart_silent_ignore") && path.endsWith(".filepart")) {
             stor_files.allowTempExtensions = false;
         }
         stor_files.wait_for_parent_free = true;
         this.thisSession.stor_files_pool_used.addElement(stor_files);
         item.put("stor_files", stor_files);
         stor_files.setThreadName(String.valueOf(this.thisSession.uiSG("user_name")) + ":(" + this.thisSession.uiSG("user_number") + ")-" + this.thisSession.uiSG("user_ip") + " (stor)");
-        Socket local_s = Common.getSTORSocket(this.thisSession, stor_files, "", false, path, ServerStatus.BG("ssh_randomaccess"), offset, null);
+        Socket local_s = Common.getSTORSocket(this.thisSession, stor_files, "", false, path, ServerStatus.BG("ssh_randomaccess"), offset, null, item.getProperty("open_text", "false").equals("false"));
         local_s.setSoTimeout((this.thisSession.IG("max_idle_time") <= 0 ? 60 : this.thisSession.IG("max_idle_time")) * 1000 * 60);
         this.thisSession.uiPUT("current_dir", tempCurrentDir);
         int loops = 0;
@@ -1543,7 +1734,7 @@ implements FileSystem {
         this.thisSession.retr_files_pool_used.addElement(retr_files);
         item.put("retr_files", retr_files);
         retr_files.setThreadName(String.valueOf(this.thisSession.uiSG("user_name")) + ":(" + this.thisSession.uiSG("user_number") + ")-" + this.thisSession.uiSG("user_ip") + " (retr)");
-        Socket local_s = Common.getRETRSocket(this.thisSession, retr_files, offset, "", false);
+        Socket local_s = Common.getRETRSocket(this.thisSession, retr_files, offset, "", false, item.getProperty("open_text", "false").equals("false"));
         local_s.setSoTimeout((this.thisSession.IG("max_idle_time") <= 0 ? 60 : this.thisSession.IG("max_idle_time")) * 1000 * 60);
         this.thisSession.uiPUT("current_dir", tempCurrentDir);
         int loops = 0;
@@ -1558,19 +1749,42 @@ implements FileSystem {
         this.thisSession.runPlugin("afterCommand", p);
     }
 
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
     public void closeFilesystem() {
-        Properties p = new Properties();
-        p.putAll((Map<?, ?>)this.openFiles);
-        Enumeration<Object> keys = p.keys();
-        while (keys.hasMoreElements()) {
-            String key = keys.nextElement().toString();
-            Properties item = (Properties)this.openFiles.get(key);
-            if (item == null) continue;
-            try {
-                this.closeFileMsg(key.getBytes(), "SSH Session disconnected while transfer in progress!");
+        this.quickLookupDirItem.clear();
+        this.dirList.clear();
+        if (this.thisSession != null && this.thisSession.uiBG("didDisconnect")) {
+            return;
+        }
+        Object object = this.thisSession.close_session_sync;
+        synchronized (object) {
+            Properties p = new Properties();
+            p.putAll((Map<?, ?>)this.openFiles);
+            Enumeration<Object> keys = p.keys();
+            while (keys.hasMoreElements()) {
+                String key = keys.nextElement().toString();
+                Properties item = (Properties)this.openFiles.get(key);
+                if (item == null) continue;
+                try {
+                    this.closeFileMsg(key.getBytes(), "SSH Session disconnected while transfer in progress!");
+                }
+                catch (Exception e) {
+                    Log.log("SSH_SERVER", 1, e);
+                }
             }
-            catch (Exception e) {
-                Log.log("SSH_SERVER", 1, e);
+            Vector connected_channels = null;
+            Properties properties = cross_session_lookup;
+            synchronized (properties) {
+                connected_channels = (Vector)cross_session_lookup.get(this.session_id);
+                connected_channels.remove(this.RANDOM_CLASS_UID);
+                if (connected_channels.size() == 0) {
+                    cross_session_lookup.remove(this.session_id);
+                }
+            }
+            if (this.thisSession != null && this.thisSession.uVFS != null && connected_channels.size() == 0) {
+                this.thisSession.uVFS.disconnect();
             }
         }
     }
@@ -1605,6 +1819,10 @@ implements FileSystem {
     }
 
     public String fixPath(String path) {
+        return this.fixPath(path, true);
+    }
+
+    public String fixPath(String path, boolean resolve_star) {
         try {
             if (path.startsWith("\"") && path.endsWith("\"")) {
                 path = path.substring(1, path.length() - 1);
@@ -1627,8 +1845,8 @@ implements FileSystem {
         if (!path.startsWith(this.thisSession.SG("root_dir"))) {
             path = String.valueOf(this.thisSession.SG("root_dir")) + path.substring(1);
         }
-        if (path.endsWith("/*")) {
-            if (!this.isEmptyFolder(path.substring(0, path.length() - 1))) {
+        if (path.endsWith("/*") && resolve_star) {
+            if (!this.isEmptyFolder(path.substring(0, path.length() - 1), resolve_star)) {
                 path = path.substring(0, path.length() - 1);
             }
         } else if (path.endsWith("*")) {
@@ -1640,11 +1858,11 @@ implements FileSystem {
         return path;
     }
 
-    private boolean isEmptyFolder(String path) {
+    private boolean isEmptyFolder(String path, boolean resolve_star) {
         boolean is_empty = false;
         try {
             this.openDirectory(path);
-            SftpFile[] files = this.readDirectory(path.getBytes("UTF8"));
+            SftpFile[] files = this.readDirectory2(path, false);
             if (files != null && files.length == 0) {
                 is_empty = true;
             }
@@ -1689,11 +1907,18 @@ implements FileSystem {
     }
 
     private void delay() throws IOException {
+        int delay = 0;
         try {
-            Thread.sleep(Integer.parseInt(this.thisSession.server_item.getProperty("commandDelayInterval", "0")));
+            delay = Integer.parseInt(this.thisSession.server_item.getProperty("commandDelayInterval", "0"));
         }
-        catch (InterruptedException e) {
-            throw new IOException();
+        catch (Exception exception) {
+            // empty catch block
+        }
+        try {
+            Thread.sleep(delay);
+        }
+        catch (InterruptedException interruptedException) {
+            // empty catch block
         }
     }
 
@@ -1716,6 +1941,14 @@ implements FileSystem {
             Log.log("SSH_SERVER", 2, "SCP command : FNP : " + (Object)((Object)filename_pattern));
         }
         this.filename_pattern = filename_pattern;
+    }
+
+    public void Tin() {
+        Worker.thread_lookup.put(Thread.currentThread(), this.thisSession);
+    }
+
+    public void Tout() {
+        Worker.thread_lookup.remove(Thread.currentThread());
     }
 }
 

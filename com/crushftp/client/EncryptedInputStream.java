@@ -1,8 +1,5 @@
 /*
  * Decompiled with CFR 0.152.
- * 
- * Could not load the following classes:
- *  com.didisoft.pgp.PGPLib
  */
 package com.crushftp.client;
 
@@ -50,7 +47,7 @@ extends InputStream {
             @Override
             public void run() {
                 try {
-                    EncryptedInputStream.this.pgp.decryptStream(in2, (InputStream)new ByteArrayInputStream(EncryptedInputStream.this.privateKeyBytes), EncryptedInputStream.this.privateKeyPassword, EncryptedInputStream.this.sock2.getOutputStream());
+                    EncryptedInputStream.this.pgp.decryptStream(in2, new ByteArrayInputStream(EncryptedInputStream.this.privateKeyBytes), EncryptedInputStream.this.privateKeyPassword, EncryptedInputStream.this.sock2.getOutputStream());
                 }
                 catch (Exception e) {
                     e.printStackTrace();

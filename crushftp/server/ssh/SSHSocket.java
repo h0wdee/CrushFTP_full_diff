@@ -18,9 +18,12 @@ import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.ConnectException;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.Date;
 import java.util.Properties;
+import java.util.Vector;
 
 public class SSHSocket
 extends Socket {
@@ -42,7 +45,8 @@ extends Socket {
      * WARNING - Removed try catching itself - possible behaviour change.
      */
     public void run() {
-        block24: {
+        block50: {
+            Object object;
             String user_ip = this.p.getProperty("user_ip");
             this.sockIn = (Socket)this.p.get("socket");
             this.p.put("socket", this);
@@ -50,48 +54,43 @@ extends Socket {
             ServerStatus.thisObj.append_log(String.valueOf(ServerStatus.thisObj.logDateFormat.format(new Date())) + "|" + "[SFTP:" + server_item.getProperty("ip", "0.0.0.0") + ":" + server_item.getProperty("port", "21") + "][" + this.p.getProperty("user_number") + "] " + LOC.G("Accepting connection from") + ": " + user_ip + ":" + this.sockIn.getPort() + "\r\n", "ACCEPT");
             int localPort = 0;
             try {
-                try {
-                    BufferedInputStream bis = new BufferedInputStream(this.sockIn.getInputStream());
-                    Object object = socket_lock;
-                    synchronized (object) {
-                        this.sockOut2 = new Socket("127.0.0.1", this.localSSHPort);
-                    }
-                    this.sockOut.connect(this.sockOut2.getRemoteSocketAddress());
-                    localPort = this.sockOut.getLocalPort();
-                    ServerSessionSSH.connectionLookup.put(String.valueOf(localPort), this.p);
-                    Log.log("SSH_SERVER", 2, "SSH PORT CONNECTOR:" + localPort);
-                    if (ServerStatus.BG("thread_dump_delayed_login")) {
-                        SSHSocket.thread_dump_delayed_login(this.p);
-                    }
-                    this.sockIn.setSoTimeout(Integer.parseInt(server_item.getProperty("ssh_session_timeout", "300")) * 1000);
-                    this.sockOut.setSoTimeout(Integer.parseInt(server_item.getProperty("ssh_session_timeout", "300")) * 1000);
-                    SSHSocket.streamCopier(this.sockIn, this.sockOut, bis, this.sockOut.getOutputStream(), true, true, true, this.p);
-                    SSHSocket.streamCopier(this.sockIn, this.sockOut, this.sockOut.getInputStream(), this.sockIn.getOutputStream(), false, true, true, this.p);
-                    Thread.sleep(100L);
+                BufferedInputStream bis = new BufferedInputStream(this.sockIn.getInputStream());
+                Object object2 = socket_lock;
+                synchronized (object2) {
+                    this.sockOut2 = new Socket("127.0.0.1", this.localSSHPort);
                 }
-                catch (Exception e) {
-                    Log.log("SSH_SERVER", 1, e);
-                    ServerStatus.thisObj.append_log("[SFTP:" + server_item.getProperty("ip", "0.0.0.0") + ":" + server_item.getProperty("port", "21") + "][" + this.p.getProperty("user_number") + "] " + LOC.G("Disconnected") + ": " + user_ip + ":" + this.sockIn.getPort() + "\r\n", "QUIT");
-                    Log.log("SSH_SERVER", 2, "SSH PORT CONNECTOR close RELEASE:" + localPort);
-                    ServerSessionSSH.connectionLookup.remove(String.valueOf(localPort));
-                    SSHCrushAuthentication8.endSession((SessionCrush)this.p.get("session"));
-                    if (this.p.get("session_id") != null) {
-                        ServerSessionSSH.sessionLookup.remove(this.p.get("session_id"));
-                        SSHServerSessionFactory.scp_fs.remove(this.p.get("session_id"));
-                    }
-                    this.p.clear();
-                    GenericServer genericServer = this.server;
-                    synchronized (genericServer) {
-                        --this.server.connected_users;
-                        if (this.server.connected_users < 0) {
-                            this.server.connected_users = 0;
-                        }
-                    }
-                    QuickConnect.remove_ip_count(user_ip);
-                    break block24;
+                this.sockOut.connect(this.sockOut2.getRemoteSocketAddress());
+                localPort = this.sockOut.getLocalPort();
+                ServerSessionSSH.connectionLookup.put(String.valueOf(localPort), this.p);
+                Log.log("SSH_SERVER", 2, "SSH PORT CONNECTOR:" + localPort);
+                if (ServerStatus.BG("thread_dump_delayed_login")) {
+                    SSHSocket.thread_dump_delayed_login(this.p);
                 }
+                this.sockIn.setSoTimeout(Integer.parseInt(server_item.getProperty("ssh_session_timeout", "300")) * 1000);
+                this.sockOut.setSoTimeout(Integer.parseInt(server_item.getProperty("ssh_session_timeout", "300")) * 1000);
+                SSHSocket.streamCopier(this.sockIn, this.sockOut, bis, this.sockOut.getOutputStream(), true, true, true, this.p);
+                SSHSocket.streamCopier(this.sockIn, this.sockOut, this.sockOut.getInputStream(), this.sockIn.getOutputStream(), false, true, true, this.p);
+                Thread.sleep(100L);
             }
-            catch (Throwable throwable) {
+            catch (ConnectException e) {
+                Object object3;
+                Log.log("SSH_SERVER", 1, e);
+                Log.log("SSH_SERVER", 1, "SFTP port is not actually running...telling parent to restart port...");
+                try {
+                    this.server.server_sock.close();
+                }
+                catch (IOException iOException) {
+                    // empty catch block
+                }
+                int i = ServerStatus.thisObj.main_servers.indexOf(this.server);
+                ServerStatus.thisObj.stop_this_server(i);
+                try {
+                    Thread.sleep(1000L);
+                }
+                catch (InterruptedException interruptedException) {
+                    // empty catch block
+                }
+                ServerStatus.thisObj.start_this_server(i);
                 ServerStatus.thisObj.append_log("[SFTP:" + server_item.getProperty("ip", "0.0.0.0") + ":" + server_item.getProperty("port", "21") + "][" + this.p.getProperty("user_number") + "] " + LOC.G("Disconnected") + ": " + user_ip + ":" + this.sockIn.getPort() + "\r\n", "QUIT");
                 Log.log("SSH_SERVER", 2, "SSH PORT CONNECTOR close RELEASE:" + localPort);
                 ServerSessionSSH.connectionLookup.remove(String.valueOf(localPort));
@@ -99,17 +98,86 @@ extends Socket {
                 if (this.p.get("session_id") != null) {
                     ServerSessionSSH.sessionLookup.remove(this.p.get("session_id"));
                     SSHServerSessionFactory.scp_fs.remove(this.p.get("session_id"));
+                    object3 = ServerSessionSSH.cross_session_lookup;
+                    synchronized (object3) {
+                        Vector connected_channels = (Vector)ServerSessionSSH.cross_session_lookup.get(this.p.get("session_id"));
+                        if (connected_channels != null) {
+                            connected_channels.removeAllElements();
+                            ServerSessionSSH.cross_session_lookup.remove(this.p.get("session_id"));
+                        }
+                    }
                 }
                 this.p.clear();
-                GenericServer genericServer = this.server;
-                synchronized (genericServer) {
+                object3 = this.server;
+                synchronized (object3) {
                     --this.server.connected_users;
                     if (this.server.connected_users < 0) {
                         this.server.connected_users = 0;
                     }
                 }
                 QuickConnect.remove_ip_count(user_ip);
-                throw throwable;
+                break block50;
+            }
+            catch (Exception e) {
+                Object object4;
+                try {
+                    Log.log("SSH_SERVER", 1, e);
+                    ServerStatus.thisObj.append_log("[SFTP:" + server_item.getProperty("ip", "0.0.0.0") + ":" + server_item.getProperty("port", "21") + "][" + this.p.getProperty("user_number") + "] " + LOC.G("Disconnected") + ": " + user_ip + ":" + this.sockIn.getPort() + "\r\n", "QUIT");
+                }
+                catch (Throwable throwable) {
+                    Object object5;
+                    ServerStatus.thisObj.append_log("[SFTP:" + server_item.getProperty("ip", "0.0.0.0") + ":" + server_item.getProperty("port", "21") + "][" + this.p.getProperty("user_number") + "] " + LOC.G("Disconnected") + ": " + user_ip + ":" + this.sockIn.getPort() + "\r\n", "QUIT");
+                    Log.log("SSH_SERVER", 2, "SSH PORT CONNECTOR close RELEASE:" + localPort);
+                    ServerSessionSSH.connectionLookup.remove(String.valueOf(localPort));
+                    SSHCrushAuthentication8.endSession((SessionCrush)this.p.get("session"));
+                    if (this.p.get("session_id") != null) {
+                        ServerSessionSSH.sessionLookup.remove(this.p.get("session_id"));
+                        SSHServerSessionFactory.scp_fs.remove(this.p.get("session_id"));
+                        object5 = ServerSessionSSH.cross_session_lookup;
+                        synchronized (object5) {
+                            Vector connected_channels = (Vector)ServerSessionSSH.cross_session_lookup.get(this.p.get("session_id"));
+                            if (connected_channels != null) {
+                                connected_channels.removeAllElements();
+                                ServerSessionSSH.cross_session_lookup.remove(this.p.get("session_id"));
+                            }
+                        }
+                    }
+                    this.p.clear();
+                    object5 = this.server;
+                    synchronized (object5) {
+                        --this.server.connected_users;
+                        if (this.server.connected_users < 0) {
+                            this.server.connected_users = 0;
+                        }
+                    }
+                    QuickConnect.remove_ip_count(user_ip);
+                    throw throwable;
+                }
+                Log.log("SSH_SERVER", 2, "SSH PORT CONNECTOR close RELEASE:" + localPort);
+                ServerSessionSSH.connectionLookup.remove(String.valueOf(localPort));
+                SSHCrushAuthentication8.endSession((SessionCrush)this.p.get("session"));
+                if (this.p.get("session_id") != null) {
+                    ServerSessionSSH.sessionLookup.remove(this.p.get("session_id"));
+                    SSHServerSessionFactory.scp_fs.remove(this.p.get("session_id"));
+                    object4 = ServerSessionSSH.cross_session_lookup;
+                    synchronized (object4) {
+                        Vector connected_channels = (Vector)ServerSessionSSH.cross_session_lookup.get(this.p.get("session_id"));
+                        if (connected_channels != null) {
+                            connected_channels.removeAllElements();
+                            ServerSessionSSH.cross_session_lookup.remove(this.p.get("session_id"));
+                        }
+                    }
+                }
+                this.p.clear();
+                object4 = this.server;
+                synchronized (object4) {
+                    --this.server.connected_users;
+                    if (this.server.connected_users < 0) {
+                        this.server.connected_users = 0;
+                    }
+                }
+                QuickConnect.remove_ip_count(user_ip);
+                break block50;
             }
             ServerStatus.thisObj.append_log("[SFTP:" + server_item.getProperty("ip", "0.0.0.0") + ":" + server_item.getProperty("port", "21") + "][" + this.p.getProperty("user_number") + "] " + LOC.G("Disconnected") + ": " + user_ip + ":" + this.sockIn.getPort() + "\r\n", "QUIT");
             Log.log("SSH_SERVER", 2, "SSH PORT CONNECTOR close RELEASE:" + localPort);
@@ -118,10 +186,18 @@ extends Socket {
             if (this.p.get("session_id") != null) {
                 ServerSessionSSH.sessionLookup.remove(this.p.get("session_id"));
                 SSHServerSessionFactory.scp_fs.remove(this.p.get("session_id"));
+                object = ServerSessionSSH.cross_session_lookup;
+                synchronized (object) {
+                    Vector connected_channels = (Vector)ServerSessionSSH.cross_session_lookup.get(this.p.get("session_id"));
+                    if (connected_channels != null) {
+                        connected_channels.removeAllElements();
+                        ServerSessionSSH.cross_session_lookup.remove(this.p.get("session_id"));
+                    }
+                }
             }
             this.p.clear();
-            GenericServer genericServer = this.server;
-            synchronized (genericServer) {
+            object = this.server;
+            synchronized (object) {
                 --this.server.connected_users;
                 if (this.server.connected_users < 0) {
                     this.server.connected_users = 0;
@@ -146,7 +222,8 @@ extends Socket {
 
             @Override
             public void run() {
-                block42: {
+                block57: {
+                    Properties server_item = (Properties)p.get("server_item");
                     SessionCrush thisSession = null;
                     InputStream inp = in;
                     OutputStream outp = out;
@@ -166,9 +243,12 @@ extends Socket {
                                 thisSession.active();
                             }
                         }
-                        catch (Exception e) {
+                        catch (SocketTimeoutException e) {
                             if (e.getMessage() == null || !e.getMessage().equalsIgnoreCase("Socket closed") && !e.getMessage().equalsIgnoreCase("Connection reset")) {
                                 Log.log("SERVER", 2, e);
+                            }
+                            if (thisSession != null) {
+                                thisSession.add_log("[" + server_item.getProperty("serverType", "ftp") + ":" + thisSession.uiSG("user_number") + ":" + thisSession.uiSG("user_name") + ":" + thisSession.uiSG("user_ip") + "] " + "SFTP session timeout:" + server_item.getProperty("ssh_session_timeout", "300") + " seconds", "USER");
                             }
                             if (closeInput) {
                                 try {
@@ -186,7 +266,7 @@ extends Socket {
                                     Log.log("SERVER", 1, e3);
                                 }
                             }
-                            if (!closeInput || !closeOutput) break block42;
+                            if (!closeInput || !closeOutput) break block57;
                             try {
                                 if (sock1 != null) {
                                     sock1.close();
@@ -201,6 +281,43 @@ extends Socket {
                                 }
                             }
                             catch (Exception e3) {}
+                        }
+                        catch (Exception e) {
+                            block58: {
+                                if (e.getMessage() == null || !e.getMessage().equalsIgnoreCase("Socket closed") && !e.getMessage().equalsIgnoreCase("Connection reset")) {
+                                    Log.log("SERVER", 2, e);
+                                }
+                                if (!closeInput) break block58;
+                                try {
+                                    inp.close();
+                                }
+                                catch (Exception e4) {
+                                    Log.log("SERVER", 1, e4);
+                                }
+                            }
+                            if (closeOutput) {
+                                try {
+                                    outp.close();
+                                }
+                                catch (Exception e5) {
+                                    Log.log("SERVER", 1, e5);
+                                }
+                            }
+                            if (!closeInput || !closeOutput) break block57;
+                            try {
+                                if (sock1 != null) {
+                                    sock1.close();
+                                }
+                            }
+                            catch (Exception e5) {
+                                // empty catch block
+                            }
+                            try {
+                                if (sock2 != null) {
+                                    sock2.close();
+                                }
+                            }
+                            catch (Exception e5) {}
                         }
                     }
                     finally {

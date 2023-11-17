@@ -35,9 +35,11 @@ import com.maverick.sshd.PublicKeyAuthenticationProvider;
 import com.maverick.sshd.TransportProtocol;
 import com.maverick.sshd.UnsupportedChannelException;
 import com.maverick.sshd.platform.KeyboardInteractiveProvider;
+import crushftp.server.ssh.PublicKeyVerifier;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Properties;
 import java.util.Set;
 
 public class LimitedAuthProvider
@@ -118,6 +120,13 @@ implements AuthenticationMechanismFactory {
     }
 
     public String[] getRequiredMechanisms(Connection con) {
+        Properties user = PublicKeyVerifier.findUserForSSH(con.getUsername(), con);
+        if (user != null && user.getProperty("publickey_password", "false").equalsIgnoreCase("true")) {
+            return new String[]{"publickey", "password"};
+        }
+        if (user != null && user.getProperty("publickey_keyboardinteractive", "false").equalsIgnoreCase("true")) {
+            return new String[]{"publickey", "keyboard-interactive"};
+        }
         return con.getContext().getRequiredAuthentications();
     }
 

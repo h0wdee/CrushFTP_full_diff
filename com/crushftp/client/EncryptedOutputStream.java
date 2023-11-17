@@ -1,8 +1,5 @@
 /*
  * Decompiled with CFR 0.152.
- * 
- * Could not load the following classes:
- *  com.didisoft.pgp.PGPLib
  */
 package com.crushftp.client;
 
@@ -12,7 +9,6 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -46,7 +42,7 @@ extends OutputStream {
             @Override
             public void run() {
                 try {
-                    EncryptedOutputStream.this.pgp.encryptStream(EncryptedOutputStream.this.sock2.getInputStream(), "", (InputStream)new ByteArrayInputStream(EncryptedOutputStream.this.publicKeyBytes), out2, true, false);
+                    EncryptedOutputStream.this.pgp.encryptStream(EncryptedOutputStream.this.sock2.getInputStream(), "", new ByteArrayInputStream(EncryptedOutputStream.this.publicKeyBytes), out2, true, false);
                 }
                 catch (Exception e) {
                     e.printStackTrace();
